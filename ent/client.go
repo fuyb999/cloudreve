@@ -30,6 +30,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/setting"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
 	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 
@@ -71,6 +72,8 @@ type Client struct {
 	Share *ShareClient
 	// StoragePolicy is the client for interacting with the StoragePolicy builders.
 	StoragePolicy *StoragePolicyClient
+	// SyncthingDevice is the client for interacting with the SyncthingDevice builders.
+	SyncthingDevice *SyncthingDeviceClient
 	// Task is the client for interacting with the Task builders.
 	Task *TaskClient
 	// User is the client for interacting with the User builders.
@@ -101,6 +104,7 @@ func (c *Client) init() {
 	c.Setting = NewSettingClient(c.config)
 	c.Share = NewShareClient(c.config)
 	c.StoragePolicy = NewStoragePolicyClient(c.config)
+	c.SyncthingDevice = NewSyncthingDeviceClient(c.config)
 	c.Task = NewTaskClient(c.config)
 	c.User = NewUserClient(c.config)
 }
@@ -193,25 +197,26 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:           ctx,
-		config:        cfg,
-		AuditLog:      NewAuditLogClient(cfg),
-		DavAccount:    NewDavAccountClient(cfg),
-		DirectLink:    NewDirectLinkClient(cfg),
-		Entity:        NewEntityClient(cfg),
-		File:          NewFileClient(cfg),
-		FsEvent:       NewFsEventClient(cfg),
-		Group:         NewGroupClient(cfg),
-		Metadata:      NewMetadataClient(cfg),
-		Node:          NewNodeClient(cfg),
-		OAuthClient:   NewOAuthClientClient(cfg),
-		OAuthGrant:    NewOAuthGrantClient(cfg),
-		Passkey:       NewPasskeyClient(cfg),
-		Setting:       NewSettingClient(cfg),
-		Share:         NewShareClient(cfg),
-		StoragePolicy: NewStoragePolicyClient(cfg),
-		Task:          NewTaskClient(cfg),
-		User:          NewUserClient(cfg),
+		ctx:             ctx,
+		config:          cfg,
+		AuditLog:        NewAuditLogClient(cfg),
+		DavAccount:      NewDavAccountClient(cfg),
+		DirectLink:      NewDirectLinkClient(cfg),
+		Entity:          NewEntityClient(cfg),
+		File:            NewFileClient(cfg),
+		FsEvent:         NewFsEventClient(cfg),
+		Group:           NewGroupClient(cfg),
+		Metadata:        NewMetadataClient(cfg),
+		Node:            NewNodeClient(cfg),
+		OAuthClient:     NewOAuthClientClient(cfg),
+		OAuthGrant:      NewOAuthGrantClient(cfg),
+		Passkey:         NewPasskeyClient(cfg),
+		Setting:         NewSettingClient(cfg),
+		Share:           NewShareClient(cfg),
+		StoragePolicy:   NewStoragePolicyClient(cfg),
+		SyncthingDevice: NewSyncthingDeviceClient(cfg),
+		Task:            NewTaskClient(cfg),
+		User:            NewUserClient(cfg),
 	}, nil
 }
 
@@ -229,25 +234,26 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:           ctx,
-		config:        cfg,
-		AuditLog:      NewAuditLogClient(cfg),
-		DavAccount:    NewDavAccountClient(cfg),
-		DirectLink:    NewDirectLinkClient(cfg),
-		Entity:        NewEntityClient(cfg),
-		File:          NewFileClient(cfg),
-		FsEvent:       NewFsEventClient(cfg),
-		Group:         NewGroupClient(cfg),
-		Metadata:      NewMetadataClient(cfg),
-		Node:          NewNodeClient(cfg),
-		OAuthClient:   NewOAuthClientClient(cfg),
-		OAuthGrant:    NewOAuthGrantClient(cfg),
-		Passkey:       NewPasskeyClient(cfg),
-		Setting:       NewSettingClient(cfg),
-		Share:         NewShareClient(cfg),
-		StoragePolicy: NewStoragePolicyClient(cfg),
-		Task:          NewTaskClient(cfg),
-		User:          NewUserClient(cfg),
+		ctx:             ctx,
+		config:          cfg,
+		AuditLog:        NewAuditLogClient(cfg),
+		DavAccount:      NewDavAccountClient(cfg),
+		DirectLink:      NewDirectLinkClient(cfg),
+		Entity:          NewEntityClient(cfg),
+		File:            NewFileClient(cfg),
+		FsEvent:         NewFsEventClient(cfg),
+		Group:           NewGroupClient(cfg),
+		Metadata:        NewMetadataClient(cfg),
+		Node:            NewNodeClient(cfg),
+		OAuthClient:     NewOAuthClientClient(cfg),
+		OAuthGrant:      NewOAuthGrantClient(cfg),
+		Passkey:         NewPasskeyClient(cfg),
+		Setting:         NewSettingClient(cfg),
+		Share:           NewShareClient(cfg),
+		StoragePolicy:   NewStoragePolicyClient(cfg),
+		SyncthingDevice: NewSyncthingDeviceClient(cfg),
+		Task:            NewTaskClient(cfg),
+		User:            NewUserClient(cfg),
 	}, nil
 }
 
@@ -279,7 +285,7 @@ func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.File, c.FsEvent, c.Group,
 		c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey, c.Setting, c.Share,
-		c.StoragePolicy, c.Task, c.User,
+		c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -291,7 +297,7 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.File, c.FsEvent, c.Group,
 		c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey, c.Setting, c.Share,
-		c.StoragePolicy, c.Task, c.User,
+		c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -330,6 +336,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Share.mutate(ctx, m)
 	case *StoragePolicyMutation:
 		return c.StoragePolicy.mutate(ctx, m)
+	case *SyncthingDeviceMutation:
+		return c.SyncthingDevice.mutate(ctx, m)
 	case *TaskMutation:
 		return c.Task.mutate(ctx, m)
 	case *UserMutation:
@@ -2923,6 +2931,157 @@ func (c *StoragePolicyClient) mutate(ctx context.Context, m *StoragePolicyMutati
 	}
 }
 
+// SyncthingDeviceClient is a client for the SyncthingDevice schema.
+type SyncthingDeviceClient struct {
+	config
+}
+
+// NewSyncthingDeviceClient returns a client for the SyncthingDevice from the given config.
+func NewSyncthingDeviceClient(c config) *SyncthingDeviceClient {
+	return &SyncthingDeviceClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `syncthingdevice.Hooks(f(g(h())))`.
+func (c *SyncthingDeviceClient) Use(hooks ...Hook) {
+	c.hooks.SyncthingDevice = append(c.hooks.SyncthingDevice, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `syncthingdevice.Intercept(f(g(h())))`.
+func (c *SyncthingDeviceClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SyncthingDevice = append(c.inters.SyncthingDevice, interceptors...)
+}
+
+// Create returns a builder for creating a SyncthingDevice entity.
+func (c *SyncthingDeviceClient) Create() *SyncthingDeviceCreate {
+	mutation := newSyncthingDeviceMutation(c.config, OpCreate)
+	return &SyncthingDeviceCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SyncthingDevice entities.
+func (c *SyncthingDeviceClient) CreateBulk(builders ...*SyncthingDeviceCreate) *SyncthingDeviceCreateBulk {
+	return &SyncthingDeviceCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SyncthingDeviceClient) MapCreateBulk(slice any, setFunc func(*SyncthingDeviceCreate, int)) *SyncthingDeviceCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SyncthingDeviceCreateBulk{err: fmt.Errorf("calling to SyncthingDeviceClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SyncthingDeviceCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SyncthingDeviceCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SyncthingDevice.
+func (c *SyncthingDeviceClient) Update() *SyncthingDeviceUpdate {
+	mutation := newSyncthingDeviceMutation(c.config, OpUpdate)
+	return &SyncthingDeviceUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SyncthingDeviceClient) UpdateOne(sd *SyncthingDevice) *SyncthingDeviceUpdateOne {
+	mutation := newSyncthingDeviceMutation(c.config, OpUpdateOne, withSyncthingDevice(sd))
+	return &SyncthingDeviceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SyncthingDeviceClient) UpdateOneID(id int) *SyncthingDeviceUpdateOne {
+	mutation := newSyncthingDeviceMutation(c.config, OpUpdateOne, withSyncthingDeviceID(id))
+	return &SyncthingDeviceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SyncthingDevice.
+func (c *SyncthingDeviceClient) Delete() *SyncthingDeviceDelete {
+	mutation := newSyncthingDeviceMutation(c.config, OpDelete)
+	return &SyncthingDeviceDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SyncthingDeviceClient) DeleteOne(sd *SyncthingDevice) *SyncthingDeviceDeleteOne {
+	return c.DeleteOneID(sd.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SyncthingDeviceClient) DeleteOneID(id int) *SyncthingDeviceDeleteOne {
+	builder := c.Delete().Where(syncthingdevice.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SyncthingDeviceDeleteOne{builder}
+}
+
+// Query returns a query builder for SyncthingDevice.
+func (c *SyncthingDeviceClient) Query() *SyncthingDeviceQuery {
+	return &SyncthingDeviceQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSyncthingDevice},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SyncthingDevice entity by its id.
+func (c *SyncthingDeviceClient) Get(ctx context.Context, id int) (*SyncthingDevice, error) {
+	return c.Query().Where(syncthingdevice.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SyncthingDeviceClient) GetX(ctx context.Context, id int) *SyncthingDevice {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a SyncthingDevice.
+func (c *SyncthingDeviceClient) QueryOwner(sd *SyncthingDevice) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := sd.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(syncthingdevice.Table, syncthingdevice.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, syncthingdevice.OwnerTable, syncthingdevice.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(sd.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *SyncthingDeviceClient) Hooks() []Hook {
+	hooks := c.hooks.SyncthingDevice
+	return append(hooks[:len(hooks):len(hooks)], syncthingdevice.Hooks[:]...)
+}
+
+// Interceptors returns the client interceptors.
+func (c *SyncthingDeviceClient) Interceptors() []Interceptor {
+	inters := c.inters.SyncthingDevice
+	return append(inters[:len(inters):len(inters)], syncthingdevice.Interceptors[:]...)
+}
+
+func (c *SyncthingDeviceClient) mutate(ctx context.Context, m *SyncthingDeviceMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SyncthingDeviceCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SyncthingDeviceUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SyncthingDeviceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SyncthingDeviceDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SyncthingDevice mutation op: %q", m.Op())
+	}
+}
+
 // TaskClient is a client for the Task schema.
 type TaskClient struct {
 	config
@@ -3230,6 +3389,22 @@ func (c *UserClient) QueryDavAccounts(u *User) *DavAccountQuery {
 	return query
 }
 
+// QuerySyncthingDevices queries the syncthing_devices edge of a User.
+func (c *UserClient) QuerySyncthingDevices(u *User) *SyncthingDeviceQuery {
+	query := (&SyncthingDeviceClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := u.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(syncthingdevice.Table, syncthingdevice.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SyncthingDevicesTable, user.SyncthingDevicesColumn),
+		)
+		fromV = sqlgraph.Neighbors(u.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryShares queries the shares edge of a User.
 func (c *UserClient) QueryShares(u *User) *ShareQuery {
 	query := (&ShareClient{config: c.config}).Query()
@@ -3373,13 +3548,13 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 type (
 	hooks struct {
 		AuditLog, DavAccount, DirectLink, Entity, File, FsEvent, Group, Metadata, Node,
-		OAuthClient, OAuthGrant, Passkey, Setting, Share, StoragePolicy, Task,
-		User []ent.Hook
+		OAuthClient, OAuthGrant, Passkey, Setting, Share, StoragePolicy,
+		SyncthingDevice, Task, User []ent.Hook
 	}
 	inters struct {
 		AuditLog, DavAccount, DirectLink, Entity, File, FsEvent, Group, Metadata, Node,
-		OAuthClient, OAuthGrant, Passkey, Setting, Share, StoragePolicy, Task,
-		User []ent.Interceptor
+		OAuthClient, OAuthGrant, Passkey, Setting, Share, StoragePolicy,
+		SyncthingDevice, Task, User []ent.Interceptor
 	}
 )
 

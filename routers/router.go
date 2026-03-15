@@ -274,6 +274,9 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 			site.GET("ping", controllers.Ping)
 			// 验证码
 			site.GET("captcha", controllers.Captcha)
+			// Syncthing upgrade metadata
+			site.GET("syncthing/releases", controllers.SyncthingReleases)
+			site.GET("syncthing/releases/meta.json", controllers.SyncthingReleases)
 			// 站点全局配置
 			site.GET("config/:section",
 				controllers.FromUri[basic.GetSettingService](basic.GetSettingParamCtx{}),
@@ -1282,9 +1285,9 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 
 			// WebDAV and devices
 			devices := auth.Group("devices")
-			devices.Use(middleware.RequiredScopes(types.ScopeDavAccountRead))
 			{
 				dav := devices.Group("dav")
+				dav.Use(middleware.RequiredScopes(types.ScopeDavAccountRead))
 				{
 					// List WebDAV accounts
 					dav.GET("",
@@ -1309,6 +1312,30 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 						middleware.RequiredScopes(types.ScopeDavAccountWrite),
 						middleware.HashID(hashid.DavAccountID),
 						controllers.DeleteDAVAccounts,
+					)
+				}
+
+				syncthing := devices.Group("syncthing")
+				{
+					syncthing.GET("",
+						middleware.RequiredScopes(types.ScopeUserInfoRead),
+						controllers.FromQuery[setting.ListSyncthingDevicesService](setting.ListSyncthingDevicesParamCtx{}),
+						controllers.ListSyncthingDevices,
+					)
+					syncthing.PUT("report",
+						middleware.RequiredScopes(types.ScopeUserInfoWrite),
+						controllers.FromJSON[setting.UpsertSyncthingDeviceService](setting.UpsertSyncthingDeviceParamCtx{}),
+						controllers.UpsertSyncthingDevice,
+					)
+					syncthing.POST("heartbeat",
+						middleware.RequiredScopes(types.ScopeUserInfoWrite),
+						controllers.FromJSON[setting.SyncthingHeartbeatService](setting.SyncthingHeartbeatParamCtx{}),
+						controllers.SyncthingDeviceHeartbeat,
+					)
+					syncthing.POST("activity",
+						middleware.RequiredScopes(types.ScopeUserInfoWrite),
+						controllers.FromJSON[setting.SyncthingActivityService](setting.SyncthingActivityParamCtx{}),
+						controllers.SyncthingDeviceActivity,
 					)
 				}
 				//// 获取账号信息

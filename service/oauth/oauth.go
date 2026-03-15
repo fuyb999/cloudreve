@@ -202,17 +202,15 @@ func (s *ExchangeTokenService) Exchange(c *gin.Context) (*TokenResponse, error) 
 		return nil, serializer.NewError(serializer.CodeUserNotFound, "User not found", err)
 	}
 
-	// 7. Determine refresh token TTL override from app settings
-	var refreshTTLOverride time.Duration
-	if app.Props != nil && app.Props.RefreshTokenTTL > 0 {
-		refreshTTLOverride = time.Duration(app.Props.RefreshTokenTTL) * time.Second
-	}
+	// 7. Determine token TTL overrides from app settings
+	accessTTLOverride, refreshTTLOverride := auth.OAuthClientTokenTTLs(app)
 
 	// 8. Issue tokens
 	token, err := tokenAuth.Issue(c, &auth.IssueTokenArgs{
 		User:               user,
 		ClientID:           s.ClientID,
 		Scopes:             authCode.Scopes,
+		AccessTTLOverride:  accessTTLOverride,
 		RefreshTTLOverride: refreshTTLOverride,
 	})
 	if err != nil {

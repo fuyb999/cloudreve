@@ -51,6 +51,9 @@ type Share func(*sql.Selector)
 // StoragePolicy is the predicate function for storagepolicy builders.
 type StoragePolicy func(*sql.Selector)
 
+// SyncthingDevice is the predicate function for syncthingdevice builders.
+type SyncthingDevice func(*sql.Selector)
+
 // Task is the predicate function for task builders.
 type Task func(*sql.Selector)
 

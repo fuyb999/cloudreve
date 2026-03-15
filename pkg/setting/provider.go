@@ -352,8 +352,11 @@ func (s *settingProvider) FileViewers(ctx context.Context) []types.ViewerGroup {
 
 func (s *settingProvider) AppSetting(ctx context.Context) *AppSetting {
 	return &AppSetting{
-		Promotion:        s.getBoolean(ctx, "show_app_promotion", false),
-		DesktopPromotion: s.getBoolean(ctx, "show_desktop_app_promotion", false),
+		Promotion:               s.getBoolean(ctx, "show_app_promotion", false),
+		DesktopPromotion:        s.getBoolean(ctx, "show_desktop_app_promotion", false),
+		SyncthingUpgradeVersion: s.getString(ctx, "syncthing_upgrade_version", ""),
+		SyncthingLinuxURL:       s.getString(ctx, "syncthing_download_linux_url", "https://syncthing.net/downloads/#linux"),
+		SyncthingWindowsURL:     s.getString(ctx, "syncthing_download_windows_url", "https://syncthing.net/downloads/#windows"),
 	}
 }
 

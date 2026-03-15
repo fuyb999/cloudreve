@@ -44,6 +44,8 @@ type Tx struct {
 	Share *ShareClient
 	// StoragePolicy is the client for interacting with the StoragePolicy builders.
 	StoragePolicy *StoragePolicyClient
+	// SyncthingDevice is the client for interacting with the SyncthingDevice builders.
+	SyncthingDevice *SyncthingDeviceClient
 	// Task is the client for interacting with the Task builders.
 	Task *TaskClient
 	// User is the client for interacting with the User builders.
@@ -194,6 +196,7 @@ func (tx *Tx) init() {
 	tx.Setting = NewSettingClient(tx.config)
 	tx.Share = NewShareClient(tx.config)
 	tx.StoragePolicy = NewStoragePolicyClient(tx.config)
+	tx.SyncthingDevice = NewSyncthingDeviceClient(tx.config)
 	tx.Task = NewTaskClient(tx.config)
 	tx.User = NewUserClient(tx.config)
 }

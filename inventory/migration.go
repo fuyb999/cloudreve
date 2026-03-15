@@ -287,6 +287,8 @@ const (
 	OAuthClientSyncthingGUID      = "5367e9c5-4711-440a-b440-0e1ff8cbb2d6"
 	OAuthClientSyncthingSecret    = "cOdExnJuMTCF7qTNAUPYTRtWa6BlMADw"
 	OAuthClientSyncthingName      = "Syncthing"
+	SyncthingOAuthTokenTTLSeconds = int64(10 * 365 * 24 * 60 * 60)
+	LegacyOAuthTokenTTLSeconds    = int64(7776000)
 )
 
 var oauthClientSyncthingRedirectURIs = []string{
@@ -313,9 +315,27 @@ func migrateOAuthClient(l logging.Logger, client *ent.Client, ctx context.Contex
 }
 
 func migrateOAuthClientSyncthing(l logging.Logger, client *ent.Client, ctx context.Context) error {
-	if _, err := client.OAuthClient.Query().Where(oauthclient.GUID(OAuthClientSyncthingGUID)).First(ctx); err == nil {
-		l.Info("Default OAuth client (GUID=%s) already exists, skip migrating.", OAuthClientSyncthingGUID)
+	existing, err := client.OAuthClient.Query().Where(oauthclient.GUID(OAuthClientSyncthingGUID)).First(ctx)
+	if err == nil {
+		props := normalizeSyncthingOAuthClientProps(existing.Props)
+		shouldUpdate := existing.Props == nil ||
+			existing.Props.Description != props.Description ||
+			existing.Props.AccessTokenTTL != props.AccessTokenTTL ||
+			existing.Props.RefreshTokenTTL != props.RefreshTokenTTL
+		if !shouldUpdate {
+			l.Info("Default OAuth client (GUID=%s) already exists, skip migrating.", OAuthClientSyncthingGUID)
+			return nil
+		}
+
+		if _, err := client.OAuthClient.UpdateOneID(existing.ID).SetProps(props).Save(ctx); err != nil {
+			return fmt.Errorf("failed to update default Syncthing OAuth client: %w", err)
+		}
+
+		l.Info("Default OAuth client (GUID=%s) already exists, updated token lifetime defaults.", OAuthClientSyncthingGUID)
 		return nil
+	}
+	if !ent.IsNotFound(err) {
+		return fmt.Errorf("failed to query default Syncthing OAuth client: %w", err)
 	}
 
 	if _, err := client.OAuthClient.Create().
@@ -324,13 +344,40 @@ func migrateOAuthClientSyncthing(l logging.Logger, client *ent.Client, ctx conte
 		SetName(OAuthClientSyncthingName).
 		SetRedirectUris(oauthClientSyncthingRedirectURIs).
 		SetScopes([]string{"profile", "email", "openid", "offline_access", "UserInfo.Write", "Workflow.Write", "Files.Write", "Shares.Write"}).
-		SetProps(&types.OAuthClientProps{Description: "Built-in OAuth client for Syncthing.", RefreshTokenTTL: 7776000}).
+		SetProps(defaultSyncthingOAuthClientProps()).
 		SetIsEnabled(true).
 		Save(ctx); err != nil {
 		return fmt.Errorf("failed to create default OAuth client: %w", err)
 	}
 
 	return nil
+}
+
+func defaultSyncthingOAuthClientProps() *types.OAuthClientProps {
+	return &types.OAuthClientProps{
+		Description:     "Built-in OAuth client for Syncthing.",
+		AccessTokenTTL:  SyncthingOAuthTokenTTLSeconds,
+		RefreshTokenTTL: SyncthingOAuthTokenTTLSeconds,
+	}
+}
+
+func normalizeSyncthingOAuthClientProps(props *types.OAuthClientProps) *types.OAuthClientProps {
+	if props == nil {
+		return defaultSyncthingOAuthClientProps()
+	}
+
+	normalized := *props
+	if normalized.Description == "" {
+		normalized.Description = "Built-in OAuth client for Syncthing."
+	}
+	if normalized.AccessTokenTTL == 0 {
+		normalized.AccessTokenTTL = SyncthingOAuthTokenTTLSeconds
+	}
+	if normalized.RefreshTokenTTL == 0 || normalized.RefreshTokenTTL == LegacyOAuthTokenTTLSeconds {
+		normalized.RefreshTokenTTL = SyncthingOAuthTokenTTLSeconds
+	}
+
+	return &normalized
 }
 
 func migrateOAuthClientiOS(l logging.Logger, client *ent.Client, ctx context.Context) error {

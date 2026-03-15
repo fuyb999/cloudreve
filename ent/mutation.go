@@ -27,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/setting"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
 	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
@@ -44,23 +45,24 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeAuditLog      = "AuditLog"
-	TypeDavAccount    = "DavAccount"
-	TypeDirectLink    = "DirectLink"
-	TypeEntity        = "Entity"
-	TypeFile          = "File"
-	TypeFsEvent       = "FsEvent"
-	TypeGroup         = "Group"
-	TypeMetadata      = "Metadata"
-	TypeNode          = "Node"
-	TypeOAuthClient   = "OAuthClient"
-	TypeOAuthGrant    = "OAuthGrant"
-	TypePasskey       = "Passkey"
-	TypeSetting       = "Setting"
-	TypeShare         = "Share"
-	TypeStoragePolicy = "StoragePolicy"
-	TypeTask          = "Task"
-	TypeUser          = "User"
+	TypeAuditLog        = "AuditLog"
+	TypeDavAccount      = "DavAccount"
+	TypeDirectLink      = "DirectLink"
+	TypeEntity          = "Entity"
+	TypeFile            = "File"
+	TypeFsEvent         = "FsEvent"
+	TypeGroup           = "Group"
+	TypeMetadata        = "Metadata"
+	TypeNode            = "Node"
+	TypeOAuthClient     = "OAuthClient"
+	TypeOAuthGrant      = "OAuthGrant"
+	TypePasskey         = "Passkey"
+	TypeSetting         = "Setting"
+	TypeShare           = "Share"
+	TypeStoragePolicy   = "StoragePolicy"
+	TypeSyncthingDevice = "SyncthingDevice"
+	TypeTask            = "Task"
+	TypeUser            = "User"
 )
 
 // AuditLogMutation represents an operation that mutates the AuditLog nodes in the graph.
@@ -15773,6 +15775,1338 @@ func (m *StoragePolicyMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown StoragePolicy edge %s", name)
 }
 
+// SyncthingDeviceMutation represents an operation that mutates the SyncthingDevice nodes in the graph.
+type SyncthingDeviceMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *int
+	created_at     *time.Time
+	updated_at     *time.Time
+	deleted_at     *time.Time
+	device_id      *string
+	short_id       *string
+	last_ip        *string
+	api_key        *string
+	json_raw       *map[string]interface{}
+	bind_uri       *string
+	client_version *string
+	platform       *string
+	last_seen_at   *time.Time
+	last_sync_at   *time.Time
+	online         *bool
+	clearedFields  map[string]struct{}
+	owner          *int
+	clearedowner   bool
+	done           bool
+	oldValue       func(context.Context) (*SyncthingDevice, error)
+	predicates     []predicate.SyncthingDevice
+}
+
+var _ ent.Mutation = (*SyncthingDeviceMutation)(nil)
+
+// syncthingdeviceOption allows management of the mutation configuration using functional options.
+type syncthingdeviceOption func(*SyncthingDeviceMutation)
+
+// newSyncthingDeviceMutation creates new mutation for the SyncthingDevice entity.
+func newSyncthingDeviceMutation(c config, op Op, opts ...syncthingdeviceOption) *SyncthingDeviceMutation {
+	m := &SyncthingDeviceMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeSyncthingDevice,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withSyncthingDeviceID sets the ID field of the mutation.
+func withSyncthingDeviceID(id int) syncthingdeviceOption {
+	return func(m *SyncthingDeviceMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *SyncthingDevice
+		)
+		m.oldValue = func(ctx context.Context) (*SyncthingDevice, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().SyncthingDevice.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withSyncthingDevice sets the old SyncthingDevice of the mutation.
+func withSyncthingDevice(node *SyncthingDevice) syncthingdeviceOption {
+	return func(m *SyncthingDeviceMutation) {
+		m.oldValue = func(context.Context) (*SyncthingDevice, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m SyncthingDeviceMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m SyncthingDeviceMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *SyncthingDeviceMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *SyncthingDeviceMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().SyncthingDevice.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *SyncthingDeviceMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *SyncthingDeviceMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *SyncthingDeviceMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *SyncthingDeviceMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *SyncthingDeviceMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *SyncthingDeviceMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetDeletedAt sets the "deleted_at" field.
+func (m *SyncthingDeviceMutation) SetDeletedAt(t time.Time) {
+	m.deleted_at = &t
+}
+
+// DeletedAt returns the value of the "deleted_at" field in the mutation.
+func (m *SyncthingDeviceMutation) DeletedAt() (r time.Time, exists bool) {
+	v := m.deleted_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeletedAt returns the old "deleted_at" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldDeletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeletedAt: %w", err)
+	}
+	return oldValue.DeletedAt, nil
+}
+
+// ClearDeletedAt clears the value of the "deleted_at" field.
+func (m *SyncthingDeviceMutation) ClearDeletedAt() {
+	m.deleted_at = nil
+	m.clearedFields[syncthingdevice.FieldDeletedAt] = struct{}{}
+}
+
+// DeletedAtCleared returns if the "deleted_at" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) DeletedAtCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldDeletedAt]
+	return ok
+}
+
+// ResetDeletedAt resets all changes to the "deleted_at" field.
+func (m *SyncthingDeviceMutation) ResetDeletedAt() {
+	m.deleted_at = nil
+	delete(m.clearedFields, syncthingdevice.FieldDeletedAt)
+}
+
+// SetOwnerID sets the "owner_id" field.
+func (m *SyncthingDeviceMutation) SetOwnerID(i int) {
+	m.owner = &i
+}
+
+// OwnerID returns the value of the "owner_id" field in the mutation.
+func (m *SyncthingDeviceMutation) OwnerID() (r int, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerID returns the old "owner_id" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldOwnerID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerID: %w", err)
+	}
+	return oldValue.OwnerID, nil
+}
+
+// ResetOwnerID resets all changes to the "owner_id" field.
+func (m *SyncthingDeviceMutation) ResetOwnerID() {
+	m.owner = nil
+}
+
+// SetDeviceID sets the "device_id" field.
+func (m *SyncthingDeviceMutation) SetDeviceID(s string) {
+	m.device_id = &s
+}
+
+// DeviceID returns the value of the "device_id" field in the mutation.
+func (m *SyncthingDeviceMutation) DeviceID() (r string, exists bool) {
+	v := m.device_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeviceID returns the old "device_id" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldDeviceID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeviceID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeviceID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeviceID: %w", err)
+	}
+	return oldValue.DeviceID, nil
+}
+
+// ResetDeviceID resets all changes to the "device_id" field.
+func (m *SyncthingDeviceMutation) ResetDeviceID() {
+	m.device_id = nil
+}
+
+// SetShortID sets the "short_id" field.
+func (m *SyncthingDeviceMutation) SetShortID(s string) {
+	m.short_id = &s
+}
+
+// ShortID returns the value of the "short_id" field in the mutation.
+func (m *SyncthingDeviceMutation) ShortID() (r string, exists bool) {
+	v := m.short_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShortID returns the old "short_id" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldShortID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShortID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShortID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShortID: %w", err)
+	}
+	return oldValue.ShortID, nil
+}
+
+// ClearShortID clears the value of the "short_id" field.
+func (m *SyncthingDeviceMutation) ClearShortID() {
+	m.short_id = nil
+	m.clearedFields[syncthingdevice.FieldShortID] = struct{}{}
+}
+
+// ShortIDCleared returns if the "short_id" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) ShortIDCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldShortID]
+	return ok
+}
+
+// ResetShortID resets all changes to the "short_id" field.
+func (m *SyncthingDeviceMutation) ResetShortID() {
+	m.short_id = nil
+	delete(m.clearedFields, syncthingdevice.FieldShortID)
+}
+
+// SetLastIP sets the "last_ip" field.
+func (m *SyncthingDeviceMutation) SetLastIP(s string) {
+	m.last_ip = &s
+}
+
+// LastIP returns the value of the "last_ip" field in the mutation.
+func (m *SyncthingDeviceMutation) LastIP() (r string, exists bool) {
+	v := m.last_ip
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastIP returns the old "last_ip" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldLastIP(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastIP is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastIP requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastIP: %w", err)
+	}
+	return oldValue.LastIP, nil
+}
+
+// ClearLastIP clears the value of the "last_ip" field.
+func (m *SyncthingDeviceMutation) ClearLastIP() {
+	m.last_ip = nil
+	m.clearedFields[syncthingdevice.FieldLastIP] = struct{}{}
+}
+
+// LastIPCleared returns if the "last_ip" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) LastIPCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldLastIP]
+	return ok
+}
+
+// ResetLastIP resets all changes to the "last_ip" field.
+func (m *SyncthingDeviceMutation) ResetLastIP() {
+	m.last_ip = nil
+	delete(m.clearedFields, syncthingdevice.FieldLastIP)
+}
+
+// SetAPIKey sets the "api_key" field.
+func (m *SyncthingDeviceMutation) SetAPIKey(s string) {
+	m.api_key = &s
+}
+
+// APIKey returns the value of the "api_key" field in the mutation.
+func (m *SyncthingDeviceMutation) APIKey() (r string, exists bool) {
+	v := m.api_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKey returns the old "api_key" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldAPIKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKey: %w", err)
+	}
+	return oldValue.APIKey, nil
+}
+
+// ClearAPIKey clears the value of the "api_key" field.
+func (m *SyncthingDeviceMutation) ClearAPIKey() {
+	m.api_key = nil
+	m.clearedFields[syncthingdevice.FieldAPIKey] = struct{}{}
+}
+
+// APIKeyCleared returns if the "api_key" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) APIKeyCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldAPIKey]
+	return ok
+}
+
+// ResetAPIKey resets all changes to the "api_key" field.
+func (m *SyncthingDeviceMutation) ResetAPIKey() {
+	m.api_key = nil
+	delete(m.clearedFields, syncthingdevice.FieldAPIKey)
+}
+
+// SetJSONRaw sets the "json_raw" field.
+func (m *SyncthingDeviceMutation) SetJSONRaw(value map[string]interface{}) {
+	m.json_raw = &value
+}
+
+// JSONRaw returns the value of the "json_raw" field in the mutation.
+func (m *SyncthingDeviceMutation) JSONRaw() (r map[string]interface{}, exists bool) {
+	v := m.json_raw
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldJSONRaw returns the old "json_raw" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldJSONRaw(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldJSONRaw is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldJSONRaw requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldJSONRaw: %w", err)
+	}
+	return oldValue.JSONRaw, nil
+}
+
+// ClearJSONRaw clears the value of the "json_raw" field.
+func (m *SyncthingDeviceMutation) ClearJSONRaw() {
+	m.json_raw = nil
+	m.clearedFields[syncthingdevice.FieldJSONRaw] = struct{}{}
+}
+
+// JSONRawCleared returns if the "json_raw" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) JSONRawCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldJSONRaw]
+	return ok
+}
+
+// ResetJSONRaw resets all changes to the "json_raw" field.
+func (m *SyncthingDeviceMutation) ResetJSONRaw() {
+	m.json_raw = nil
+	delete(m.clearedFields, syncthingdevice.FieldJSONRaw)
+}
+
+// SetBindURI sets the "bind_uri" field.
+func (m *SyncthingDeviceMutation) SetBindURI(s string) {
+	m.bind_uri = &s
+}
+
+// BindURI returns the value of the "bind_uri" field in the mutation.
+func (m *SyncthingDeviceMutation) BindURI() (r string, exists bool) {
+	v := m.bind_uri
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBindURI returns the old "bind_uri" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldBindURI(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBindURI is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBindURI requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBindURI: %w", err)
+	}
+	return oldValue.BindURI, nil
+}
+
+// ClearBindURI clears the value of the "bind_uri" field.
+func (m *SyncthingDeviceMutation) ClearBindURI() {
+	m.bind_uri = nil
+	m.clearedFields[syncthingdevice.FieldBindURI] = struct{}{}
+}
+
+// BindURICleared returns if the "bind_uri" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) BindURICleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldBindURI]
+	return ok
+}
+
+// ResetBindURI resets all changes to the "bind_uri" field.
+func (m *SyncthingDeviceMutation) ResetBindURI() {
+	m.bind_uri = nil
+	delete(m.clearedFields, syncthingdevice.FieldBindURI)
+}
+
+// SetClientVersion sets the "client_version" field.
+func (m *SyncthingDeviceMutation) SetClientVersion(s string) {
+	m.client_version = &s
+}
+
+// ClientVersion returns the value of the "client_version" field in the mutation.
+func (m *SyncthingDeviceMutation) ClientVersion() (r string, exists bool) {
+	v := m.client_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClientVersion returns the old "client_version" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldClientVersion(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClientVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClientVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClientVersion: %w", err)
+	}
+	return oldValue.ClientVersion, nil
+}
+
+// ClearClientVersion clears the value of the "client_version" field.
+func (m *SyncthingDeviceMutation) ClearClientVersion() {
+	m.client_version = nil
+	m.clearedFields[syncthingdevice.FieldClientVersion] = struct{}{}
+}
+
+// ClientVersionCleared returns if the "client_version" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) ClientVersionCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldClientVersion]
+	return ok
+}
+
+// ResetClientVersion resets all changes to the "client_version" field.
+func (m *SyncthingDeviceMutation) ResetClientVersion() {
+	m.client_version = nil
+	delete(m.clearedFields, syncthingdevice.FieldClientVersion)
+}
+
+// SetPlatform sets the "platform" field.
+func (m *SyncthingDeviceMutation) SetPlatform(s string) {
+	m.platform = &s
+}
+
+// Platform returns the value of the "platform" field in the mutation.
+func (m *SyncthingDeviceMutation) Platform() (r string, exists bool) {
+	v := m.platform
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatform returns the old "platform" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldPlatform(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatform is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatform requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatform: %w", err)
+	}
+	return oldValue.Platform, nil
+}
+
+// ClearPlatform clears the value of the "platform" field.
+func (m *SyncthingDeviceMutation) ClearPlatform() {
+	m.platform = nil
+	m.clearedFields[syncthingdevice.FieldPlatform] = struct{}{}
+}
+
+// PlatformCleared returns if the "platform" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) PlatformCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldPlatform]
+	return ok
+}
+
+// ResetPlatform resets all changes to the "platform" field.
+func (m *SyncthingDeviceMutation) ResetPlatform() {
+	m.platform = nil
+	delete(m.clearedFields, syncthingdevice.FieldPlatform)
+}
+
+// SetLastSeenAt sets the "last_seen_at" field.
+func (m *SyncthingDeviceMutation) SetLastSeenAt(t time.Time) {
+	m.last_seen_at = &t
+}
+
+// LastSeenAt returns the value of the "last_seen_at" field in the mutation.
+func (m *SyncthingDeviceMutation) LastSeenAt() (r time.Time, exists bool) {
+	v := m.last_seen_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastSeenAt returns the old "last_seen_at" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldLastSeenAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastSeenAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastSeenAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastSeenAt: %w", err)
+	}
+	return oldValue.LastSeenAt, nil
+}
+
+// ClearLastSeenAt clears the value of the "last_seen_at" field.
+func (m *SyncthingDeviceMutation) ClearLastSeenAt() {
+	m.last_seen_at = nil
+	m.clearedFields[syncthingdevice.FieldLastSeenAt] = struct{}{}
+}
+
+// LastSeenAtCleared returns if the "last_seen_at" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) LastSeenAtCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldLastSeenAt]
+	return ok
+}
+
+// ResetLastSeenAt resets all changes to the "last_seen_at" field.
+func (m *SyncthingDeviceMutation) ResetLastSeenAt() {
+	m.last_seen_at = nil
+	delete(m.clearedFields, syncthingdevice.FieldLastSeenAt)
+}
+
+// SetLastSyncAt sets the "last_sync_at" field.
+func (m *SyncthingDeviceMutation) SetLastSyncAt(t time.Time) {
+	m.last_sync_at = &t
+}
+
+// LastSyncAt returns the value of the "last_sync_at" field in the mutation.
+func (m *SyncthingDeviceMutation) LastSyncAt() (r time.Time, exists bool) {
+	v := m.last_sync_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastSyncAt returns the old "last_sync_at" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldLastSyncAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastSyncAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastSyncAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastSyncAt: %w", err)
+	}
+	return oldValue.LastSyncAt, nil
+}
+
+// ClearLastSyncAt clears the value of the "last_sync_at" field.
+func (m *SyncthingDeviceMutation) ClearLastSyncAt() {
+	m.last_sync_at = nil
+	m.clearedFields[syncthingdevice.FieldLastSyncAt] = struct{}{}
+}
+
+// LastSyncAtCleared returns if the "last_sync_at" field was cleared in this mutation.
+func (m *SyncthingDeviceMutation) LastSyncAtCleared() bool {
+	_, ok := m.clearedFields[syncthingdevice.FieldLastSyncAt]
+	return ok
+}
+
+// ResetLastSyncAt resets all changes to the "last_sync_at" field.
+func (m *SyncthingDeviceMutation) ResetLastSyncAt() {
+	m.last_sync_at = nil
+	delete(m.clearedFields, syncthingdevice.FieldLastSyncAt)
+}
+
+// SetOnline sets the "online" field.
+func (m *SyncthingDeviceMutation) SetOnline(b bool) {
+	m.online = &b
+}
+
+// Online returns the value of the "online" field in the mutation.
+func (m *SyncthingDeviceMutation) Online() (r bool, exists bool) {
+	v := m.online
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOnline returns the old "online" field's value of the SyncthingDevice entity.
+// If the SyncthingDevice object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SyncthingDeviceMutation) OldOnline(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOnline is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOnline requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOnline: %w", err)
+	}
+	return oldValue.Online, nil
+}
+
+// ResetOnline resets all changes to the "online" field.
+func (m *SyncthingDeviceMutation) ResetOnline() {
+	m.online = nil
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *SyncthingDeviceMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[syncthingdevice.FieldOwnerID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *SyncthingDeviceMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *SyncthingDeviceMutation) OwnerIDs() (ids []int) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *SyncthingDeviceMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// Where appends a list predicates to the SyncthingDeviceMutation builder.
+func (m *SyncthingDeviceMutation) Where(ps ...predicate.SyncthingDevice) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the SyncthingDeviceMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *SyncthingDeviceMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.SyncthingDevice, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *SyncthingDeviceMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *SyncthingDeviceMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (SyncthingDevice).
+func (m *SyncthingDeviceMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *SyncthingDeviceMutation) Fields() []string {
+	fields := make([]string, 0, 15)
+	if m.created_at != nil {
+		fields = append(fields, syncthingdevice.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, syncthingdevice.FieldUpdatedAt)
+	}
+	if m.deleted_at != nil {
+		fields = append(fields, syncthingdevice.FieldDeletedAt)
+	}
+	if m.owner != nil {
+		fields = append(fields, syncthingdevice.FieldOwnerID)
+	}
+	if m.device_id != nil {
+		fields = append(fields, syncthingdevice.FieldDeviceID)
+	}
+	if m.short_id != nil {
+		fields = append(fields, syncthingdevice.FieldShortID)
+	}
+	if m.last_ip != nil {
+		fields = append(fields, syncthingdevice.FieldLastIP)
+	}
+	if m.api_key != nil {
+		fields = append(fields, syncthingdevice.FieldAPIKey)
+	}
+	if m.json_raw != nil {
+		fields = append(fields, syncthingdevice.FieldJSONRaw)
+	}
+	if m.bind_uri != nil {
+		fields = append(fields, syncthingdevice.FieldBindURI)
+	}
+	if m.client_version != nil {
+		fields = append(fields, syncthingdevice.FieldClientVersion)
+	}
+	if m.platform != nil {
+		fields = append(fields, syncthingdevice.FieldPlatform)
+	}
+	if m.last_seen_at != nil {
+		fields = append(fields, syncthingdevice.FieldLastSeenAt)
+	}
+	if m.last_sync_at != nil {
+		fields = append(fields, syncthingdevice.FieldLastSyncAt)
+	}
+	if m.online != nil {
+		fields = append(fields, syncthingdevice.FieldOnline)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *SyncthingDeviceMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case syncthingdevice.FieldCreatedAt:
+		return m.CreatedAt()
+	case syncthingdevice.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case syncthingdevice.FieldDeletedAt:
+		return m.DeletedAt()
+	case syncthingdevice.FieldOwnerID:
+		return m.OwnerID()
+	case syncthingdevice.FieldDeviceID:
+		return m.DeviceID()
+	case syncthingdevice.FieldShortID:
+		return m.ShortID()
+	case syncthingdevice.FieldLastIP:
+		return m.LastIP()
+	case syncthingdevice.FieldAPIKey:
+		return m.APIKey()
+	case syncthingdevice.FieldJSONRaw:
+		return m.JSONRaw()
+	case syncthingdevice.FieldBindURI:
+		return m.BindURI()
+	case syncthingdevice.FieldClientVersion:
+		return m.ClientVersion()
+	case syncthingdevice.FieldPlatform:
+		return m.Platform()
+	case syncthingdevice.FieldLastSeenAt:
+		return m.LastSeenAt()
+	case syncthingdevice.FieldLastSyncAt:
+		return m.LastSyncAt()
+	case syncthingdevice.FieldOnline:
+		return m.Online()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *SyncthingDeviceMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case syncthingdevice.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case syncthingdevice.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case syncthingdevice.FieldDeletedAt:
+		return m.OldDeletedAt(ctx)
+	case syncthingdevice.FieldOwnerID:
+		return m.OldOwnerID(ctx)
+	case syncthingdevice.FieldDeviceID:
+		return m.OldDeviceID(ctx)
+	case syncthingdevice.FieldShortID:
+		return m.OldShortID(ctx)
+	case syncthingdevice.FieldLastIP:
+		return m.OldLastIP(ctx)
+	case syncthingdevice.FieldAPIKey:
+		return m.OldAPIKey(ctx)
+	case syncthingdevice.FieldJSONRaw:
+		return m.OldJSONRaw(ctx)
+	case syncthingdevice.FieldBindURI:
+		return m.OldBindURI(ctx)
+	case syncthingdevice.FieldClientVersion:
+		return m.OldClientVersion(ctx)
+	case syncthingdevice.FieldPlatform:
+		return m.OldPlatform(ctx)
+	case syncthingdevice.FieldLastSeenAt:
+		return m.OldLastSeenAt(ctx)
+	case syncthingdevice.FieldLastSyncAt:
+		return m.OldLastSyncAt(ctx)
+	case syncthingdevice.FieldOnline:
+		return m.OldOnline(ctx)
+	}
+	return nil, fmt.Errorf("unknown SyncthingDevice field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SyncthingDeviceMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case syncthingdevice.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case syncthingdevice.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case syncthingdevice.FieldDeletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeletedAt(v)
+		return nil
+	case syncthingdevice.FieldOwnerID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerID(v)
+		return nil
+	case syncthingdevice.FieldDeviceID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeviceID(v)
+		return nil
+	case syncthingdevice.FieldShortID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShortID(v)
+		return nil
+	case syncthingdevice.FieldLastIP:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastIP(v)
+		return nil
+	case syncthingdevice.FieldAPIKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKey(v)
+		return nil
+	case syncthingdevice.FieldJSONRaw:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetJSONRaw(v)
+		return nil
+	case syncthingdevice.FieldBindURI:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBindURI(v)
+		return nil
+	case syncthingdevice.FieldClientVersion:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClientVersion(v)
+		return nil
+	case syncthingdevice.FieldPlatform:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatform(v)
+		return nil
+	case syncthingdevice.FieldLastSeenAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastSeenAt(v)
+		return nil
+	case syncthingdevice.FieldLastSyncAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastSyncAt(v)
+		return nil
+	case syncthingdevice.FieldOnline:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOnline(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SyncthingDevice field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *SyncthingDeviceMutation) AddedFields() []string {
+	var fields []string
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *SyncthingDeviceMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SyncthingDeviceMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown SyncthingDevice numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *SyncthingDeviceMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(syncthingdevice.FieldDeletedAt) {
+		fields = append(fields, syncthingdevice.FieldDeletedAt)
+	}
+	if m.FieldCleared(syncthingdevice.FieldShortID) {
+		fields = append(fields, syncthingdevice.FieldShortID)
+	}
+	if m.FieldCleared(syncthingdevice.FieldLastIP) {
+		fields = append(fields, syncthingdevice.FieldLastIP)
+	}
+	if m.FieldCleared(syncthingdevice.FieldAPIKey) {
+		fields = append(fields, syncthingdevice.FieldAPIKey)
+	}
+	if m.FieldCleared(syncthingdevice.FieldJSONRaw) {
+		fields = append(fields, syncthingdevice.FieldJSONRaw)
+	}
+	if m.FieldCleared(syncthingdevice.FieldBindURI) {
+		fields = append(fields, syncthingdevice.FieldBindURI)
+	}
+	if m.FieldCleared(syncthingdevice.FieldClientVersion) {
+		fields = append(fields, syncthingdevice.FieldClientVersion)
+	}
+	if m.FieldCleared(syncthingdevice.FieldPlatform) {
+		fields = append(fields, syncthingdevice.FieldPlatform)
+	}
+	if m.FieldCleared(syncthingdevice.FieldLastSeenAt) {
+		fields = append(fields, syncthingdevice.FieldLastSeenAt)
+	}
+	if m.FieldCleared(syncthingdevice.FieldLastSyncAt) {
+		fields = append(fields, syncthingdevice.FieldLastSyncAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *SyncthingDeviceMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *SyncthingDeviceMutation) ClearField(name string) error {
+	switch name {
+	case syncthingdevice.FieldDeletedAt:
+		m.ClearDeletedAt()
+		return nil
+	case syncthingdevice.FieldShortID:
+		m.ClearShortID()
+		return nil
+	case syncthingdevice.FieldLastIP:
+		m.ClearLastIP()
+		return nil
+	case syncthingdevice.FieldAPIKey:
+		m.ClearAPIKey()
+		return nil
+	case syncthingdevice.FieldJSONRaw:
+		m.ClearJSONRaw()
+		return nil
+	case syncthingdevice.FieldBindURI:
+		m.ClearBindURI()
+		return nil
+	case syncthingdevice.FieldClientVersion:
+		m.ClearClientVersion()
+		return nil
+	case syncthingdevice.FieldPlatform:
+		m.ClearPlatform()
+		return nil
+	case syncthingdevice.FieldLastSeenAt:
+		m.ClearLastSeenAt()
+		return nil
+	case syncthingdevice.FieldLastSyncAt:
+		m.ClearLastSyncAt()
+		return nil
+	}
+	return fmt.Errorf("unknown SyncthingDevice nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *SyncthingDeviceMutation) ResetField(name string) error {
+	switch name {
+	case syncthingdevice.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case syncthingdevice.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case syncthingdevice.FieldDeletedAt:
+		m.ResetDeletedAt()
+		return nil
+	case syncthingdevice.FieldOwnerID:
+		m.ResetOwnerID()
+		return nil
+	case syncthingdevice.FieldDeviceID:
+		m.ResetDeviceID()
+		return nil
+	case syncthingdevice.FieldShortID:
+		m.ResetShortID()
+		return nil
+	case syncthingdevice.FieldLastIP:
+		m.ResetLastIP()
+		return nil
+	case syncthingdevice.FieldAPIKey:
+		m.ResetAPIKey()
+		return nil
+	case syncthingdevice.FieldJSONRaw:
+		m.ResetJSONRaw()
+		return nil
+	case syncthingdevice.FieldBindURI:
+		m.ResetBindURI()
+		return nil
+	case syncthingdevice.FieldClientVersion:
+		m.ResetClientVersion()
+		return nil
+	case syncthingdevice.FieldPlatform:
+		m.ResetPlatform()
+		return nil
+	case syncthingdevice.FieldLastSeenAt:
+		m.ResetLastSeenAt()
+		return nil
+	case syncthingdevice.FieldLastSyncAt:
+		m.ResetLastSyncAt()
+		return nil
+	case syncthingdevice.FieldOnline:
+		m.ResetOnline()
+		return nil
+	}
+	return fmt.Errorf("unknown SyncthingDevice field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *SyncthingDeviceMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.owner != nil {
+		edges = append(edges, syncthingdevice.EdgeOwner)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *SyncthingDeviceMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case syncthingdevice.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *SyncthingDeviceMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *SyncthingDeviceMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *SyncthingDeviceMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedowner {
+		edges = append(edges, syncthingdevice.EdgeOwner)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *SyncthingDeviceMutation) EdgeCleared(name string) bool {
+	switch name {
+	case syncthingdevice.EdgeOwner:
+		return m.clearedowner
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *SyncthingDeviceMutation) ClearEdge(name string) error {
+	switch name {
+	case syncthingdevice.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	}
+	return fmt.Errorf("unknown SyncthingDevice unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *SyncthingDeviceMutation) ResetEdge(name string) error {
+	switch name {
+	case syncthingdevice.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	}
+	return fmt.Errorf("unknown SyncthingDevice edge %s", name)
+}
+
 // TaskMutation represents an operation that mutates the Task nodes in the graph.
 type TaskMutation struct {
 	config
@@ -16683,54 +18017,57 @@ func (m *TaskMutation) ResetEdge(name string) error {
 // UserMutation represents an operation that mutates the User nodes in the graph.
 type UserMutation struct {
 	config
-	op                  Op
-	typ                 string
-	id                  *int
-	created_at          *time.Time
-	updated_at          *time.Time
-	deleted_at          *time.Time
-	email               *string
-	nick                *string
-	password            *string
-	status              *user.Status
-	storage             *int64
-	addstorage          *int64
-	two_factor_secret   *string
-	avatar              *string
-	settings            **types.UserSetting
-	clearedFields       map[string]struct{}
-	group               *int
-	clearedgroup        bool
-	files               map[int]struct{}
-	removedfiles        map[int]struct{}
-	clearedfiles        bool
-	dav_accounts        map[int]struct{}
-	removeddav_accounts map[int]struct{}
-	cleareddav_accounts bool
-	shares              map[int]struct{}
-	removedshares       map[int]struct{}
-	clearedshares       bool
-	passkey             map[int]struct{}
-	removedpasskey      map[int]struct{}
-	clearedpasskey      bool
-	tasks               map[int]struct{}
-	removedtasks        map[int]struct{}
-	clearedtasks        bool
-	fsevents            map[int]struct{}
-	removedfsevents     map[int]struct{}
-	clearedfsevents     bool
-	entities            map[int]struct{}
-	removedentities     map[int]struct{}
-	clearedentities     bool
-	oauth_grants        map[int]struct{}
-	removedoauth_grants map[int]struct{}
-	clearedoauth_grants bool
-	audit_logs          map[int]struct{}
-	removedaudit_logs   map[int]struct{}
-	clearedaudit_logs   bool
-	done                bool
-	oldValue            func(context.Context) (*User, error)
-	predicates          []predicate.User
+	op                       Op
+	typ                      string
+	id                       *int
+	created_at               *time.Time
+	updated_at               *time.Time
+	deleted_at               *time.Time
+	email                    *string
+	nick                     *string
+	password                 *string
+	status                   *user.Status
+	storage                  *int64
+	addstorage               *int64
+	two_factor_secret        *string
+	avatar                   *string
+	settings                 **types.UserSetting
+	clearedFields            map[string]struct{}
+	group                    *int
+	clearedgroup             bool
+	files                    map[int]struct{}
+	removedfiles             map[int]struct{}
+	clearedfiles             bool
+	dav_accounts             map[int]struct{}
+	removeddav_accounts      map[int]struct{}
+	cleareddav_accounts      bool
+	syncthing_devices        map[int]struct{}
+	removedsyncthing_devices map[int]struct{}
+	clearedsyncthing_devices bool
+	shares                   map[int]struct{}
+	removedshares            map[int]struct{}
+	clearedshares            bool
+	passkey                  map[int]struct{}
+	removedpasskey           map[int]struct{}
+	clearedpasskey           bool
+	tasks                    map[int]struct{}
+	removedtasks             map[int]struct{}
+	clearedtasks             bool
+	fsevents                 map[int]struct{}
+	removedfsevents          map[int]struct{}
+	clearedfsevents          bool
+	entities                 map[int]struct{}
+	removedentities          map[int]struct{}
+	clearedentities          bool
+	oauth_grants             map[int]struct{}
+	removedoauth_grants      map[int]struct{}
+	clearedoauth_grants      bool
+	audit_logs               map[int]struct{}
+	removedaudit_logs        map[int]struct{}
+	clearedaudit_logs        bool
+	done                     bool
+	oldValue                 func(context.Context) (*User, error)
+	predicates               []predicate.User
 }
 
 var _ ent.Mutation = (*UserMutation)(nil)
@@ -17496,6 +18833,60 @@ func (m *UserMutation) ResetDavAccounts() {
 	m.removeddav_accounts = nil
 }
 
+// AddSyncthingDeviceIDs adds the "syncthing_devices" edge to the SyncthingDevice entity by ids.
+func (m *UserMutation) AddSyncthingDeviceIDs(ids ...int) {
+	if m.syncthing_devices == nil {
+		m.syncthing_devices = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.syncthing_devices[ids[i]] = struct{}{}
+	}
+}
+
+// ClearSyncthingDevices clears the "syncthing_devices" edge to the SyncthingDevice entity.
+func (m *UserMutation) ClearSyncthingDevices() {
+	m.clearedsyncthing_devices = true
+}
+
+// SyncthingDevicesCleared reports if the "syncthing_devices" edge to the SyncthingDevice entity was cleared.
+func (m *UserMutation) SyncthingDevicesCleared() bool {
+	return m.clearedsyncthing_devices
+}
+
+// RemoveSyncthingDeviceIDs removes the "syncthing_devices" edge to the SyncthingDevice entity by IDs.
+func (m *UserMutation) RemoveSyncthingDeviceIDs(ids ...int) {
+	if m.removedsyncthing_devices == nil {
+		m.removedsyncthing_devices = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.syncthing_devices, ids[i])
+		m.removedsyncthing_devices[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedSyncthingDevices returns the removed IDs of the "syncthing_devices" edge to the SyncthingDevice entity.
+func (m *UserMutation) RemovedSyncthingDevicesIDs() (ids []int) {
+	for id := range m.removedsyncthing_devices {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// SyncthingDevicesIDs returns the "syncthing_devices" edge IDs in the mutation.
+func (m *UserMutation) SyncthingDevicesIDs() (ids []int) {
+	for id := range m.syncthing_devices {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetSyncthingDevices resets all changes to the "syncthing_devices" edge.
+func (m *UserMutation) ResetSyncthingDevices() {
+	m.syncthing_devices = nil
+	m.clearedsyncthing_devices = false
+	m.removedsyncthing_devices = nil
+}
+
 // AddShareIDs adds the "shares" edge to the Share entity by ids.
 func (m *UserMutation) AddShareIDs(ids ...int) {
 	if m.shares == nil {
@@ -18242,7 +19633,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 10)
+	edges := make([]string, 0, 11)
 	if m.group != nil {
 		edges = append(edges, user.EdgeGroup)
 	}
@@ -18251,6 +19642,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.dav_accounts != nil {
 		edges = append(edges, user.EdgeDavAccounts)
+	}
+	if m.syncthing_devices != nil {
+		edges = append(edges, user.EdgeSyncthingDevices)
 	}
 	if m.shares != nil {
 		edges = append(edges, user.EdgeShares)
@@ -18293,6 +19687,12 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 	case user.EdgeDavAccounts:
 		ids := make([]ent.Value, 0, len(m.dav_accounts))
 		for id := range m.dav_accounts {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeSyncthingDevices:
+		ids := make([]ent.Value, 0, len(m.syncthing_devices))
+		for id := range m.syncthing_devices {
 			ids = append(ids, id)
 		}
 		return ids
@@ -18344,12 +19744,15 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 10)
+	edges := make([]string, 0, 11)
 	if m.removedfiles != nil {
 		edges = append(edges, user.EdgeFiles)
 	}
 	if m.removeddav_accounts != nil {
 		edges = append(edges, user.EdgeDavAccounts)
+	}
+	if m.removedsyncthing_devices != nil {
+		edges = append(edges, user.EdgeSyncthingDevices)
 	}
 	if m.removedshares != nil {
 		edges = append(edges, user.EdgeShares)
@@ -18388,6 +19791,12 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 	case user.EdgeDavAccounts:
 		ids := make([]ent.Value, 0, len(m.removeddav_accounts))
 		for id := range m.removeddav_accounts {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeSyncthingDevices:
+		ids := make([]ent.Value, 0, len(m.removedsyncthing_devices))
+		for id := range m.removedsyncthing_devices {
 			ids = append(ids, id)
 		}
 		return ids
@@ -18439,7 +19848,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 10)
+	edges := make([]string, 0, 11)
 	if m.clearedgroup {
 		edges = append(edges, user.EdgeGroup)
 	}
@@ -18448,6 +19857,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.cleareddav_accounts {
 		edges = append(edges, user.EdgeDavAccounts)
+	}
+	if m.clearedsyncthing_devices {
+		edges = append(edges, user.EdgeSyncthingDevices)
 	}
 	if m.clearedshares {
 		edges = append(edges, user.EdgeShares)
@@ -18483,6 +19895,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedfiles
 	case user.EdgeDavAccounts:
 		return m.cleareddav_accounts
+	case user.EdgeSyncthingDevices:
+		return m.clearedsyncthing_devices
 	case user.EdgeShares:
 		return m.clearedshares
 	case user.EdgePasskey:
@@ -18524,6 +19938,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeDavAccounts:
 		m.ResetDavAccounts()
+		return nil
+	case user.EdgeSyncthingDevices:
+		m.ResetSyncthingDevices()
 		return nil
 	case user.EdgeShares:
 		m.ResetShares()

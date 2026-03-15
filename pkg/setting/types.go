@@ -192,8 +192,11 @@ const (
 )
 
 type AppSetting struct {
-	Promotion        bool
-	DesktopPromotion bool
+	Promotion               bool
+	DesktopPromotion        bool
+	SyncthingUpgradeVersion string
+	SyncthingLinuxURL       string
+	SyncthingWindowsURL     string
 }
 
 type EmailTemplate struct {

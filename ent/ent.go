@@ -27,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/setting"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
 	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 )
@@ -89,23 +90,24 @@ var (
 func checkColumn(table, column string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			auditlog.Table:      auditlog.ValidColumn,
-			davaccount.Table:    davaccount.ValidColumn,
-			directlink.Table:    directlink.ValidColumn,
-			entity.Table:        entity.ValidColumn,
-			file.Table:          file.ValidColumn,
-			fsevent.Table:       fsevent.ValidColumn,
-			group.Table:         group.ValidColumn,
-			metadata.Table:      metadata.ValidColumn,
-			node.Table:          node.ValidColumn,
-			oauthclient.Table:   oauthclient.ValidColumn,
-			oauthgrant.Table:    oauthgrant.ValidColumn,
-			passkey.Table:       passkey.ValidColumn,
-			setting.Table:       setting.ValidColumn,
-			share.Table:         share.ValidColumn,
-			storagepolicy.Table: storagepolicy.ValidColumn,
-			task.Table:          task.ValidColumn,
-			user.Table:          user.ValidColumn,
+			auditlog.Table:        auditlog.ValidColumn,
+			davaccount.Table:      davaccount.ValidColumn,
+			directlink.Table:      directlink.ValidColumn,
+			entity.Table:          entity.ValidColumn,
+			file.Table:            file.ValidColumn,
+			fsevent.Table:         fsevent.ValidColumn,
+			group.Table:           group.ValidColumn,
+			metadata.Table:        metadata.ValidColumn,
+			node.Table:            node.ValidColumn,
+			oauthclient.Table:     oauthclient.ValidColumn,
+			oauthgrant.Table:      oauthgrant.ValidColumn,
+			passkey.Table:         passkey.ValidColumn,
+			setting.Table:         setting.ValidColumn,
+			share.Table:           share.ValidColumn,
+			storagepolicy.Table:   storagepolicy.ValidColumn,
+			syncthingdevice.Table: syncthingdevice.ValidColumn,
+			task.Table:            task.ValidColumn,
+			user.Table:            user.ValidColumn,
 		})
 	})
 	return columnCheck(table, column)

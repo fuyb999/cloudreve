@@ -73,10 +73,14 @@ func (c *settingClient) Gets(ctx context.Context, names []string) (map[string]st
 
 func (c *settingClient) Set(ctx context.Context, settings map[string]string) error {
 	for k, v := range settings {
-		if err := c.client.Setting.Update().Where(setting.Name(k)).SetValue(v).Exec(ctx); err != nil {
-			return fmt.Errorf("failed to create setting %q: %w", k, err)
+		if err := c.client.Setting.Create().
+			SetName(k).
+			SetValue(v).
+			OnConflictColumns(setting.FieldName).
+			UpdateNewValues().
+			Exec(ctx); err != nil {
+			return fmt.Errorf("failed to upsert setting %q: %w", k, err)
 		}
-
 	}
 
 	return nil
@@ -669,6 +673,9 @@ var DefaultSettings = map[string]string{
 	"encrypt_master_key_file":                    "",
 	"show_encryption_status":                     "1",
 	"show_desktop_app_promotion":                 "1",
+	"syncthing_upgrade_version":                  "",
+	"syncthing_download_linux_url":               "https://syncthing.net/downloads/#linux",
+	"syncthing_download_windows_url":             "https://syncthing.net/downloads/#windows",
 	"fs_event_push_enabled":                      "1",
 	"fs_event_push_max_age":                      "1209600",
 	"fs_event_push_debounce":                     "5",

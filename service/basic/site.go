@@ -61,8 +61,10 @@ type SiteConfig struct {
 	ThumbExts []string `json:"thumb_exts,omitempty"`
 
 	// App settings
-	AppPromotion        bool `json:"app_promotion,omitempty"`
-	DesktopAppPromotion bool `json:"desktop_app_promotion,omitempty"`
+	AppPromotion                bool   `json:"app_promotion,omitempty"`
+	DesktopAppPromotion         bool   `json:"desktop_app_promotion,omitempty"`
+	SyncthingDownloadLinuxURL   string `json:"syncthing_download_linux_url,omitempty"`
+	SyncthingDownloadWindowsURL string `json:"syncthing_download_windows_url,omitempty"`
 
 	//EmailActive          bool      `json:"emailActive"`
 	//QQLogin              bool      `json:"QQLogin"`
@@ -133,8 +135,10 @@ func (s *GetSettingService) GetSiteConfig(c *gin.Context) (*SiteConfig, error) {
 	case "app":
 		appSetting := settings.AppSetting(c)
 		return &SiteConfig{
-			AppPromotion:        appSetting.Promotion,
-			DesktopAppPromotion: appSetting.DesktopPromotion,
+			AppPromotion:                appSetting.Promotion,
+			DesktopAppPromotion:         appSetting.DesktopPromotion,
+			SyncthingDownloadLinuxURL:   appSetting.SyncthingLinuxURL,
+			SyncthingDownloadWindowsURL: appSetting.SyncthingWindowsURL,
 		}, nil
 	case "thumb":
 		// Return supported thumbnail extensions from enabled generators.
@@ -192,22 +196,25 @@ func (s *GetSettingService) GetSiteConfig(c *gin.Context) (*SiteConfig, error) {
 	customNavItems := settings.CustomNavItems(c)
 	customHTML := settings.CustomHTML(c)
 	return &SiteConfig{
-		InstanceID:      siteBasic.ID,
-		SiteName:        siteBasic.Name,
-		Themes:          themes.Themes,
-		DefaultTheme:    themes.DefaultTheme,
-		User:            &userRes,
-		Logo:            logo.Normal,
-		LogoLight:       logo.Light,
-		CaptchaType:     settings.CaptchaType(c),
-		TurnstileSiteID: settings.TurnstileCaptcha(c).Key,
-		ReCaptchaKey:    reCaptcha.Key,
-		CapInstanceURL:  capCaptcha.InstanceURL,
-		CapSiteKey:      capCaptcha.SiteKey,
-		CapAssetServer:  capCaptcha.AssetServer,
-		AppPromotion:    appSetting.Promotion,
-		CustomNavItems:  customNavItems,
-		CustomHTML:      customHTML,
+		InstanceID:                  siteBasic.ID,
+		SiteName:                    siteBasic.Name,
+		Themes:                      themes.Themes,
+		DefaultTheme:                themes.DefaultTheme,
+		User:                        &userRes,
+		Logo:                        logo.Normal,
+		LogoLight:                   logo.Light,
+		CaptchaType:                 settings.CaptchaType(c),
+		TurnstileSiteID:             settings.TurnstileCaptcha(c).Key,
+		ReCaptchaKey:                reCaptcha.Key,
+		CapInstanceURL:              capCaptcha.InstanceURL,
+		CapSiteKey:                  capCaptcha.SiteKey,
+		CapAssetServer:              capCaptcha.AssetServer,
+		AppPromotion:                appSetting.Promotion,
+		DesktopAppPromotion:         appSetting.DesktopPromotion,
+		SyncthingDownloadLinuxURL:   appSetting.SyncthingLinuxURL,
+		SyncthingDownloadWindowsURL: appSetting.SyncthingWindowsURL,
+		CustomNavItems:              customNavItems,
+		CustomHTML:                  customHTML,
 	}, nil
 }
 

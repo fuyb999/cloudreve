@@ -21,6 +21,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/passkey"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
@@ -255,6 +256,21 @@ func (uu *UserUpdate) AddDavAccounts(d ...*DavAccount) *UserUpdate {
 	return uu.AddDavAccountIDs(ids...)
 }
 
+// AddSyncthingDeviceIDs adds the "syncthing_devices" edge to the SyncthingDevice entity by IDs.
+func (uu *UserUpdate) AddSyncthingDeviceIDs(ids ...int) *UserUpdate {
+	uu.mutation.AddSyncthingDeviceIDs(ids...)
+	return uu
+}
+
+// AddSyncthingDevices adds the "syncthing_devices" edges to the SyncthingDevice entity.
+func (uu *UserUpdate) AddSyncthingDevices(s ...*SyncthingDevice) *UserUpdate {
+	ids := make([]int, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return uu.AddSyncthingDeviceIDs(ids...)
+}
+
 // AddShareIDs adds the "shares" edge to the Share entity by IDs.
 func (uu *UserUpdate) AddShareIDs(ids ...int) *UserUpdate {
 	uu.mutation.AddShareIDs(ids...)
@@ -411,6 +427,27 @@ func (uu *UserUpdate) RemoveDavAccounts(d ...*DavAccount) *UserUpdate {
 		ids[i] = d[i].ID
 	}
 	return uu.RemoveDavAccountIDs(ids...)
+}
+
+// ClearSyncthingDevices clears all "syncthing_devices" edges to the SyncthingDevice entity.
+func (uu *UserUpdate) ClearSyncthingDevices() *UserUpdate {
+	uu.mutation.ClearSyncthingDevices()
+	return uu
+}
+
+// RemoveSyncthingDeviceIDs removes the "syncthing_devices" edge to SyncthingDevice entities by IDs.
+func (uu *UserUpdate) RemoveSyncthingDeviceIDs(ids ...int) *UserUpdate {
+	uu.mutation.RemoveSyncthingDeviceIDs(ids...)
+	return uu
+}
+
+// RemoveSyncthingDevices removes "syncthing_devices" edges to SyncthingDevice entities.
+func (uu *UserUpdate) RemoveSyncthingDevices(s ...*SyncthingDevice) *UserUpdate {
+	ids := make([]int, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return uu.RemoveSyncthingDeviceIDs(ids...)
 }
 
 // ClearShares clears all "shares" edges to the Share entity.
@@ -797,6 +834,51 @@ func (uu *UserUpdate) sqlSave(ctx context.Context) (n int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(davaccount.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if uu.mutation.SyncthingDevicesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := uu.mutation.RemovedSyncthingDevicesIDs(); len(nodes) > 0 && !uu.mutation.SyncthingDevicesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := uu.mutation.SyncthingDevicesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -1355,6 +1437,21 @@ func (uuo *UserUpdateOne) AddDavAccounts(d ...*DavAccount) *UserUpdateOne {
 	return uuo.AddDavAccountIDs(ids...)
 }
 
+// AddSyncthingDeviceIDs adds the "syncthing_devices" edge to the SyncthingDevice entity by IDs.
+func (uuo *UserUpdateOne) AddSyncthingDeviceIDs(ids ...int) *UserUpdateOne {
+	uuo.mutation.AddSyncthingDeviceIDs(ids...)
+	return uuo
+}
+
+// AddSyncthingDevices adds the "syncthing_devices" edges to the SyncthingDevice entity.
+func (uuo *UserUpdateOne) AddSyncthingDevices(s ...*SyncthingDevice) *UserUpdateOne {
+	ids := make([]int, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return uuo.AddSyncthingDeviceIDs(ids...)
+}
+
 // AddShareIDs adds the "shares" edge to the Share entity by IDs.
 func (uuo *UserUpdateOne) AddShareIDs(ids ...int) *UserUpdateOne {
 	uuo.mutation.AddShareIDs(ids...)
@@ -1511,6 +1608,27 @@ func (uuo *UserUpdateOne) RemoveDavAccounts(d ...*DavAccount) *UserUpdateOne {
 		ids[i] = d[i].ID
 	}
 	return uuo.RemoveDavAccountIDs(ids...)
+}
+
+// ClearSyncthingDevices clears all "syncthing_devices" edges to the SyncthingDevice entity.
+func (uuo *UserUpdateOne) ClearSyncthingDevices() *UserUpdateOne {
+	uuo.mutation.ClearSyncthingDevices()
+	return uuo
+}
+
+// RemoveSyncthingDeviceIDs removes the "syncthing_devices" edge to SyncthingDevice entities by IDs.
+func (uuo *UserUpdateOne) RemoveSyncthingDeviceIDs(ids ...int) *UserUpdateOne {
+	uuo.mutation.RemoveSyncthingDeviceIDs(ids...)
+	return uuo
+}
+
+// RemoveSyncthingDevices removes "syncthing_devices" edges to SyncthingDevice entities.
+func (uuo *UserUpdateOne) RemoveSyncthingDevices(s ...*SyncthingDevice) *UserUpdateOne {
+	ids := make([]int, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return uuo.RemoveSyncthingDeviceIDs(ids...)
 }
 
 // ClearShares clears all "shares" edges to the Share entity.
@@ -1927,6 +2045,51 @@ func (uuo *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) 
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(davaccount.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if uuo.mutation.SyncthingDevicesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := uuo.mutation.RemovedSyncthingDevicesIDs(); len(nodes) > 0 && !uuo.mutation.SyncthingDevicesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := uuo.mutation.SyncthingDevicesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

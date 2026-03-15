@@ -39,6 +39,7 @@ type IssueTokenArgs struct {
 	RootTokenID        *uuid.UUID
 	ClientID           string
 	Scopes             []string
+	AccessTTLOverride  time.Duration
 	RefreshTTLOverride time.Duration
 }
 
@@ -163,6 +164,7 @@ func (t *tokenAuth) Refresh(ctx context.Context, refreshToken string) (*Token, e
 	}
 
 	// If token issued for an OAuth client, check if the client is still valid
+	accessTTLOverride := time.Duration(0)
 	refreshTTLOverride := time.Duration(0)
 	if claims.ClientID != "" {
 		client, err := t.oAuthClient.GetByGUIDWithGrants(ctx, claims.ClientID, expectedUser.ID)
@@ -180,9 +182,7 @@ func (t *tokenAuth) Refresh(ctx context.Context, refreshToken string) (*Token, e
 			return nil, ErrInvalidRefreshToken
 		}
 
-		if client.Props != nil {
-			refreshTTLOverride = time.Duration(client.Props.RefreshTokenTTL) * time.Second
-		}
+		accessTTLOverride, refreshTTLOverride = OAuthClientTokenTTLs(client)
 	}
 
 	return t.Issue(ctx, &IssueTokenArgs{
@@ -190,6 +190,7 @@ func (t *tokenAuth) Refresh(ctx context.Context, refreshToken string) (*Token, e
 		RootTokenID:        claims.RootTokenID,
 		Scopes:             claims.Scopes,
 		ClientID:           claims.ClientID,
+		AccessTTLOverride:  accessTTLOverride,
 		RefreshTTLOverride: refreshTTLOverride,
 	})
 }
@@ -240,10 +241,13 @@ func (t *tokenAuth) Issue(ctx context.Context, args *IssueTokenArgs) (*Token, er
 	uidEncoded := hashid.EncodeUserID(t.idEncoder, u.ID)
 	tokenSettings := t.s.TokenAuth(ctx)
 	issueDate := time.Now()
-	accessTokenExpired := time.Now().Add(tokenSettings.AccessTokenTTL)
-	refreshTokenExpired := time.Now().Add(tokenSettings.RefreshTokenTTL)
+	accessTokenExpired := issueDate.Add(tokenSettings.AccessTokenTTL)
+	refreshTokenExpired := issueDate.Add(tokenSettings.RefreshTokenTTL)
+	if args.AccessTTLOverride > 0 {
+		accessTokenExpired = issueDate.Add(args.AccessTTLOverride)
+	}
 	if args.RefreshTTLOverride > 0 {
-		refreshTokenExpired = time.Now().Add(args.RefreshTTLOverride)
+		refreshTokenExpired = issueDate.Add(args.RefreshTTLOverride)
 	}
 	if rootTokenID == nil {
 		newRootTokenID := uuid.Must(uuid.NewV4())
@@ -308,6 +312,36 @@ func ValidateScopes(requestedScopes, allowedScopes []string) bool {
 		}
 	}
 	return true
+}
+
+func OAuthClientTokenTTLs(client *ent.OAuthClient) (time.Duration, time.Duration) {
+	if client == nil {
+		return 0, 0
+	}
+
+	var accessTTLOverride time.Duration
+	var refreshTTLOverride time.Duration
+	if client.Props != nil {
+		if client.Props.AccessTokenTTL > 0 {
+			accessTTLOverride = time.Duration(client.Props.AccessTokenTTL) * time.Second
+		}
+		if client.Props.RefreshTokenTTL > 0 {
+			refreshTTLOverride = time.Duration(client.Props.RefreshTokenTTL) * time.Second
+		}
+	}
+
+	if client.GUID != inventory.OAuthClientSyncthingGUID {
+		return accessTTLOverride, refreshTTLOverride
+	}
+
+	syncthingTTL := time.Duration(inventory.SyncthingOAuthTokenTTLSeconds) * time.Second
+	if accessTTLOverride == 0 {
+		accessTTLOverride = syncthingTTL
+	}
+	if client.Props == nil || client.Props.RefreshTokenTTL == 0 || client.Props.RefreshTokenTTL == inventory.LegacyOAuthTokenTTLSeconds {
+		refreshTTLOverride = syncthingTTL
+	}
+	return accessTTLOverride, refreshTTLOverride
 }
 
 func GetScopesFromContext(ctx context.Context) (bool, []string) {

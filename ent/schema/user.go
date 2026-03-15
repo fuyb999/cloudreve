@@ -48,6 +48,7 @@ func (User) Edges() []ent.Edge {
 			Required(),
 		edge.To("files", File.Type),
 		edge.To("dav_accounts", DavAccount.Type),
+		edge.To("syncthing_devices", SyncthingDevice.Type),
 		edge.To("shares", Share.Type),
 		edge.To("passkey", Passkey.Type),
 		edge.To("tasks", Task.Type),

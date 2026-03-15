@@ -20,6 +20,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/oauthgrant"
 	"github.com/cloudreve/Cloudreve/v4/ent/passkey"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
@@ -208,6 +209,21 @@ func (uc *UserCreate) AddDavAccounts(d ...*DavAccount) *UserCreate {
 		ids[i] = d[i].ID
 	}
 	return uc.AddDavAccountIDs(ids...)
+}
+
+// AddSyncthingDeviceIDs adds the "syncthing_devices" edge to the SyncthingDevice entity by IDs.
+func (uc *UserCreate) AddSyncthingDeviceIDs(ids ...int) *UserCreate {
+	uc.mutation.AddSyncthingDeviceIDs(ids...)
+	return uc
+}
+
+// AddSyncthingDevices adds the "syncthing_devices" edges to the SyncthingDevice entity.
+func (uc *UserCreate) AddSyncthingDevices(s ...*SyncthingDevice) *UserCreate {
+	ids := make([]int, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return uc.AddSyncthingDeviceIDs(ids...)
 }
 
 // AddShareIDs adds the "shares" edge to the Share entity by IDs.
@@ -542,6 +558,22 @@ func (uc *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(davaccount.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := uc.mutation.SyncthingDevicesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SyncthingDevicesTable,
+			Columns: []string{user.SyncthingDevicesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(syncthingdevice.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

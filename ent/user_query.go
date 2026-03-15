@@ -21,6 +21,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/passkey"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 )
@@ -28,20 +29,21 @@ import (
 // UserQuery is the builder for querying User entities.
 type UserQuery struct {
 	config
-	ctx             *QueryContext
-	order           []user.OrderOption
-	inters          []Interceptor
-	predicates      []predicate.User
-	withGroup       *GroupQuery
-	withFiles       *FileQuery
-	withDavAccounts *DavAccountQuery
-	withShares      *ShareQuery
-	withPasskey     *PasskeyQuery
-	withTasks       *TaskQuery
-	withFsevents    *FsEventQuery
-	withEntities    *EntityQuery
-	withOauthGrants *OAuthGrantQuery
-	withAuditLogs   *AuditLogQuery
+	ctx                  *QueryContext
+	order                []user.OrderOption
+	inters               []Interceptor
+	predicates           []predicate.User
+	withGroup            *GroupQuery
+	withFiles            *FileQuery
+	withDavAccounts      *DavAccountQuery
+	withSyncthingDevices *SyncthingDeviceQuery
+	withShares           *ShareQuery
+	withPasskey          *PasskeyQuery
+	withTasks            *TaskQuery
+	withFsevents         *FsEventQuery
+	withEntities         *EntityQuery
+	withOauthGrants      *OAuthGrantQuery
+	withAuditLogs        *AuditLogQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -137,6 +139,28 @@ func (uq *UserQuery) QueryDavAccounts() *DavAccountQuery {
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(davaccount.Table, davaccount.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.DavAccountsTable, user.DavAccountsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(uq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QuerySyncthingDevices chains the current query on the "syncthing_devices" edge.
+func (uq *UserQuery) QuerySyncthingDevices() *SyncthingDeviceQuery {
+	query := (&SyncthingDeviceClient{config: uq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := uq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := uq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(syncthingdevice.Table, syncthingdevice.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SyncthingDevicesTable, user.SyncthingDevicesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(uq.driver.Dialect(), step)
 		return fromU, nil
@@ -485,21 +509,22 @@ func (uq *UserQuery) Clone() *UserQuery {
 		return nil
 	}
 	return &UserQuery{
-		config:          uq.config,
-		ctx:             uq.ctx.Clone(),
-		order:           append([]user.OrderOption{}, uq.order...),
-		inters:          append([]Interceptor{}, uq.inters...),
-		predicates:      append([]predicate.User{}, uq.predicates...),
-		withGroup:       uq.withGroup.Clone(),
-		withFiles:       uq.withFiles.Clone(),
-		withDavAccounts: uq.withDavAccounts.Clone(),
-		withShares:      uq.withShares.Clone(),
-		withPasskey:     uq.withPasskey.Clone(),
-		withTasks:       uq.withTasks.Clone(),
-		withFsevents:    uq.withFsevents.Clone(),
-		withEntities:    uq.withEntities.Clone(),
-		withOauthGrants: uq.withOauthGrants.Clone(),
-		withAuditLogs:   uq.withAuditLogs.Clone(),
+		config:               uq.config,
+		ctx:                  uq.ctx.Clone(),
+		order:                append([]user.OrderOption{}, uq.order...),
+		inters:               append([]Interceptor{}, uq.inters...),
+		predicates:           append([]predicate.User{}, uq.predicates...),
+		withGroup:            uq.withGroup.Clone(),
+		withFiles:            uq.withFiles.Clone(),
+		withDavAccounts:      uq.withDavAccounts.Clone(),
+		withSyncthingDevices: uq.withSyncthingDevices.Clone(),
+		withShares:           uq.withShares.Clone(),
+		withPasskey:          uq.withPasskey.Clone(),
+		withTasks:            uq.withTasks.Clone(),
+		withFsevents:         uq.withFsevents.Clone(),
+		withEntities:         uq.withEntities.Clone(),
+		withOauthGrants:      uq.withOauthGrants.Clone(),
+		withAuditLogs:        uq.withAuditLogs.Clone(),
 		// clone intermediate query.
 		sql:  uq.sql.Clone(),
 		path: uq.path,
@@ -536,6 +561,17 @@ func (uq *UserQuery) WithDavAccounts(opts ...func(*DavAccountQuery)) *UserQuery 
 		opt(query)
 	}
 	uq.withDavAccounts = query
+	return uq
+}
+
+// WithSyncthingDevices tells the query-builder to eager-load the nodes that are connected to
+// the "syncthing_devices" edge. The optional arguments are used to configure the query builder of the edge.
+func (uq *UserQuery) WithSyncthingDevices(opts ...func(*SyncthingDeviceQuery)) *UserQuery {
+	query := (&SyncthingDeviceClient{config: uq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	uq.withSyncthingDevices = query
 	return uq
 }
 
@@ -694,10 +730,11 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = uq.querySpec()
-		loadedTypes = [10]bool{
+		loadedTypes = [11]bool{
 			uq.withGroup != nil,
 			uq.withFiles != nil,
 			uq.withDavAccounts != nil,
+			uq.withSyncthingDevices != nil,
 			uq.withShares != nil,
 			uq.withPasskey != nil,
 			uq.withTasks != nil,
@@ -742,6 +779,13 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := uq.loadDavAccounts(ctx, query, nodes,
 			func(n *User) { n.Edges.DavAccounts = []*DavAccount{} },
 			func(n *User, e *DavAccount) { n.Edges.DavAccounts = append(n.Edges.DavAccounts, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := uq.withSyncthingDevices; query != nil {
+		if err := uq.loadSyncthingDevices(ctx, query, nodes,
+			func(n *User) { n.Edges.SyncthingDevices = []*SyncthingDevice{} },
+			func(n *User, e *SyncthingDevice) { n.Edges.SyncthingDevices = append(n.Edges.SyncthingDevices, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -871,6 +915,36 @@ func (uq *UserQuery) loadDavAccounts(ctx context.Context, query *DavAccountQuery
 	}
 	query.Where(predicate.DavAccount(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.DavAccountsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.OwnerID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "owner_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (uq *UserQuery) loadSyncthingDevices(ctx context.Context, query *SyncthingDeviceQuery, nodes []*User, init func(*User), assign func(*User, *SyncthingDevice)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(syncthingdevice.FieldOwnerID)
+	}
+	query.Where(predicate.SyncthingDevice(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.SyncthingDevicesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

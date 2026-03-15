@@ -535,6 +535,56 @@ var (
 			},
 		},
 	}
+	// SyncthingDevicesColumns holds the columns for the "syncthing_devices" table.
+	SyncthingDevicesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "device_id", Type: field.TypeString, Size: 255},
+		{Name: "short_id", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "last_ip", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "api_key", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "json_raw", Type: field.TypeJSON, Nullable: true},
+		{Name: "bind_uri", Type: field.TypeString, Nullable: true, Size: 2048},
+		{Name: "client_version", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "platform", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "last_seen_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_sync_at", Type: field.TypeTime, Nullable: true},
+		{Name: "online", Type: field.TypeBool, Default: false},
+		{Name: "owner_id", Type: field.TypeInt},
+	}
+	// SyncthingDevicesTable holds the schema information for the "syncthing_devices" table.
+	SyncthingDevicesTable = &schema.Table{
+		Name:       "syncthing_devices",
+		Columns:    SyncthingDevicesColumns,
+		PrimaryKey: []*schema.Column{SyncthingDevicesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "syncthing_devices_users_syncthing_devices",
+				Columns:    []*schema.Column{SyncthingDevicesColumns[15]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "syncthingdevice_owner_id_device_id",
+				Unique:  true,
+				Columns: []*schema.Column{SyncthingDevicesColumns[15], SyncthingDevicesColumns[4]},
+			},
+			{
+				Name:    "syncthingdevice_owner_id_online",
+				Unique:  false,
+				Columns: []*schema.Column{SyncthingDevicesColumns[15], SyncthingDevicesColumns[14]},
+			},
+			{
+				Name:    "syncthingdevice_owner_id_last_seen_at",
+				Unique:  false,
+				Columns: []*schema.Column{SyncthingDevicesColumns[15], SyncthingDevicesColumns[12]},
+			},
+		},
+	}
 	// TasksColumns holds the columns for the "tasks" table.
 	TasksColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -634,6 +684,7 @@ var (
 		SettingsTable,
 		SharesTable,
 		StoragePoliciesTable,
+		SyncthingDevicesTable,
 		TasksTable,
 		UsersTable,
 		FileEntitiesTable,
@@ -661,6 +712,7 @@ func init() {
 	SharesTable.ForeignKeys[0].RefTable = FilesTable
 	SharesTable.ForeignKeys[1].RefTable = UsersTable
 	StoragePoliciesTable.ForeignKeys[0].RefTable = NodesTable
+	SyncthingDevicesTable.ForeignKeys[0].RefTable = UsersTable
 	TasksTable.ForeignKeys[0].RefTable = UsersTable
 	UsersTable.ForeignKeys[0].RefTable = GroupsTable
 	FileEntitiesTable.ForeignKeys[0].RefTable = FilesTable

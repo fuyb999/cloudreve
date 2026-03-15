@@ -77,3 +77,10 @@ func Manifest(c *gin.Context) {
 		"background_color": pwaOpts.BackgroundColor,
 	})
 }
+
+// SyncthingReleases returns Syncthing-compatible release metadata without the standard API envelope.
+func SyncthingReleases(c *gin.Context) {
+	service := &basic.GetSyncthingReleasesService{}
+	c.Header("Cache-Control", "public, no-cache")
+	c.JSON(200, service.Get(c))
+}

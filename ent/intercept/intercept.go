@@ -24,6 +24,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/setting"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
 	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 )
@@ -489,6 +490,33 @@ func (f TraverseStoragePolicy) Traverse(ctx context.Context, q ent.Query) error 
 	return fmt.Errorf("unexpected query type %T. expect *ent.StoragePolicyQuery", q)
 }
 
+// The SyncthingDeviceFunc type is an adapter to allow the use of ordinary function as a Querier.
+type SyncthingDeviceFunc func(context.Context, *ent.SyncthingDeviceQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f SyncthingDeviceFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.SyncthingDeviceQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.SyncthingDeviceQuery", q)
+}
+
+// The TraverseSyncthingDevice type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseSyncthingDevice func(context.Context, *ent.SyncthingDeviceQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseSyncthingDevice) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseSyncthingDevice) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.SyncthingDeviceQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.SyncthingDeviceQuery", q)
+}
+
 // The TaskFunc type is an adapter to allow the use of ordinary function as a Querier.
 type TaskFunc func(context.Context, *ent.TaskQuery) (ent.Value, error)
 
@@ -576,6 +604,8 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.ShareQuery, predicate.Share, share.OrderOption]{typ: ent.TypeShare, tq: q}, nil
 	case *ent.StoragePolicyQuery:
 		return &query[*ent.StoragePolicyQuery, predicate.StoragePolicy, storagepolicy.OrderOption]{typ: ent.TypeStoragePolicy, tq: q}, nil
+	case *ent.SyncthingDeviceQuery:
+		return &query[*ent.SyncthingDeviceQuery, predicate.SyncthingDevice, syncthingdevice.OrderOption]{typ: ent.TypeSyncthingDevice, tq: q}, nil
 	case *ent.TaskQuery:
 		return &query[*ent.TaskQuery, predicate.Task, task.OrderOption]{typ: ent.TypeTask, tq: q}, nil
 	case *ent.UserQuery:

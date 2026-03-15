@@ -54,7 +54,13 @@ func InitializeDBClient(l logging.Logger,
 	if err := ensureFileExtSupport(ctx, l, client); err != nil {
 		return nil, fmt.Errorf("failed to ensure file_ext support: %w", err)
 	}
-	if err := ensureDefaultSettings(ctx, l, client, "audit_log_enabled_types"); err != nil {
+	if err := ensureDefaultSettings(ctx, l, client,
+		"audit_log_enabled_types",
+		"show_desktop_app_promotion",
+		"syncthing_upgrade_version",
+		"syncthing_download_linux_url",
+		"syncthing_download_windows_url",
+	); err != nil {
 		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)
 	}
 

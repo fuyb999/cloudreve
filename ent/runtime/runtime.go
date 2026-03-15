@@ -21,6 +21,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/setting"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
 	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
+	"github.com/cloudreve/Cloudreve/v4/ent/syncthingdevice"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
@@ -388,6 +389,61 @@ func init() {
 	storagepolicyDescSettings := storagepolicyFields[10].Descriptor()
 	// storagepolicy.DefaultSettings holds the default value on creation for the settings field.
 	storagepolicy.DefaultSettings = storagepolicyDescSettings.Default.(*types.PolicySetting)
+	syncthingdeviceMixin := schema.SyncthingDevice{}.Mixin()
+	syncthingdeviceMixinHooks0 := syncthingdeviceMixin[0].Hooks()
+	syncthingdevice.Hooks[0] = syncthingdeviceMixinHooks0[0]
+	syncthingdeviceMixinInters0 := syncthingdeviceMixin[0].Interceptors()
+	syncthingdevice.Interceptors[0] = syncthingdeviceMixinInters0[0]
+	syncthingdeviceMixinFields0 := syncthingdeviceMixin[0].Fields()
+	_ = syncthingdeviceMixinFields0
+	syncthingdeviceFields := schema.SyncthingDevice{}.Fields()
+	_ = syncthingdeviceFields
+	// syncthingdeviceDescCreatedAt is the schema descriptor for created_at field.
+	syncthingdeviceDescCreatedAt := syncthingdeviceMixinFields0[0].Descriptor()
+	// syncthingdevice.DefaultCreatedAt holds the default value on creation for the created_at field.
+	syncthingdevice.DefaultCreatedAt = syncthingdeviceDescCreatedAt.Default.(func() time.Time)
+	// syncthingdeviceDescUpdatedAt is the schema descriptor for updated_at field.
+	syncthingdeviceDescUpdatedAt := syncthingdeviceMixinFields0[1].Descriptor()
+	// syncthingdevice.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	syncthingdevice.DefaultUpdatedAt = syncthingdeviceDescUpdatedAt.Default.(func() time.Time)
+	// syncthingdevice.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	syncthingdevice.UpdateDefaultUpdatedAt = syncthingdeviceDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// syncthingdeviceDescDeviceID is the schema descriptor for device_id field.
+	syncthingdeviceDescDeviceID := syncthingdeviceFields[1].Descriptor()
+	// syncthingdevice.DeviceIDValidator is a validator for the "device_id" field. It is called by the builders before save.
+	syncthingdevice.DeviceIDValidator = syncthingdeviceDescDeviceID.Validators[0].(func(string) error)
+	// syncthingdeviceDescShortID is the schema descriptor for short_id field.
+	syncthingdeviceDescShortID := syncthingdeviceFields[2].Descriptor()
+	// syncthingdevice.ShortIDValidator is a validator for the "short_id" field. It is called by the builders before save.
+	syncthingdevice.ShortIDValidator = syncthingdeviceDescShortID.Validators[0].(func(string) error)
+	// syncthingdeviceDescLastIP is the schema descriptor for last_ip field.
+	syncthingdeviceDescLastIP := syncthingdeviceFields[3].Descriptor()
+	// syncthingdevice.LastIPValidator is a validator for the "last_ip" field. It is called by the builders before save.
+	syncthingdevice.LastIPValidator = syncthingdeviceDescLastIP.Validators[0].(func(string) error)
+	// syncthingdeviceDescAPIKey is the schema descriptor for api_key field.
+	syncthingdeviceDescAPIKey := syncthingdeviceFields[4].Descriptor()
+	// syncthingdevice.APIKeyValidator is a validator for the "api_key" field. It is called by the builders before save.
+	syncthingdevice.APIKeyValidator = syncthingdeviceDescAPIKey.Validators[0].(func(string) error)
+	// syncthingdeviceDescJSONRaw is the schema descriptor for json_raw field.
+	syncthingdeviceDescJSONRaw := syncthingdeviceFields[5].Descriptor()
+	// syncthingdevice.DefaultJSONRaw holds the default value on creation for the json_raw field.
+	syncthingdevice.DefaultJSONRaw = syncthingdeviceDescJSONRaw.Default.(map[string]interface{})
+	// syncthingdeviceDescBindURI is the schema descriptor for bind_uri field.
+	syncthingdeviceDescBindURI := syncthingdeviceFields[6].Descriptor()
+	// syncthingdevice.BindURIValidator is a validator for the "bind_uri" field. It is called by the builders before save.
+	syncthingdevice.BindURIValidator = syncthingdeviceDescBindURI.Validators[0].(func(string) error)
+	// syncthingdeviceDescClientVersion is the schema descriptor for client_version field.
+	syncthingdeviceDescClientVersion := syncthingdeviceFields[7].Descriptor()
+	// syncthingdevice.ClientVersionValidator is a validator for the "client_version" field. It is called by the builders before save.
+	syncthingdevice.ClientVersionValidator = syncthingdeviceDescClientVersion.Validators[0].(func(string) error)
+	// syncthingdeviceDescPlatform is the schema descriptor for platform field.
+	syncthingdeviceDescPlatform := syncthingdeviceFields[8].Descriptor()
+	// syncthingdevice.PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
+	syncthingdevice.PlatformValidator = syncthingdeviceDescPlatform.Validators[0].(func(string) error)
+	// syncthingdeviceDescOnline is the schema descriptor for online field.
+	syncthingdeviceDescOnline := syncthingdeviceFields[11].Descriptor()
+	// syncthingdevice.DefaultOnline holds the default value on creation for the online field.
+	syncthingdevice.DefaultOnline = syncthingdeviceDescOnline.Default.(bool)
 	taskMixin := schema.Task{}.Mixin()
 	taskMixinHooks0 := taskMixin[0].Hooks()
 	task.Hooks[0] = taskMixinHooks0[0]

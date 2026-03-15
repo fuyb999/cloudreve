@@ -189,6 +189,18 @@ func (f StoragePolicyFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Valu
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.StoragePolicyMutation", m)
 }
 
+// The SyncthingDeviceFunc type is an adapter to allow the use of ordinary
+// function as SyncthingDevice mutator.
+type SyncthingDeviceFunc func(context.Context, *ent.SyncthingDeviceMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SyncthingDeviceFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SyncthingDeviceMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SyncthingDeviceMutation", m)
+}
+
 // The TaskFunc type is an adapter to allow the use of ordinary
 // function as Task mutator.
 type TaskFunc func(context.Context, *ent.TaskMutation) (ent.Value, error)

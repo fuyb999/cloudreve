@@ -47,6 +47,8 @@ const (
 	EdgeFiles = "files"
 	// EdgeDavAccounts holds the string denoting the dav_accounts edge name in mutations.
 	EdgeDavAccounts = "dav_accounts"
+	// EdgeSyncthingDevices holds the string denoting the syncthing_devices edge name in mutations.
+	EdgeSyncthingDevices = "syncthing_devices"
 	// EdgeShares holds the string denoting the shares edge name in mutations.
 	EdgeShares = "shares"
 	// EdgePasskey holds the string denoting the passkey edge name in mutations.
@@ -84,6 +86,13 @@ const (
 	DavAccountsInverseTable = "dav_accounts"
 	// DavAccountsColumn is the table column denoting the dav_accounts relation/edge.
 	DavAccountsColumn = "owner_id"
+	// SyncthingDevicesTable is the table that holds the syncthing_devices relation/edge.
+	SyncthingDevicesTable = "syncthing_devices"
+	// SyncthingDevicesInverseTable is the table name for the SyncthingDevice entity.
+	// It exists in this package in order to avoid circular dependency with the "syncthingdevice" package.
+	SyncthingDevicesInverseTable = "syncthing_devices"
+	// SyncthingDevicesColumn is the table column denoting the syncthing_devices relation/edge.
+	SyncthingDevicesColumn = "owner_id"
 	// SharesTable is the table that holds the shares relation/edge.
 	SharesTable = "shares"
 	// SharesInverseTable is the table name for the Share entity.
@@ -312,6 +321,20 @@ func ByDavAccounts(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// BySyncthingDevicesCount orders the results by syncthing_devices count.
+func BySyncthingDevicesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newSyncthingDevicesStep(), opts...)
+	}
+}
+
+// BySyncthingDevices orders the results by syncthing_devices terms.
+func BySyncthingDevices(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newSyncthingDevicesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // BySharesCount orders the results by shares count.
 func BySharesCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -428,6 +451,13 @@ func newDavAccountsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(DavAccountsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, DavAccountsTable, DavAccountsColumn),
+	)
+}
+func newSyncthingDevicesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(SyncthingDevicesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, SyncthingDevicesTable, SyncthingDevicesColumn),
 	)
 }
 func newSharesStep() *sqlgraph.Step {

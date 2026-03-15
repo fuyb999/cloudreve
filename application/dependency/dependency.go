@@ -88,6 +88,8 @@ type Dep interface {
 	NodeClient() inventory.NodeClient
 	// DavAccountClient Creates a new inventory.DavAccountClient instance for access DB dav account store.
 	DavAccountClient() inventory.DavAccountClient
+	// SyncthingDeviceClient Creates a new inventory.SyncthingDeviceClient instance for access DB syncthing device store.
+	SyncthingDeviceClient() inventory.SyncthingDeviceClient
 	// DirectLinkClient Creates a new inventory.DirectLinkClient instance for access DB direct link store.
 	DirectLinkClient() inventory.DirectLinkClient
 	// AuditLogClient Creates a new inventory.AuditLogClient instance for access DB audit log store.
@@ -169,6 +171,7 @@ type dependency struct {
 	taskClient            inventory.TaskClient
 	nodeClient            inventory.NodeClient
 	davAccountClient      inventory.DavAccountClient
+	syncthingDeviceClient inventory.SyncthingDeviceClient
 	directLinkClient      inventory.DirectLinkClient
 	auditLogClient        inventory.AuditLogClient
 	fsEventClient         inventory.FsEventClient
@@ -829,6 +832,14 @@ func (d *dependency) DavAccountClient() inventory.DavAccountClient {
 	}
 
 	return inventory.NewDavAccountClient(d.DBClient(), d.ConfigProvider().Database().Type, d.HashIDEncoder())
+}
+
+func (d *dependency) SyncthingDeviceClient() inventory.SyncthingDeviceClient {
+	if d.syncthingDeviceClient != nil {
+		return d.syncthingDeviceClient
+	}
+
+	return inventory.NewSyncthingDeviceClient(d.DBClient(), d.ConfigProvider().Database().Type)
 }
 
 func (d *dependency) DirectLinkClient() inventory.DirectLinkClient {

@@ -58,6 +58,8 @@ type UserEdges struct {
 	Files []*File `json:"files,omitempty"`
 	// DavAccounts holds the value of the dav_accounts edge.
 	DavAccounts []*DavAccount `json:"dav_accounts,omitempty"`
+	// SyncthingDevices holds the value of the syncthing_devices edge.
+	SyncthingDevices []*SyncthingDevice `json:"syncthing_devices,omitempty"`
 	// Shares holds the value of the shares edge.
 	Shares []*Share `json:"shares,omitempty"`
 	// Passkey holds the value of the passkey edge.
@@ -74,7 +76,7 @@ type UserEdges struct {
 	AuditLogs []*AuditLog `json:"audit_logs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [10]bool
+	loadedTypes [11]bool
 }
 
 // GroupOrErr returns the Group value or an error if the edge
@@ -108,10 +110,19 @@ func (e UserEdges) DavAccountsOrErr() ([]*DavAccount, error) {
 	return nil, &NotLoadedError{edge: "dav_accounts"}
 }
 
+// SyncthingDevicesOrErr returns the SyncthingDevices value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) SyncthingDevicesOrErr() ([]*SyncthingDevice, error) {
+	if e.loadedTypes[3] {
+		return e.SyncthingDevices, nil
+	}
+	return nil, &NotLoadedError{edge: "syncthing_devices"}
+}
+
 // SharesOrErr returns the Shares value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) SharesOrErr() ([]*Share, error) {
-	if e.loadedTypes[3] {
+	if e.loadedTypes[4] {
 		return e.Shares, nil
 	}
 	return nil, &NotLoadedError{edge: "shares"}
@@ -120,7 +131,7 @@ func (e UserEdges) SharesOrErr() ([]*Share, error) {
 // PasskeyOrErr returns the Passkey value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) PasskeyOrErr() ([]*Passkey, error) {
-	if e.loadedTypes[4] {
+	if e.loadedTypes[5] {
 		return e.Passkey, nil
 	}
 	return nil, &NotLoadedError{edge: "passkey"}
@@ -129,7 +140,7 @@ func (e UserEdges) PasskeyOrErr() ([]*Passkey, error) {
 // TasksOrErr returns the Tasks value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) TasksOrErr() ([]*Task, error) {
-	if e.loadedTypes[5] {
+	if e.loadedTypes[6] {
 		return e.Tasks, nil
 	}
 	return nil, &NotLoadedError{edge: "tasks"}
@@ -138,7 +149,7 @@ func (e UserEdges) TasksOrErr() ([]*Task, error) {
 // FseventsOrErr returns the Fsevents value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) FseventsOrErr() ([]*FsEvent, error) {
-	if e.loadedTypes[6] {
+	if e.loadedTypes[7] {
 		return e.Fsevents, nil
 	}
 	return nil, &NotLoadedError{edge: "fsevents"}
@@ -147,7 +158,7 @@ func (e UserEdges) FseventsOrErr() ([]*FsEvent, error) {
 // EntitiesOrErr returns the Entities value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) EntitiesOrErr() ([]*Entity, error) {
-	if e.loadedTypes[7] {
+	if e.loadedTypes[8] {
 		return e.Entities, nil
 	}
 	return nil, &NotLoadedError{edge: "entities"}
@@ -156,7 +167,7 @@ func (e UserEdges) EntitiesOrErr() ([]*Entity, error) {
 // OauthGrantsOrErr returns the OauthGrants value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) OauthGrantsOrErr() ([]*OAuthGrant, error) {
-	if e.loadedTypes[8] {
+	if e.loadedTypes[9] {
 		return e.OauthGrants, nil
 	}
 	return nil, &NotLoadedError{edge: "oauth_grants"}
@@ -165,7 +176,7 @@ func (e UserEdges) OauthGrantsOrErr() ([]*OAuthGrant, error) {
 // AuditLogsOrErr returns the AuditLogs value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuditLogsOrErr() ([]*AuditLog, error) {
-	if e.loadedTypes[9] {
+	if e.loadedTypes[10] {
 		return e.AuditLogs, nil
 	}
 	return nil, &NotLoadedError{edge: "audit_logs"}
@@ -308,6 +319,11 @@ func (u *User) QueryDavAccounts() *DavAccountQuery {
 	return NewUserClient(u.config).QueryDavAccounts(u)
 }
 
+// QuerySyncthingDevices queries the "syncthing_devices" edge of the User entity.
+func (u *User) QuerySyncthingDevices() *SyncthingDeviceQuery {
+	return NewUserClient(u.config).QuerySyncthingDevices(u)
+}
+
 // QueryShares queries the "shares" edge of the User entity.
 func (u *User) QueryShares() *ShareQuery {
 	return NewUserClient(u.config).QueryShares(u)
@@ -423,46 +439,52 @@ func (e *User) SetDavAccounts(v []*DavAccount) {
 	e.Edges.loadedTypes[2] = true
 }
 
+// SetSyncthingDevices manually set the edge as loaded state.
+func (e *User) SetSyncthingDevices(v []*SyncthingDevice) {
+	e.Edges.SyncthingDevices = v
+	e.Edges.loadedTypes[3] = true
+}
+
 // SetShares manually set the edge as loaded state.
 func (e *User) SetShares(v []*Share) {
 	e.Edges.Shares = v
-	e.Edges.loadedTypes[3] = true
+	e.Edges.loadedTypes[4] = true
 }
 
 // SetPasskey manually set the edge as loaded state.
 func (e *User) SetPasskey(v []*Passkey) {
 	e.Edges.Passkey = v
-	e.Edges.loadedTypes[4] = true
+	e.Edges.loadedTypes[5] = true
 }
 
 // SetTasks manually set the edge as loaded state.
 func (e *User) SetTasks(v []*Task) {
 	e.Edges.Tasks = v
-	e.Edges.loadedTypes[5] = true
+	e.Edges.loadedTypes[6] = true
 }
 
 // SetFsevents manually set the edge as loaded state.
 func (e *User) SetFsevents(v []*FsEvent) {
 	e.Edges.Fsevents = v
-	e.Edges.loadedTypes[6] = true
+	e.Edges.loadedTypes[7] = true
 }
 
 // SetEntities manually set the edge as loaded state.
 func (e *User) SetEntities(v []*Entity) {
 	e.Edges.Entities = v
-	e.Edges.loadedTypes[7] = true
+	e.Edges.loadedTypes[8] = true
 }
 
 // SetOauthGrants manually set the edge as loaded state.
 func (e *User) SetOauthGrants(v []*OAuthGrant) {
 	e.Edges.OauthGrants = v
-	e.Edges.loadedTypes[8] = true
+	e.Edges.loadedTypes[9] = true
 }
 
 // SetAuditLogs manually set the edge as loaded state.
 func (e *User) SetAuditLogs(v []*AuditLog) {
 	e.Edges.AuditLogs = v
-	e.Edges.loadedTypes[9] = true
+	e.Edges.loadedTypes[10] = true
 }
 
 // Users is a parsable slice of User.

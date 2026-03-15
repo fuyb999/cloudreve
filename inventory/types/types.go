@@ -210,6 +210,7 @@ type (
 	OAuthClientProps struct {
 		Description     string `json:"description,omitempty"`
 		Icon            string `json:"icon,omitempty"`
+		AccessTokenTTL  int64  `json:"access_token_ttl,omitempty"`  // in seconds, 0 means default
 		RefreshTokenTTL int64  `json:"refresh_token_ttl,omitempty"` // in seconds, 0 means default
 	}
 

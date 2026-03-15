@@ -749,6 +749,29 @@ func HasDavAccountsWith(preds ...predicate.DavAccount) predicate.User {
 	})
 }
 
+// HasSyncthingDevices applies the HasEdge predicate on the "syncthing_devices" edge.
+func HasSyncthingDevices() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, SyncthingDevicesTable, SyncthingDevicesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasSyncthingDevicesWith applies the HasEdge predicate on the "syncthing_devices" edge with a given conditions (other predicates).
+func HasSyncthingDevicesWith(preds ...predicate.SyncthingDevice) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newSyncthingDevicesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasShares applies the HasEdge predicate on the "shares" edge.
 func HasShares() predicate.User {
 	return predicate.User(func(s *sql.Selector) {
