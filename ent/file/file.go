@@ -23,6 +23,8 @@ const (
 	FieldType = "type"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
+	// FieldFileExt holds the string denoting the file_ext field in the database.
+	FieldFileExt = "file_ext"
 	// FieldOwnerID holds the string denoting the owner_id field in the database.
 	FieldOwnerID = "owner_id"
 	// FieldSize holds the string denoting the size field in the database.
@@ -33,6 +35,8 @@ const (
 	FieldFileChildren = "file_children"
 	// FieldIsSymbolic holds the string denoting the is_symbolic field in the database.
 	FieldIsSymbolic = "is_symbolic"
+	// FieldTreePath holds the string denoting the tree_path field in the database.
+	FieldTreePath = "tree_path"
 	// FieldProps holds the string denoting the props field in the database.
 	FieldProps = "props"
 	// FieldStoragePolicyFiles holds the string denoting the storage_policy_files field in the database.
@@ -112,11 +116,13 @@ var Columns = []string{
 	FieldUpdatedAt,
 	FieldType,
 	FieldName,
+	FieldFileExt,
 	FieldOwnerID,
 	FieldSize,
 	FieldPrimaryEntity,
 	FieldFileChildren,
 	FieldIsSymbolic,
+	FieldTreePath,
 	FieldProps,
 	FieldStoragePolicyFiles,
 }
@@ -148,6 +154,8 @@ var (
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
 	DefaultUpdatedAt func() time.Time
+	// DefaultFileExt holds the default value on creation for the "file_ext" field.
+	DefaultFileExt string
 	// DefaultSize holds the default value on creation for the "size" field.
 	DefaultSize int64
 	// DefaultIsSymbolic holds the default value on creation for the "is_symbolic" field.
@@ -182,6 +190,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldName, opts...).ToFunc()
 }
 
+// ByFileExt orders the results by the file_ext field.
+func ByFileExt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFileExt, opts...).ToFunc()
+}
+
 // ByOwnerID orders the results by the owner_id field.
 func ByOwnerID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOwnerID, opts...).ToFunc()
@@ -205,6 +218,11 @@ func ByFileChildren(opts ...sql.OrderTermOption) OrderOption {
 // ByIsSymbolic orders the results by the is_symbolic field.
 func ByIsSymbolic(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldIsSymbolic, opts...).ToFunc()
+}
+
+// ByTreePath orders the results by the tree_path field.
+func ByTreePath(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTreePath, opts...).ToFunc()
 }
 
 // ByStoragePolicyFiles orders the results by the storage_policy_files field.

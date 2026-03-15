@@ -34,11 +34,19 @@ func (f *fileClient) searchQuery(q *ent.FileQuery, args *SearchFileParameters, p
 		)
 	}
 
+	return f.applySearchFilters(q, args)
+}
+
+func (f *fileClient) applySearchFilters(q *ent.FileQuery, args *SearchFileParameters) *ent.FileQuery {
 	if len(args.Name) > 0 {
 		namePredicates := lo.Map(args.Name, func(item string, index int) predicate.File {
 			// If start and ends with quotes, treat as exact match
 			if strings.HasPrefix(item, "\"") && strings.HasSuffix(item, "\"") {
 				return file.NameContains(strings.Trim(item, "\""))
+			}
+
+			if extPredicate, ok := legacyNameExtPredicate(item, args.CaseFolding); ok {
+				return extPredicate
 			}
 
 			// if contain wildcard, use transform to sql like
@@ -50,6 +58,14 @@ func (f *fileClient) searchQuery(q *ent.FileQuery, args *SearchFileParameters, p
 				}
 
 				return func(s *sql.Selector) {
+					if args.CaseFolding {
+						column := s.C(file.FieldName)
+						s.Where(sql.P(func(b *sql.Builder) {
+							b.WriteString("LOWER(").WriteString(column).WriteString(") LIKE LOWER(").Arg(pattern).WriteByte(')')
+						}))
+						return
+					}
+
 					s.Where(sql.Like(file.FieldName, pattern))
 				}
 			}
@@ -65,6 +81,17 @@ func (f *fileClient) searchQuery(q *ent.FileQuery, args *SearchFileParameters, p
 			q = q.Where(file.Or(namePredicates...))
 		} else {
 			q = q.Where(file.And(namePredicates...))
+		}
+	}
+
+	if len(args.Ext) > 0 {
+		exts := normalizeSearchExts(args.Ext)
+		switch len(exts) {
+		case 0:
+		case 1:
+			q = q.Where(file.FileExtEQ(exts[0]))
+		default:
+			q = q.Where(file.FileExtIn(exts...))
 		}
 	}
 

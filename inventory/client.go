@@ -29,8 +29,11 @@ const (
 // InitializeDBClient runs migration and returns a new ent.Client with additional configurations
 // for hooks and interceptors.
 func InitializeDBClient(l logging.Logger,
-	client *ent.Client, kv cache.Driver, requiredDbVersion string) (*ent.Client, error) {
+	client *ent.Client, kv cache.Driver, requiredDbVersion string, dbType conf.DBType) (*ent.Client, error) {
 	ctx := context.WithValue(context.Background(), logging.LoggerCtx{}, l)
+	if err := ensurePostgresLtree(ctx, client, dbType); err != nil {
+		return nil, err
+	}
 	if needMigration(client, ctx, requiredDbVersion) {
 		// Run the auto migration tool.
 		if err := migrate(l, client, ctx, kv, requiredDbVersion); err != nil {
@@ -38,9 +41,18 @@ func InitializeDBClient(l logging.Logger,
 		}
 	} else {
 		l.Info("Database schema is up to date.")
+		if err := client.Schema.Create(ctx); err != nil {
+			return nil, fmt.Errorf("failed to reconcile database schema: %w", err)
+		}
 		if err := migrateOAuthClient(l, client, ctx); err != nil {
 			return nil, fmt.Errorf("failed to ensure default OAuth clients: %w", err)
 		}
+	}
+	if err := ensureFileTreePathSupport(ctx, l, client, dbType); err != nil {
+		return nil, fmt.Errorf("failed to ensure file tree path support: %w", err)
+	}
+	if err := ensureFileExtSupport(ctx, l, client); err != nil {
+		return nil, fmt.Errorf("failed to ensure file_ext support: %w", err)
 	}
 
 	//createMockData(client, ctx)

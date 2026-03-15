@@ -109,9 +109,11 @@ var (
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
 		{Name: "type", Type: field.TypeInt},
 		{Name: "name", Type: field.TypeString},
+		{Name: "file_ext", Type: field.TypeString, Default: ""},
 		{Name: "size", Type: field.TypeInt64, Default: 0},
 		{Name: "primary_entity", Type: field.TypeInt, Nullable: true},
 		{Name: "is_symbolic", Type: field.TypeBool, Default: false},
+		{Name: "tree_path", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "ltree"}},
 		{Name: "props", Type: field.TypeJSON, Nullable: true},
 		{Name: "file_children", Type: field.TypeInt, Nullable: true},
 		{Name: "storage_policy_files", Type: field.TypeInt, Nullable: true},
@@ -125,19 +127,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "files_files_children",
-				Columns:    []*schema.Column{FilesColumns[9]},
+				Columns:    []*schema.Column{FilesColumns[11]},
 				RefColumns: []*schema.Column{FilesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "files_storage_policies_files",
-				Columns:    []*schema.Column{FilesColumns[10]},
+				Columns:    []*schema.Column{FilesColumns[12]},
 				RefColumns: []*schema.Column{StoragePoliciesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "files_users_files",
-				Columns:    []*schema.Column{FilesColumns[11]},
+				Columns:    []*schema.Column{FilesColumns[13]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -146,17 +148,27 @@ var (
 			{
 				Name:    "file_file_children_name",
 				Unique:  true,
-				Columns: []*schema.Column{FilesColumns[9], FilesColumns[4]},
+				Columns: []*schema.Column{FilesColumns[11], FilesColumns[4]},
 			},
 			{
 				Name:    "file_file_children_type_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{FilesColumns[9], FilesColumns[3], FilesColumns[2]},
+				Columns: []*schema.Column{FilesColumns[11], FilesColumns[3], FilesColumns[2]},
 			},
 			{
 				Name:    "file_file_children_type_size",
 				Unique:  false,
-				Columns: []*schema.Column{FilesColumns[9], FilesColumns[3], FilesColumns[5]},
+				Columns: []*schema.Column{FilesColumns[11], FilesColumns[3], FilesColumns[6]},
+			},
+			{
+				Name:    "file_owner_id_type_file_ext",
+				Unique:  false,
+				Columns: []*schema.Column{FilesColumns[13], FilesColumns[3], FilesColumns[5]},
+			},
+			{
+				Name:    "file_file_children_type_file_ext",
+				Unique:  false,
+				Columns: []*schema.Column{FilesColumns[11], FilesColumns[3], FilesColumns[5]},
 			},
 		},
 	}

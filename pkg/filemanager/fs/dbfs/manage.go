@@ -19,6 +19,11 @@ import (
 	"golang.org/x/tools/container/intsets"
 )
 
+type navigatorFileTarget struct {
+	file      *File
+	navigator Navigator
+}
+
 func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType, opts ...fs.Option) (fs.File, error) {
 	o := newDbfsOption()
 	for _, opt := range opts {
@@ -279,6 +284,7 @@ func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 		targets = append(targets, target)
 	}
 
+	targets = topLevelDBFSTargets(targets, hashid.EncodeUserID(f.hasher, f.user.ID))
 	if len(targets) == 0 {
 		return ae.Aggregate()
 	}
@@ -341,7 +347,7 @@ func (f *DBFS) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option) ([
 	}
 
 	ae := serializer.NewAggregateError()
-	fileNavGroup := make(map[Navigator][]*File)
+	targetEntries := make([]navigatorFileTarget, 0, len(path))
 	ctx = context.WithValue(ctx, inventory.LoadFileEntity{}, true)
 
 	for _, p := range path {
@@ -370,12 +376,14 @@ func (f *DBFS) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option) ([
 			continue
 		}
 
-		if _, ok := fileNavGroup[navigator]; !ok {
-			fileNavGroup[navigator] = make([]*File, 0)
-		}
-		fileNavGroup[navigator] = append(fileNavGroup[navigator], target)
+		targetEntries = append(targetEntries, navigatorFileTarget{file: target, navigator: navigator})
 	}
 
+	targetEntries = topLevelNavigatorFileTargets(targetEntries, hashid.EncodeUserID(f.hasher, f.user.ID))
+	fileNavGroup := make(map[Navigator][]*File)
+	for _, item := range targetEntries {
+		fileNavGroup[item.navigator] = append(fileNavGroup[item.navigator], item.file)
+	}
 	targets := lo.Flatten(lo.Values(fileNavGroup))
 	if len(targets) == 0 {
 		return nil, nil, ae.Aggregate()
@@ -501,6 +509,7 @@ func (f *DBFS) Restore(ctx context.Context, path ...*fs.URI) error {
 		targets = append(targets, target)
 	}
 
+	targets = topLevelDBFSTargets(targets, hashid.EncodeUserID(f.hasher, f.user.ID))
 	if len(targets) == 0 {
 		return ae.Aggregate()
 	}
@@ -534,7 +543,7 @@ func (f *DBFS) Restore(ctx context.Context, path ...*fs.URI) error {
 }
 
 func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCopy bool) (*fs.IndexDiff, error) {
-	targets := make([]*File, 0, len(path))
+	targetEntries := make([]navigatorFileTarget, 0, len(path))
 	dstNavigator, err := f.getNavigator(ctx, dst, NavigatorCapabilityLockFile)
 	if err != nil {
 		return nil, err
@@ -556,7 +565,6 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 	}
 
 	ae := serializer.NewAggregateError()
-	fileNavGroup := make(map[Navigator][]*File)
 	dstRootPath := destination.Uri(true)
 	ctx = context.WithValue(ctx, inventory.LoadFileEntity{}, true)
 	ctx = context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
@@ -600,12 +608,17 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 			continue
 		}
 
-		targets = append(targets, target)
-		if isCopy {
-			if _, ok := fileNavGroup[navigator]; !ok {
-				fileNavGroup[navigator] = make([]*File, 0)
-			}
-			fileNavGroup[navigator] = append(fileNavGroup[navigator], target)
+		targetEntries = append(targetEntries, navigatorFileTarget{file: target, navigator: navigator})
+	}
+
+	targetEntries = topLevelNavigatorFileTargets(targetEntries, hashid.EncodeUserID(f.hasher, f.user.ID))
+	targets := lo.Map(targetEntries, func(item navigatorFileTarget, index int) *File {
+		return item.file
+	})
+	fileNavGroup := make(map[Navigator][]*File)
+	if isCopy {
+		for _, item := range targetEntries {
+			fileNavGroup[item.navigator] = append(fileNavGroup[item.navigator], item.file)
 		}
 	}
 
@@ -680,6 +693,58 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 	}
 
 	return indexDiff, ae.Aggregate()
+}
+
+func topLevelNavigatorFileTargets(targets []navigatorFileTarget, defaultUID string) []navigatorFileTarget {
+	filtered := make([]navigatorFileTarget, 0, len(targets))
+	for _, candidate := range targets {
+		candidateURI := candidate.file.Uri(true)
+		skip := false
+		for i := 0; i < len(filtered); {
+			existingURI := filtered[i].file.Uri(true)
+			switch {
+			case candidateURI.EqualOrIsDescendantOf(existingURI, defaultUID):
+				skip = true
+				i = len(filtered)
+			case existingURI.EqualOrIsDescendantOf(candidateURI, defaultUID):
+				filtered = append(filtered[:i], filtered[i+1:]...)
+			default:
+				i++
+			}
+		}
+
+		if !skip {
+			filtered = append(filtered, candidate)
+		}
+	}
+
+	return filtered
+}
+
+func topLevelDBFSTargets(targets []*File, defaultUID string) []*File {
+	filtered := make([]*File, 0, len(targets))
+	for _, candidate := range targets {
+		candidateURI := candidate.Uri(true)
+		skip := false
+		for i := 0; i < len(filtered); {
+			existingURI := filtered[i].Uri(true)
+			switch {
+			case candidateURI.EqualOrIsDescendantOf(existingURI, defaultUID):
+				skip = true
+				i = len(filtered)
+			case existingURI.EqualOrIsDescendantOf(candidateURI, defaultUID):
+				filtered = append(filtered[:i], filtered[i+1:]...)
+			default:
+				i++
+			}
+		}
+
+		if !skip {
+			filtered = append(filtered, candidate)
+		}
+	}
+
+	return filtered
 }
 
 func (f *DBFS) GetFileFromDirectLink(ctx context.Context, dl *ent.DirectLink) (fs.File, error) {

@@ -2981,11 +2981,13 @@ type FileMutation struct {
 	_type                   *int
 	add_type                *int
 	name                    *string
+	file_ext                *string
 	size                    *int64
 	addsize                 *int64
 	primary_entity          *int
 	addprimary_entity       *int
 	is_symbolic             *bool
+	tree_path               *string
 	props                   **types.FileProps
 	clearedFields           map[string]struct{}
 	owner                   *int
@@ -3276,6 +3278,42 @@ func (m *FileMutation) ResetName() {
 	m.name = nil
 }
 
+// SetFileExt sets the "file_ext" field.
+func (m *FileMutation) SetFileExt(s string) {
+	m.file_ext = &s
+}
+
+// FileExt returns the value of the "file_ext" field in the mutation.
+func (m *FileMutation) FileExt() (r string, exists bool) {
+	v := m.file_ext
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFileExt returns the old "file_ext" field's value of the File entity.
+// If the File object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FileMutation) OldFileExt(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFileExt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFileExt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFileExt: %w", err)
+	}
+	return oldValue.FileExt, nil
+}
+
+// ResetFileExt resets all changes to the "file_ext" field.
+func (m *FileMutation) ResetFileExt() {
+	m.file_ext = nil
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (m *FileMutation) SetOwnerID(i int) {
 	m.owner = &i
@@ -3521,6 +3559,55 @@ func (m *FileMutation) OldIsSymbolic(ctx context.Context) (v bool, err error) {
 // ResetIsSymbolic resets all changes to the "is_symbolic" field.
 func (m *FileMutation) ResetIsSymbolic() {
 	m.is_symbolic = nil
+}
+
+// SetTreePath sets the "tree_path" field.
+func (m *FileMutation) SetTreePath(s string) {
+	m.tree_path = &s
+}
+
+// TreePath returns the value of the "tree_path" field in the mutation.
+func (m *FileMutation) TreePath() (r string, exists bool) {
+	v := m.tree_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTreePath returns the old "tree_path" field's value of the File entity.
+// If the File object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FileMutation) OldTreePath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTreePath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTreePath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTreePath: %w", err)
+	}
+	return oldValue.TreePath, nil
+}
+
+// ClearTreePath clears the value of the "tree_path" field.
+func (m *FileMutation) ClearTreePath() {
+	m.tree_path = nil
+	m.clearedFields[file.FieldTreePath] = struct{}{}
+}
+
+// TreePathCleared returns if the "tree_path" field was cleared in this mutation.
+func (m *FileMutation) TreePathCleared() bool {
+	_, ok := m.clearedFields[file.FieldTreePath]
+	return ok
+}
+
+// ResetTreePath resets all changes to the "tree_path" field.
+func (m *FileMutation) ResetTreePath() {
+	m.tree_path = nil
+	delete(m.clearedFields, file.FieldTreePath)
 }
 
 // SetProps sets the "props" field.
@@ -4032,7 +4119,7 @@ func (m *FileMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *FileMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 13)
 	if m.created_at != nil {
 		fields = append(fields, file.FieldCreatedAt)
 	}
@@ -4044,6 +4131,9 @@ func (m *FileMutation) Fields() []string {
 	}
 	if m.name != nil {
 		fields = append(fields, file.FieldName)
+	}
+	if m.file_ext != nil {
+		fields = append(fields, file.FieldFileExt)
 	}
 	if m.owner != nil {
 		fields = append(fields, file.FieldOwnerID)
@@ -4059,6 +4149,9 @@ func (m *FileMutation) Fields() []string {
 	}
 	if m.is_symbolic != nil {
 		fields = append(fields, file.FieldIsSymbolic)
+	}
+	if m.tree_path != nil {
+		fields = append(fields, file.FieldTreePath)
 	}
 	if m.props != nil {
 		fields = append(fields, file.FieldProps)
@@ -4082,6 +4175,8 @@ func (m *FileMutation) Field(name string) (ent.Value, bool) {
 		return m.GetType()
 	case file.FieldName:
 		return m.Name()
+	case file.FieldFileExt:
+		return m.FileExt()
 	case file.FieldOwnerID:
 		return m.OwnerID()
 	case file.FieldSize:
@@ -4092,6 +4187,8 @@ func (m *FileMutation) Field(name string) (ent.Value, bool) {
 		return m.FileChildren()
 	case file.FieldIsSymbolic:
 		return m.IsSymbolic()
+	case file.FieldTreePath:
+		return m.TreePath()
 	case file.FieldProps:
 		return m.Props()
 	case file.FieldStoragePolicyFiles:
@@ -4113,6 +4210,8 @@ func (m *FileMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldType(ctx)
 	case file.FieldName:
 		return m.OldName(ctx)
+	case file.FieldFileExt:
+		return m.OldFileExt(ctx)
 	case file.FieldOwnerID:
 		return m.OldOwnerID(ctx)
 	case file.FieldSize:
@@ -4123,6 +4222,8 @@ func (m *FileMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldFileChildren(ctx)
 	case file.FieldIsSymbolic:
 		return m.OldIsSymbolic(ctx)
+	case file.FieldTreePath:
+		return m.OldTreePath(ctx)
 	case file.FieldProps:
 		return m.OldProps(ctx)
 	case file.FieldStoragePolicyFiles:
@@ -4164,6 +4265,13 @@ func (m *FileMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetName(v)
 		return nil
+	case file.FieldFileExt:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFileExt(v)
+		return nil
 	case file.FieldOwnerID:
 		v, ok := value.(int)
 		if !ok {
@@ -4198,6 +4306,13 @@ func (m *FileMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetIsSymbolic(v)
+		return nil
+	case file.FieldTreePath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTreePath(v)
 		return nil
 	case file.FieldProps:
 		v, ok := value.(*types.FileProps)
@@ -4288,6 +4403,9 @@ func (m *FileMutation) ClearedFields() []string {
 	if m.FieldCleared(file.FieldFileChildren) {
 		fields = append(fields, file.FieldFileChildren)
 	}
+	if m.FieldCleared(file.FieldTreePath) {
+		fields = append(fields, file.FieldTreePath)
+	}
 	if m.FieldCleared(file.FieldProps) {
 		fields = append(fields, file.FieldProps)
 	}
@@ -4313,6 +4431,9 @@ func (m *FileMutation) ClearField(name string) error {
 		return nil
 	case file.FieldFileChildren:
 		m.ClearFileChildren()
+		return nil
+	case file.FieldTreePath:
+		m.ClearTreePath()
 		return nil
 	case file.FieldProps:
 		m.ClearProps()
@@ -4340,6 +4461,9 @@ func (m *FileMutation) ResetField(name string) error {
 	case file.FieldName:
 		m.ResetName()
 		return nil
+	case file.FieldFileExt:
+		m.ResetFileExt()
+		return nil
 	case file.FieldOwnerID:
 		m.ResetOwnerID()
 		return nil
@@ -4354,6 +4478,9 @@ func (m *FileMutation) ResetField(name string) error {
 		return nil
 	case file.FieldIsSymbolic:
 		m.ResetIsSymbolic()
+		return nil
+	case file.FieldTreePath:
+		m.ResetTreePath()
 		return nil
 	case file.FieldProps:
 		m.ResetProps()

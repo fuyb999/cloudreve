@@ -16,6 +16,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager/entitysource"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
@@ -157,6 +158,11 @@ func (m *manager) CreateArchive(ctx context.Context, uris []*fs.URI, writer io.W
 	}
 
 	failed := 0
+	defaultUID := ""
+	if m.user != nil {
+		defaultUID = hashid.EncodeUserID(m.hasher, m.user.ID)
+	}
+	uris = topLevelArchiveURIs(uris, defaultUID)
 
 	// List all top level files
 	files := make([]fs.File, 0, len(uris))
@@ -218,6 +224,31 @@ func (m *manager) CreateArchive(ctx context.Context, uris []*fs.URI, writer io.W
 	}
 
 	return failed, nil
+}
+
+func topLevelArchiveURIs(uris []*fs.URI, defaultUID string) []*fs.URI {
+	filtered := make([]*fs.URI, 0, len(uris))
+	for _, candidate := range uris {
+		skip := false
+		for i := 0; i < len(filtered); {
+			existing := filtered[i]
+			switch {
+			case candidate.EqualOrIsDescendantOf(existing, defaultUID):
+				skip = true
+				i = len(filtered)
+			case existing.EqualOrIsDescendantOf(candidate, defaultUID):
+				filtered = append(filtered[:i], filtered[i+1:]...)
+			default:
+				i++
+			}
+		}
+
+		if !skip {
+			filtered = append(filtered, candidate)
+		}
+	}
+
+	return filtered
 }
 
 func (m *manager) compressFileToArchive(ctx context.Context, parent string, file fs.File, zipWriter *zip.Writer,

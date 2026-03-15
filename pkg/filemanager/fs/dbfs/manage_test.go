@@ -1,0 +1,85 @@
+package dbfs
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+)
+
+func TestTopLevelMoveCopyTargets(t *testing.T) {
+	targets := []navigatorFileTarget{
+		{file: mustTestFile(t, 1, "my", "", "/a/b")},
+		{file: mustTestFile(t, 2, "my", "", "/a")},
+		{file: mustTestFile(t, 3, "my", "", "/c")},
+		{file: mustTestFile(t, 4, "my", "", "/a/b/c")},
+		{file: mustTestFile(t, 5, "my", "", "/c")},
+	}
+
+	filtered := topLevelNavigatorFileTargets(targets, "current-user")
+	if len(filtered) != 2 {
+		t.Fatalf("unexpected filtered target count: %d", len(filtered))
+	}
+
+	if filtered[0].file.ID() != 2 || filtered[1].file.ID() != 3 {
+		t.Fatalf("unexpected filtered ids: %d, %d", filtered[0].file.ID(), filtered[1].file.ID())
+	}
+}
+
+func TestTopLevelMoveCopyTargetsKeepsDifferentOwners(t *testing.T) {
+	targets := []navigatorFileTarget{
+		{file: mustTestFile(t, 1, "my", "owner-a", "/a")},
+		{file: mustTestFile(t, 2, "my", "owner-b", "/a/b")},
+	}
+
+	filtered := topLevelNavigatorFileTargets(targets, "current-user")
+	if len(filtered) != 2 {
+		t.Fatalf("unexpected filtered target count across owners: %d", len(filtered))
+	}
+}
+
+func TestTopLevelDBFSTargets(t *testing.T) {
+	targets := []*File{
+		mustTestFile(t, 1, "my", "", "/a/b"),
+		mustTestFile(t, 2, "my", "", "/a"),
+		mustTestFile(t, 3, "my", "", "/c/d"),
+		mustTestFile(t, 4, "my", "", "/c"),
+	}
+
+	filtered := topLevelDBFSTargets(targets, "current-user")
+	if len(filtered) != 2 {
+		t.Fatalf("unexpected filtered target count: %d", len(filtered))
+	}
+
+	if filtered[0].ID() != 2 || filtered[1].ID() != 4 {
+		t.Fatalf("unexpected filtered ids: %d, %d", filtered[0].ID(), filtered[1].ID())
+	}
+}
+
+func mustTestFile(t *testing.T, id int, host, userInfo, filePath string) *File {
+	t.Helper()
+
+	raw := fmt.Sprintf("cloudreve://%s%s%s", userInfoPrefix(userInfo), host, filePath)
+	uri, err := fs.NewUriFromString(raw)
+	if err != nil {
+		t.Fatalf("failed to parse uri %q: %v", raw, err)
+	}
+
+	return &File{
+		Model:    &ent.File{ID: id, Name: uri.Name()},
+		Children: map[string]*File{},
+		Path: [2]*fs.URI{
+			uri,
+			uri,
+		},
+	}
+}
+
+func userInfoPrefix(userInfo string) string {
+	if userInfo == "" {
+		return ""
+	}
+
+	return userInfo + "@"
+}

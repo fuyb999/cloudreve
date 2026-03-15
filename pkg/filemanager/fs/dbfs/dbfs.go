@@ -461,7 +461,7 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 			summaryTyped := summary.(fs.FolderSummary)
 			target.FileFolderSummary = &summaryTyped
 		} else {
-			// cache miss, walk the folder to get the summary
+			// cache miss, summarize the folder subtree
 			newSummary := &fs.FolderSummary{Completed: true}
 			if f.user.Edges.Group == nil {
 				return nil, fmt.Errorf("user group not loaded")
@@ -470,26 +470,38 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 
 			// disable load metadata to speed up
 			ctxWalk := context.WithValue(ctx, inventory.LoadFilePublicMetadata{}, false)
-			if err := navigator.Walk(ctxWalk, []*File{target}, limit, intsets.MaxInt, func(files []*File, l int) error {
-				for _, file := range files {
-					if file.ID() == target.ID() {
-						continue
+			descendantLimit := max(limit-1, 0)
+			treeSummary, err := f.fileClient.SummarizeSubtree(ctxWalk, target.Model, descendantLimit)
+			switch {
+			case err == nil:
+				newSummary.Files = treeSummary.Files
+				newSummary.Folders = treeSummary.Folders
+				newSummary.Size = treeSummary.Size
+				newSummary.Completed = treeSummary.Completed
+			case !errors.Is(err, inventory.ErrTreePathQueryUnavailable):
+				return nil, fmt.Errorf("failed to summarize subtree: %w", err)
+			default:
+				if err := navigator.Walk(ctxWalk, []*File{target}, limit, intsets.MaxInt, func(files []*File, l int) error {
+					for _, file := range files {
+						if file.ID() == target.ID() {
+							continue
+						}
+						if file.Type() == types.FileTypeFile {
+							newSummary.Files++
+						} else {
+							newSummary.Folders++
+						}
+
+						newSummary.Size += file.SizeUsed()
 					}
-					if file.Type() == types.FileTypeFile {
-						newSummary.Files++
-					} else {
-						newSummary.Folders++
+					return nil
+				}); err != nil {
+					if !errors.Is(err, ErrFileCountLimitedReached) {
+						return nil, fmt.Errorf("failed to walk: %w", err)
 					}
 
-					newSummary.Size += file.SizeUsed()
+					newSummary.Completed = false
 				}
-				return nil
-			}); err != nil {
-				if !errors.Is(err, ErrFileCountLimitedReached) {
-					return nil, fmt.Errorf("failed to walk: %w", err)
-				}
-
-				newSummary.Completed = false
 			}
 
 			// cache the summary

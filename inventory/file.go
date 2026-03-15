@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
@@ -70,6 +71,7 @@ type (
 
 	SearchFileParameters struct {
 		Name []string
+		Ext  []string
 		// NameOperatorOr is true if the name should match any of the given names, false if all of them
 		NameOperatorOr bool
 		Metadata       []MetadataFilter
@@ -101,6 +103,13 @@ type (
 		Files     []*ent.File
 		MixedType bool
 		*PaginationResults
+	}
+
+	SubtreeSummary struct {
+		Size      int64
+		Files     int
+		Folders   int
+		Completed bool
 	}
 
 	CreateFileParameters struct {
@@ -157,6 +166,14 @@ type FileClient interface {
 	GetChildFile(ctx context.Context, root *ent.File, ownerID int, child string, eagerLoading bool) (*ent.File, error)
 	// Get all files under a given root
 	GetChildFiles(ctx context.Context, args *ListFileParameters, ownerID int, roots ...*ent.File) (*ListFileResult, error)
+	// GetAncestorFiles returns all ancestors of the given file (including itself) ordered from root to self.
+	GetAncestorFiles(ctx context.Context, target *ent.File) ([]*ent.File, error)
+	// GetSubtreeFiles returns descendants of the given root ordered by depth and path.
+	GetSubtreeFiles(ctx context.Context, root *ent.File, depth, limit int) ([]*ent.File, error)
+	// SearchSubtreeFiles searches descendants of the given root using tree path ordering and pagination.
+	SearchSubtreeFiles(ctx context.Context, root *ent.File, ownerID int, args *ListFileParameters, maxRecursiveFolders int) (*ListFileResult, bool, error)
+	// SummarizeSubtree summarizes visible descendants of the given root using tree path ordering.
+	SummarizeSubtree(ctx context.Context, root *ent.File, limit int) (*SubtreeSummary, error)
 	// Root returns the root folder of a given user
 	Root(ctx context.Context, user *ent.User) (*ent.File, error)
 	// CreateOrGetFolder creates a folder with given name under root, or return the existed one
@@ -239,17 +256,18 @@ type FileClient interface {
 }
 
 func NewFileClient(client *ent.Client, dbType conf.DBType, hasher hashid.Encoder) FileClient {
-	return &fileClient{client: client, maxSQlParam: sqlParamLimit(dbType), hasher: hasher}
+	return &fileClient{client: client, dbType: dbType, maxSQlParam: sqlParamLimit(dbType), hasher: hasher}
 }
 
 type fileClient struct {
 	maxSQlParam int
 	client      *ent.Client
+	dbType      conf.DBType
 	hasher      hashid.Encoder
 }
 
 func (c *fileClient) SetClient(newClient *ent.Client) TxOperator {
-	return &fileClient{client: newClient, maxSQlParam: c.maxSQlParam, hasher: c.hasher}
+	return &fileClient{client: newClient, dbType: c.dbType, maxSQlParam: c.maxSQlParam, hasher: c.hasher}
 }
 
 func (c *fileClient) GetClient() *ent.Client {
@@ -259,6 +277,7 @@ func (c *fileClient) GetClient() *ent.Client {
 func (f *fileClient) Update(ctx context.Context, file *ent.File) (*ent.File, error) {
 	q := f.client.File.UpdateOne(file).
 		SetName(file.Name).
+		SetFileExt(fileExtValue(file.Name, file.Type)).
 		SetStoragePoliciesID(file.StoragePolicyFiles)
 
 	existingMetadata, err := f.client.Metadata.Query().Where(metadata.FileID(file.ID)).All(ctx)
@@ -409,12 +428,16 @@ func (f *fileClient) GetByHashID(ctx context.Context, hashID string) (*ent.File,
 func (f *fileClient) SoftDelete(ctx context.Context, file *ent.File) error {
 	newName := uuid.Must(uuid.NewV4())
 	// Rename file to random UUID and make it stale
-	_, err := f.client.File.UpdateOne(file).
+	softDeleted, err := f.client.File.UpdateOne(file).
 		SetName(newName.String()).
+		SetFileExt(fileExtValue(newName.String(), file.Type)).
 		ClearParent().
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete file %d: %w", file.ID, err)
+	}
+	if err := f.relocateTreePathSubtree(ctx, softDeleted, nil); err != nil {
+		return err
 	}
 
 	return err
@@ -614,6 +637,7 @@ func (f *fileClient) Copy(ctx context.Context, args *CopyParameter) (map[int][]*
 
 		stm := f.client.File.Create().
 			SetName(file.Name).
+			SetFileExt(fileExtValue(file.Name, file.Type)).
 			SetOwnerID(dstMap[file.FileChildren][0].OwnerID).
 			SetSize(file.Size).
 			SetType(file.Type).
@@ -641,6 +665,14 @@ func (f *fileClient) Copy(ctx context.Context, args *CopyParameter) (map[int][]*
 		newFile, err := stm.Save(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to copy file: %w", err)
+		}
+		parentAncestors := dstMap[files[index].FileChildren]
+		parentPath := ""
+		if len(parentAncestors) > 0 {
+			parentPath = parentAncestors[0].TreePath
+		}
+		if err := f.updateFileTreePath(ctx, newFile, joinFileTreePath(parentPath, newFile.ID)); err != nil {
+			return nil, nil, err
 		}
 
 		fileMetadata, err := files[index].Edges.MetadataOrErr()
@@ -802,6 +834,7 @@ func (f *fileClient) CreateFile(ctx context.Context, root *ent.File, args *Creat
 		SetOwnerID(root.OwnerID).
 		SetType(int(args.FileType)).
 		SetName(args.Name).
+		SetFileExt(fileExtValue(args.Name, int(args.FileType))).
 		SetParent(root).
 		SetIsSymbolic(args.IsSymbolic).
 		SetStoragePoliciesID(args.StoragePolicyID)
@@ -813,6 +846,9 @@ func (f *fileClient) CreateFile(ctx context.Context, root *ent.File, args *Creat
 	newFile, err := stm.Save(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to create file: %v", err)
+	}
+	if err := f.updateFileTreePath(ctx, newFile, joinFileTreePath(root.TreePath, newFile.ID)); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Create default primary file entity if needed
@@ -982,7 +1018,8 @@ func (f *fileClient) CreateEntity(ctx context.Context, file *ent.File, args *Ent
 }
 
 func (f *fileClient) SetParent(ctx context.Context, files []*ent.File, parent *ent.File) error {
-	groups, _ := f.batchInCondition(intsets.MaxInt, 10, 1, lo.Map(files, func(file *ent.File, index int) int {
+	roots := topLevelTreePathRoots(files)
+	groups, _ := f.batchInCondition(intsets.MaxInt, 10, 1, lo.Map(roots, func(file *ent.File, index int) int {
 		return file.ID
 	}))
 	for _, group := range groups {
@@ -991,8 +1028,181 @@ func (f *fileClient) SetParent(ctx context.Context, files []*ent.File, parent *e
 			return fmt.Errorf("failed to set parent field: %w", err)
 		}
 	}
+	for _, root := range roots {
+		if err := f.relocateTreePathSubtree(ctx, root, parent); err != nil {
+			return err
+		}
+	}
 
 	return nil
+}
+
+func (f *fileClient) GetAncestorFiles(ctx context.Context, target *ent.File) ([]*ent.File, error) {
+	if f.dbType != conf.PostgresDB || strings.TrimSpace(target.TreePath) == "" {
+		return nil, ErrTreePathQueryUnavailable
+	}
+
+	return withFileEagerLoading(ctx, f.client.File.Query()).
+		Where(func(s *sql.Selector) {
+			pathColumn := s.C(file.FieldTreePath)
+			s.Where(sql.P(func(b *sql.Builder) {
+				b.WriteString(pathColumn).WriteString(" @> text2ltree(").Arg(target.TreePath).WriteByte(')')
+			}))
+		}).
+		Order(treePathOrderByDepthAndPath()).
+		All(ctx)
+}
+
+func (f *fileClient) GetSubtreeFiles(ctx context.Context, root *ent.File, depth, limit int) ([]*ent.File, error) {
+	if f.dbType != conf.PostgresDB || strings.TrimSpace(root.TreePath) == "" {
+		return nil, ErrTreePathQueryUnavailable
+	}
+
+	q := withFileEagerLoading(ctx, f.client.File.Query()).
+		Where(treePathVisibleSubtreePredicate(root.TreePath, false, depth)).
+		Order(treePathOrderByDepthAndPath())
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+
+	return q.All(ctx)
+}
+
+func (f *fileClient) SearchSubtreeFiles(ctx context.Context, root *ent.File, ownerID int, args *ListFileParameters, maxRecursiveFolders int) (*ListFileResult, bool, error) {
+	if f.dbType != conf.PostgresDB || strings.TrimSpace(root.TreePath) == "" {
+		return nil, false, ErrTreePathQueryUnavailable
+	}
+
+	pageSize := capPageSize(f.maxSQlParam, args.PageSize, 16)
+	query := withFileEagerLoading(ctx, f.client.File.Query()).
+		Where(file.OwnerIDEQ(ownerID)).
+		Where(treePathVisibleSubtreePredicate(root.TreePath, false, -1))
+	if args.Search != nil {
+		query = f.applySearchFilters(query, args.Search)
+	}
+	query = query.Order(treePathSearchOrder(args)...)
+
+	if args.PageToken != "" {
+		token, err := treePathSearchTokenFromString(args.PageToken, f.hasher)
+		if err != nil {
+			return nil, false, fmt.Errorf("invalid tree path search token %q: %w", args.PageToken, err)
+		}
+		query = query.Where(treePathSearchCursorPredicate(token, args))
+	}
+
+	files, err := query.Clone().Limit(pageSize + 1).All(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+
+	nextToken := ""
+	if len(files) > pageSize {
+		nextToken, err = getTreePathSearchNextToken(f.hasher, files[pageSize-1], args)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to generate tree path search token: %w", err)
+		}
+		files = files[:pageSize]
+	}
+
+	limitReached := false
+	if maxRecursiveFolders > 0 {
+		folders, err := f.client.File.Query().
+			Where(file.OwnerIDEQ(ownerID)).
+			Where(treePathVisibleSubtreePredicate(root.TreePath, false, -1)).
+			Where(file.TypeEQ(int(types.FileTypeFolder))).
+			Limit(maxRecursiveFolders + 1).
+			All(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to count subtree folders: %w", err)
+		}
+
+		limitReached = len(folders) > maxRecursiveFolders
+	}
+
+	return &ListFileResult{
+		Files: files,
+		PaginationResults: &PaginationResults{
+			Page:          0,
+			PageSize:      pageSize,
+			NextPageToken: nextToken,
+			IsCursor:      true,
+		},
+		MixedType: true,
+	}, limitReached, nil
+}
+
+func (f *fileClient) SummarizeSubtree(ctx context.Context, root *ent.File, limit int) (*SubtreeSummary, error) {
+	if f.dbType != conf.PostgresDB || strings.TrimSpace(root.TreePath) == "" {
+		return nil, ErrTreePathQueryUnavailable
+	}
+
+	if limit < 0 {
+		limit = 0
+	}
+
+	query := fmt.Sprintf(`
+WITH ranked AS (
+    SELECT visible.id, visible.type,
+           ROW_NUMBER() OVER (ORDER BY visible.depth, visible.tree_path, visible.id) AS rn
+    FROM (
+        SELECT f.id, f.type, nlevel(f.tree_path) AS depth, f.tree_path
+        FROM files AS f
+        WHERE %s
+        ORDER BY nlevel(f.tree_path), f.tree_path, f.id
+        LIMIT $2
+    ) AS visible
+),
+limited AS (
+    SELECT id, type
+    FROM ranked
+    WHERE rn <= $3
+),
+entity_size AS (
+    SELECT limited.id AS file_id, COALESCE(SUM(entities.size), 0) AS size_used
+    FROM limited
+    LEFT JOIN file_entities ON file_entities.file_id = limited.id
+    LEFT JOIN entities ON entities.id = file_entities.entity_id
+    GROUP BY limited.id
+)
+SELECT
+    COUNT(*) FILTER (WHERE limited.type = $4) AS file_count,
+    COUNT(*) FILTER (WHERE limited.type = $5) AS folder_count,
+    COALESCE(SUM(COALESCE(entity_size.size_used, 0)), 0) AS size_used,
+    NOT EXISTS (SELECT 1 FROM ranked WHERE rn > $3) AS completed
+FROM limited
+LEFT JOIN entity_size ON entity_size.file_id = limited.id
+`, treePathVisibleSubtreeCondition("f.tree_path", "$1::ltree", false, -1))
+
+	rows, err := f.client.QueryContext(ctx, query,
+		root.TreePath,
+		limit+1,
+		limit,
+		int(types.FileTypeFile),
+		int(types.FileTypeFolder),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to summarize subtree: %w", err)
+	}
+	defer rows.Close()
+
+	summary := &SubtreeSummary{}
+	if rows.Next() {
+		var (
+			fileCount   int64
+			folderCount int64
+		)
+		if err := rows.Scan(&fileCount, &folderCount, &summary.Size, &summary.Completed); err != nil {
+			return nil, fmt.Errorf("failed to scan subtree summary: %w", err)
+		}
+		summary.Files = int(fileCount)
+		summary.Folders = int(folderCount)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read subtree summary rows: %w", err)
+	}
+
+	return summary, nil
 }
 
 func (f *fileClient) GetParentFile(ctx context.Context, root *ent.File, eagerLoading bool) (*ent.File, error) {
@@ -1067,7 +1277,8 @@ func (f *fileClient) CreateFolder(ctx context.Context, root *ent.File, args *Cre
 		SetOwnerID(args.Owner).
 		SetType(int(types.FileTypeFolder)).
 		SetIsSymbolic(args.IsSymbolic).
-		SetName(args.Name)
+		SetName(args.Name).
+		SetFileExt(fileExtValue(args.Name, int(types.FileTypeFolder)))
 	if root != nil {
 		stm.SetParent(root).SetType(int(types.FileTypeFolder))
 	}
@@ -1080,6 +1291,13 @@ func (f *fileClient) CreateFolder(ctx context.Context, root *ent.File, args *Cre
 	newFolder, err := f.client.File.Get(ctx, fid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get folder: %w", err)
+	}
+	parentPath := ""
+	if root != nil {
+		parentPath = root.TreePath
+	}
+	if err := f.updateFileTreePath(ctx, newFolder, joinFileTreePath(parentPath, newFolder.ID)); err != nil {
+		return nil, err
 	}
 
 	if len(args.Metadata) > 0 {
@@ -1103,7 +1321,10 @@ func (f *fileClient) CreateFolder(ctx context.Context, root *ent.File, args *Cre
 }
 
 func (f *fileClient) Rename(ctx context.Context, original *ent.File, newName string) (*ent.File, error) {
-	return f.client.File.UpdateOne(original).SetName(newName).Save(ctx)
+	return f.client.File.UpdateOne(original).
+		SetName(newName).
+		SetFileExt(fileExtValue(newName, original.Type)).
+		Save(ctx)
 }
 
 func (f *fileClient) GetEntitiesByIDs(ctx context.Context, ids []int, page int) ([]*ent.Entity, int, error) {

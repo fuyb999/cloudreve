@@ -84,6 +84,20 @@ func (fu *FileUpdate) SetNillableName(s *string) *FileUpdate {
 	return fu
 }
 
+// SetFileExt sets the "file_ext" field.
+func (fu *FileUpdate) SetFileExt(s string) *FileUpdate {
+	fu.mutation.SetFileExt(s)
+	return fu
+}
+
+// SetNillableFileExt sets the "file_ext" field if the given value is not nil.
+func (fu *FileUpdate) SetNillableFileExt(s *string) *FileUpdate {
+	if s != nil {
+		fu.SetFileExt(*s)
+	}
+	return fu
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (fu *FileUpdate) SetOwnerID(i int) *FileUpdate {
 	fu.mutation.SetOwnerID(i)
@@ -177,6 +191,26 @@ func (fu *FileUpdate) SetNillableIsSymbolic(b *bool) *FileUpdate {
 	if b != nil {
 		fu.SetIsSymbolic(*b)
 	}
+	return fu
+}
+
+// SetTreePath sets the "tree_path" field.
+func (fu *FileUpdate) SetTreePath(s string) *FileUpdate {
+	fu.mutation.SetTreePath(s)
+	return fu
+}
+
+// SetNillableTreePath sets the "tree_path" field if the given value is not nil.
+func (fu *FileUpdate) SetNillableTreePath(s *string) *FileUpdate {
+	if s != nil {
+		fu.SetTreePath(*s)
+	}
+	return fu
+}
+
+// ClearTreePath clears the value of the "tree_path" field.
+func (fu *FileUpdate) ClearTreePath() *FileUpdate {
+	fu.mutation.ClearTreePath()
 	return fu
 }
 
@@ -517,6 +551,9 @@ func (fu *FileUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if value, ok := fu.mutation.Name(); ok {
 		_spec.SetField(file.FieldName, field.TypeString, value)
 	}
+	if value, ok := fu.mutation.FileExt(); ok {
+		_spec.SetField(file.FieldFileExt, field.TypeString, value)
+	}
 	if value, ok := fu.mutation.Size(); ok {
 		_spec.SetField(file.FieldSize, field.TypeInt64, value)
 	}
@@ -534,6 +571,12 @@ func (fu *FileUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if value, ok := fu.mutation.IsSymbolic(); ok {
 		_spec.SetField(file.FieldIsSymbolic, field.TypeBool, value)
+	}
+	if value, ok := fu.mutation.TreePath(); ok {
+		_spec.SetField(file.FieldTreePath, field.TypeString, value)
+	}
+	if fu.mutation.TreePathCleared() {
+		_spec.ClearField(file.FieldTreePath, field.TypeString)
 	}
 	if value, ok := fu.mutation.Props(); ok {
 		_spec.SetField(file.FieldProps, field.TypeJSON, value)
@@ -922,6 +965,20 @@ func (fuo *FileUpdateOne) SetNillableName(s *string) *FileUpdateOne {
 	return fuo
 }
 
+// SetFileExt sets the "file_ext" field.
+func (fuo *FileUpdateOne) SetFileExt(s string) *FileUpdateOne {
+	fuo.mutation.SetFileExt(s)
+	return fuo
+}
+
+// SetNillableFileExt sets the "file_ext" field if the given value is not nil.
+func (fuo *FileUpdateOne) SetNillableFileExt(s *string) *FileUpdateOne {
+	if s != nil {
+		fuo.SetFileExt(*s)
+	}
+	return fuo
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (fuo *FileUpdateOne) SetOwnerID(i int) *FileUpdateOne {
 	fuo.mutation.SetOwnerID(i)
@@ -1015,6 +1072,26 @@ func (fuo *FileUpdateOne) SetNillableIsSymbolic(b *bool) *FileUpdateOne {
 	if b != nil {
 		fuo.SetIsSymbolic(*b)
 	}
+	return fuo
+}
+
+// SetTreePath sets the "tree_path" field.
+func (fuo *FileUpdateOne) SetTreePath(s string) *FileUpdateOne {
+	fuo.mutation.SetTreePath(s)
+	return fuo
+}
+
+// SetNillableTreePath sets the "tree_path" field if the given value is not nil.
+func (fuo *FileUpdateOne) SetNillableTreePath(s *string) *FileUpdateOne {
+	if s != nil {
+		fuo.SetTreePath(*s)
+	}
+	return fuo
+}
+
+// ClearTreePath clears the value of the "tree_path" field.
+func (fuo *FileUpdateOne) ClearTreePath() *FileUpdateOne {
+	fuo.mutation.ClearTreePath()
 	return fuo
 }
 
@@ -1385,6 +1462,9 @@ func (fuo *FileUpdateOne) sqlSave(ctx context.Context) (_node *File, err error) 
 	if value, ok := fuo.mutation.Name(); ok {
 		_spec.SetField(file.FieldName, field.TypeString, value)
 	}
+	if value, ok := fuo.mutation.FileExt(); ok {
+		_spec.SetField(file.FieldFileExt, field.TypeString, value)
+	}
 	if value, ok := fuo.mutation.Size(); ok {
 		_spec.SetField(file.FieldSize, field.TypeInt64, value)
 	}
@@ -1402,6 +1482,12 @@ func (fuo *FileUpdateOne) sqlSave(ctx context.Context) (_node *File, err error) 
 	}
 	if value, ok := fuo.mutation.IsSymbolic(); ok {
 		_spec.SetField(file.FieldIsSymbolic, field.TypeBool, value)
+	}
+	if value, ok := fuo.mutation.TreePath(); ok {
+		_spec.SetField(file.FieldTreePath, field.TypeString, value)
+	}
+	if fuo.mutation.TreePathCleared() {
+		_spec.ClearField(file.FieldTreePath, field.TypeString)
 	}
 	if value, ok := fuo.mutation.Props(); ok {
 		_spec.SetField(file.FieldProps, field.TypeJSON, value)

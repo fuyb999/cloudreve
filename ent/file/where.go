@@ -75,6 +75,11 @@ func Name(v string) predicate.File {
 	return predicate.File(sql.FieldEQ(FieldName, v))
 }
 
+// FileExt applies equality check predicate on the "file_ext" field. It's identical to FileExtEQ.
+func FileExt(v string) predicate.File {
+	return predicate.File(sql.FieldEQ(FieldFileExt, v))
+}
+
 // OwnerID applies equality check predicate on the "owner_id" field. It's identical to OwnerIDEQ.
 func OwnerID(v int) predicate.File {
 	return predicate.File(sql.FieldEQ(FieldOwnerID, v))
@@ -98,6 +103,11 @@ func FileChildren(v int) predicate.File {
 // IsSymbolic applies equality check predicate on the "is_symbolic" field. It's identical to IsSymbolicEQ.
 func IsSymbolic(v bool) predicate.File {
 	return predicate.File(sql.FieldEQ(FieldIsSymbolic, v))
+}
+
+// TreePath applies equality check predicate on the "tree_path" field. It's identical to TreePathEQ.
+func TreePath(v string) predicate.File {
+	return predicate.File(sql.FieldEQ(FieldTreePath, v))
 }
 
 // StoragePolicyFiles applies equality check predicate on the "storage_policy_files" field. It's identical to StoragePolicyFilesEQ.
@@ -290,6 +300,71 @@ func NameContainsFold(v string) predicate.File {
 	return predicate.File(sql.FieldContainsFold(FieldName, v))
 }
 
+// FileExtEQ applies the EQ predicate on the "file_ext" field.
+func FileExtEQ(v string) predicate.File {
+	return predicate.File(sql.FieldEQ(FieldFileExt, v))
+}
+
+// FileExtNEQ applies the NEQ predicate on the "file_ext" field.
+func FileExtNEQ(v string) predicate.File {
+	return predicate.File(sql.FieldNEQ(FieldFileExt, v))
+}
+
+// FileExtIn applies the In predicate on the "file_ext" field.
+func FileExtIn(vs ...string) predicate.File {
+	return predicate.File(sql.FieldIn(FieldFileExt, vs...))
+}
+
+// FileExtNotIn applies the NotIn predicate on the "file_ext" field.
+func FileExtNotIn(vs ...string) predicate.File {
+	return predicate.File(sql.FieldNotIn(FieldFileExt, vs...))
+}
+
+// FileExtGT applies the GT predicate on the "file_ext" field.
+func FileExtGT(v string) predicate.File {
+	return predicate.File(sql.FieldGT(FieldFileExt, v))
+}
+
+// FileExtGTE applies the GTE predicate on the "file_ext" field.
+func FileExtGTE(v string) predicate.File {
+	return predicate.File(sql.FieldGTE(FieldFileExt, v))
+}
+
+// FileExtLT applies the LT predicate on the "file_ext" field.
+func FileExtLT(v string) predicate.File {
+	return predicate.File(sql.FieldLT(FieldFileExt, v))
+}
+
+// FileExtLTE applies the LTE predicate on the "file_ext" field.
+func FileExtLTE(v string) predicate.File {
+	return predicate.File(sql.FieldLTE(FieldFileExt, v))
+}
+
+// FileExtContains applies the Contains predicate on the "file_ext" field.
+func FileExtContains(v string) predicate.File {
+	return predicate.File(sql.FieldContains(FieldFileExt, v))
+}
+
+// FileExtHasPrefix applies the HasPrefix predicate on the "file_ext" field.
+func FileExtHasPrefix(v string) predicate.File {
+	return predicate.File(sql.FieldHasPrefix(FieldFileExt, v))
+}
+
+// FileExtHasSuffix applies the HasSuffix predicate on the "file_ext" field.
+func FileExtHasSuffix(v string) predicate.File {
+	return predicate.File(sql.FieldHasSuffix(FieldFileExt, v))
+}
+
+// FileExtEqualFold applies the EqualFold predicate on the "file_ext" field.
+func FileExtEqualFold(v string) predicate.File {
+	return predicate.File(sql.FieldEqualFold(FieldFileExt, v))
+}
+
+// FileExtContainsFold applies the ContainsFold predicate on the "file_ext" field.
+func FileExtContainsFold(v string) predicate.File {
+	return predicate.File(sql.FieldContainsFold(FieldFileExt, v))
+}
+
 // OwnerIDEQ applies the EQ predicate on the "owner_id" field.
 func OwnerIDEQ(v int) predicate.File {
 	return predicate.File(sql.FieldEQ(FieldOwnerID, v))
@@ -438,6 +513,81 @@ func IsSymbolicEQ(v bool) predicate.File {
 // IsSymbolicNEQ applies the NEQ predicate on the "is_symbolic" field.
 func IsSymbolicNEQ(v bool) predicate.File {
 	return predicate.File(sql.FieldNEQ(FieldIsSymbolic, v))
+}
+
+// TreePathEQ applies the EQ predicate on the "tree_path" field.
+func TreePathEQ(v string) predicate.File {
+	return predicate.File(sql.FieldEQ(FieldTreePath, v))
+}
+
+// TreePathNEQ applies the NEQ predicate on the "tree_path" field.
+func TreePathNEQ(v string) predicate.File {
+	return predicate.File(sql.FieldNEQ(FieldTreePath, v))
+}
+
+// TreePathIn applies the In predicate on the "tree_path" field.
+func TreePathIn(vs ...string) predicate.File {
+	return predicate.File(sql.FieldIn(FieldTreePath, vs...))
+}
+
+// TreePathNotIn applies the NotIn predicate on the "tree_path" field.
+func TreePathNotIn(vs ...string) predicate.File {
+	return predicate.File(sql.FieldNotIn(FieldTreePath, vs...))
+}
+
+// TreePathGT applies the GT predicate on the "tree_path" field.
+func TreePathGT(v string) predicate.File {
+	return predicate.File(sql.FieldGT(FieldTreePath, v))
+}
+
+// TreePathGTE applies the GTE predicate on the "tree_path" field.
+func TreePathGTE(v string) predicate.File {
+	return predicate.File(sql.FieldGTE(FieldTreePath, v))
+}
+
+// TreePathLT applies the LT predicate on the "tree_path" field.
+func TreePathLT(v string) predicate.File {
+	return predicate.File(sql.FieldLT(FieldTreePath, v))
+}
+
+// TreePathLTE applies the LTE predicate on the "tree_path" field.
+func TreePathLTE(v string) predicate.File {
+	return predicate.File(sql.FieldLTE(FieldTreePath, v))
+}
+
+// TreePathContains applies the Contains predicate on the "tree_path" field.
+func TreePathContains(v string) predicate.File {
+	return predicate.File(sql.FieldContains(FieldTreePath, v))
+}
+
+// TreePathHasPrefix applies the HasPrefix predicate on the "tree_path" field.
+func TreePathHasPrefix(v string) predicate.File {
+	return predicate.File(sql.FieldHasPrefix(FieldTreePath, v))
+}
+
+// TreePathHasSuffix applies the HasSuffix predicate on the "tree_path" field.
+func TreePathHasSuffix(v string) predicate.File {
+	return predicate.File(sql.FieldHasSuffix(FieldTreePath, v))
+}
+
+// TreePathIsNil applies the IsNil predicate on the "tree_path" field.
+func TreePathIsNil() predicate.File {
+	return predicate.File(sql.FieldIsNull(FieldTreePath))
+}
+
+// TreePathNotNil applies the NotNil predicate on the "tree_path" field.
+func TreePathNotNil() predicate.File {
+	return predicate.File(sql.FieldNotNull(FieldTreePath))
+}
+
+// TreePathEqualFold applies the EqualFold predicate on the "tree_path" field.
+func TreePathEqualFold(v string) predicate.File {
+	return predicate.File(sql.FieldEqualFold(FieldTreePath, v))
+}
+
+// TreePathContainsFold applies the ContainsFold predicate on the "tree_path" field.
+func TreePathContainsFold(v string) predicate.File {
+	return predicate.File(sql.FieldContainsFold(FieldTreePath, v))
 }
 
 // PropsIsNil applies the IsNil predicate on the "props" field.

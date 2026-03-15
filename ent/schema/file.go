@@ -34,6 +34,8 @@ func (File) Fields() []ent.Field {
 			}),
 		field.Int("type"),
 		field.String("name"),
+		field.String("file_ext").
+			Default(""),
 		field.Int("owner_id"),
 		field.Int64("size").
 			Default(0),
@@ -43,6 +45,11 @@ func (File) Fields() []ent.Field {
 			Optional(),
 		field.Bool("is_symbolic").
 			Default(false),
+		field.String("tree_path").
+			Optional().
+			SchemaType(map[string]string{
+				dialect.Postgres: "ltree",
+			}),
 		field.JSON("props", &types.FileProps{}).Optional(),
 		field.Int("storage_policy_files").
 			Optional(),
@@ -79,6 +86,8 @@ func (File) Indexes() []ent.Index {
 			Unique(),
 		index.Fields("file_children", "type", "updated_at"),
 		index.Fields("file_children", "type", "size"),
+		index.Fields("owner_id", "type", "file_ext"),
+		index.Fields("file_children", "type", "file_ext"),
 	}
 }
 

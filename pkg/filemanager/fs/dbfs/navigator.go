@@ -2,6 +2,7 @@ package dbfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -204,12 +205,25 @@ func (b *baseNavigator) walkNext(ctx context.Context, root *File, next string, i
 
 // findRoot finds the root folder of the given child.
 func (b *baseNavigator) findRoot(ctx context.Context, child *File) (*File, error) {
+	ancestors, err := b.fileClient.GetAncestorFiles(ctx, child.Model)
+	if err == nil && len(ancestors) > 0 {
+		root := child
+		for i := len(ancestors) - 2; i >= 0; i-- {
+			root = newParentFile(ancestors[i], root)
+		}
+
+		return root, nil
+	}
+	if err != nil && !errors.Is(err, inventory.ErrTreePathQueryUnavailable) {
+		return nil, err
+	}
+
 	root := child
 	for {
-		newRoot, err := b.walkUp(ctx, root)
-		if err != nil {
-			if !ent.IsNotFound(err) {
-				return nil, err
+		newRoot, walkErr := b.walkUp(ctx, root)
+		if walkErr != nil {
+			if !ent.IsNotFound(walkErr) {
+				return nil, walkErr
 			}
 
 			break
@@ -268,6 +282,108 @@ func (b *baseNavigator) children(ctx context.Context, parent *File, args *ListAr
 }
 
 func (b *baseNavigator) walk(ctx context.Context, levelFiles []*File, limit, depth int, f WalkFunc) error {
+	if handled, err := b.walkWithTreePath(ctx, levelFiles, limit, depth, f); handled {
+		return err
+	}
+
+	return b.walkByChildren(ctx, levelFiles, limit, depth, f)
+}
+
+func (b *baseNavigator) walkWithTreePath(ctx context.Context, levelFiles []*File, limit, depth int, f WalkFunc) (bool, error) {
+	walked := 0
+	if len(levelFiles) == 0 {
+		return true, nil
+	}
+
+	stop := false
+	if len(levelFiles) > limit-walked {
+		levelFiles = levelFiles[:limit-walked]
+		stop = true
+	}
+	if err := f(levelFiles, 0); err != nil {
+		return true, err
+	}
+	if stop {
+		return true, ErrFileCountLimitedReached
+	}
+
+	walked += len(levelFiles)
+	if walked >= limit || depth == 0 {
+		if walked >= limit {
+			return true, ErrFileCountLimitedReached
+		}
+
+		return true, nil
+	}
+
+	for _, root := range levelFiles {
+		if root.Model.Type != int(types.FileTypeFolder) || root.IsSymbolic() {
+			continue
+		}
+
+		remaining := limit - walked
+		if remaining <= 0 {
+			return true, ErrFileCountLimitedReached
+		}
+
+		models, err := b.fileClient.GetSubtreeFiles(ctx, root.Model, depth-1, remaining+1)
+		if err != nil {
+			if errors.Is(err, inventory.ErrTreePathQueryUnavailable) {
+				return false, nil
+			}
+
+			return true, serializer.NewError(serializer.CodeDBError, "Failed to list subtree", err)
+		}
+
+		limited := len(models) > remaining
+		if limited {
+			models = models[:remaining]
+		}
+
+		parents := map[int]*File{root.Model.ID: root}
+		level := 1
+		batch := make([]*File, 0)
+		rootDepth := strings.Count(root.Model.TreePath, ".") + 1
+		for _, model := range models {
+			parent := parents[model.FileChildren]
+			if parent == nil {
+				return true, fmt.Errorf("tree path walk missing parent %d for file %d", model.FileChildren, model.ID)
+			}
+
+			child := newFile(parent, model)
+			parents[model.ID] = child
+
+			childDepth := strings.Count(model.TreePath, ".") + 1 - rootDepth
+			if childDepth != level && len(batch) > 0 {
+				if err := f(batch, level); err != nil {
+					return true, err
+				}
+
+				walked += len(batch)
+				batch = batch[:0]
+				level = childDepth
+			}
+
+			batch = append(batch, child)
+		}
+
+		if len(batch) > 0 {
+			if err := f(batch, level); err != nil {
+				return true, err
+			}
+
+			walked += len(batch)
+		}
+
+		if limited || walked >= limit {
+			return true, ErrFileCountLimitedReached
+		}
+	}
+
+	return true, nil
+}
+
+func (b *baseNavigator) walkByChildren(ctx context.Context, levelFiles []*File, limit, depth int, f WalkFunc) error {
 	walked := 0
 	if len(levelFiles) == 0 {
 		return nil
@@ -373,6 +489,16 @@ func (b *baseNavigator) search(ctx context.Context, parent *File, args *ListArgs
 			MixedType:  children.MixedType,
 			Pagination: children.PaginationResults,
 		}, nil
+	}
+
+	if !strings.Contains(args.Page.PageToken, searchTokenSeparator) {
+		res, err := b.searchWithTreePath(ctx, parent, args)
+		if err == nil {
+			return res, nil
+		}
+		if !errors.Is(err, inventory.ErrTreePathQueryUnavailable) {
+			return nil, err
+		}
 	}
 	// Performs recursive search for all files under the given folder.
 	walkedFolder := 1
@@ -519,6 +645,63 @@ func (b *baseNavigator) search(ctx context.Context, parent *File, args *ListArgs
 	}
 
 	return searchRes, nil
+}
+
+func (b *baseNavigator) searchWithTreePath(ctx context.Context, parent *File, args *ListArgs) (*ListResult, error) {
+	children, limitReached, err := b.fileClient.SearchSubtreeFiles(ctx, parent.Model, parent.Model.OwnerID, &inventory.ListFileParameters{
+		PaginationArgs: args.Page,
+		MixedType:      true,
+		Search:         args.Search,
+	}, b.config.MaxRecursiveSearchedFolder)
+	if err != nil {
+		return nil, err
+	}
+
+	parent.Path[pathIndexUser] = parent.Uri(false)
+	files := make([]*File, 0, len(children.Files))
+	for _, model := range children.Files {
+		ancestors, err := b.fileClient.GetAncestorFiles(ctx, model)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to load search result ancestors", err)
+		}
+
+		current, err := buildSearchResultFile(parent, ancestors)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to build search result path", err)
+		}
+
+		filtered, ok := b.listFilter(ctx, current)
+		if ok {
+			files = append(files, filtered)
+		}
+	}
+
+	return &ListResult{
+		Files:                 files,
+		MixedType:             true,
+		Pagination:            children.PaginationResults,
+		RecursionLimitReached: limitReached,
+	}, nil
+}
+
+func buildSearchResultFile(parent *File, ancestors []*ent.File) (*File, error) {
+	start := -1
+	for i, ancestor := range ancestors {
+		if ancestor.ID == parent.Model.ID {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil, fmt.Errorf("search result is outside current subtree")
+	}
+
+	current := parent
+	for _, model := range ancestors[start+1:] {
+		current = newFile(current, model)
+	}
+
+	return current, nil
 }
 
 func parseSearchPageToken(token string) (int, string, error) {

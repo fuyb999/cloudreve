@@ -29,6 +29,8 @@ type File struct {
 	Type int `json:"type,omitempty"`
 	// Name holds the value of the "name" field.
 	Name string `json:"name,omitempty"`
+	// FileExt holds the value of the "file_ext" field.
+	FileExt string `json:"file_ext,omitempty"`
 	// OwnerID holds the value of the "owner_id" field.
 	OwnerID int `json:"owner_id,omitempty"`
 	// Size holds the value of the "size" field.
@@ -39,6 +41,8 @@ type File struct {
 	FileChildren int `json:"file_children,omitempty"`
 	// IsSymbolic holds the value of the "is_symbolic" field.
 	IsSymbolic bool `json:"is_symbolic,omitempty"`
+	// TreePath holds the value of the "tree_path" field.
+	TreePath string `json:"tree_path,omitempty"`
 	// Props holds the value of the "props" field.
 	Props *types.FileProps `json:"props,omitempty"`
 	// StoragePolicyFiles holds the value of the "storage_policy_files" field.
@@ -167,7 +171,7 @@ func (*File) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case file.FieldID, file.FieldType, file.FieldOwnerID, file.FieldSize, file.FieldPrimaryEntity, file.FieldFileChildren, file.FieldStoragePolicyFiles:
 			values[i] = new(sql.NullInt64)
-		case file.FieldName:
+		case file.FieldName, file.FieldFileExt, file.FieldTreePath:
 			values[i] = new(sql.NullString)
 		case file.FieldCreatedAt, file.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -216,6 +220,12 @@ func (f *File) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				f.Name = value.String
 			}
+		case file.FieldFileExt:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field file_ext", values[i])
+			} else if value.Valid {
+				f.FileExt = value.String
+			}
 		case file.FieldOwnerID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field owner_id", values[i])
@@ -245,6 +255,12 @@ func (f *File) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field is_symbolic", values[i])
 			} else if value.Valid {
 				f.IsSymbolic = value.Bool
+			}
+		case file.FieldTreePath:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field tree_path", values[i])
+			} else if value.Valid {
+				f.TreePath = value.String
 			}
 		case file.FieldProps:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -348,6 +364,9 @@ func (f *File) String() string {
 	builder.WriteString("name=")
 	builder.WriteString(f.Name)
 	builder.WriteString(", ")
+	builder.WriteString("file_ext=")
+	builder.WriteString(f.FileExt)
+	builder.WriteString(", ")
 	builder.WriteString("owner_id=")
 	builder.WriteString(fmt.Sprintf("%v", f.OwnerID))
 	builder.WriteString(", ")
@@ -362,6 +381,9 @@ func (f *File) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("is_symbolic=")
 	builder.WriteString(fmt.Sprintf("%v", f.IsSymbolic))
+	builder.WriteString(", ")
+	builder.WriteString("tree_path=")
+	builder.WriteString(f.TreePath)
 	builder.WriteString(", ")
 	builder.WriteString("props=")
 	builder.WriteString(fmt.Sprintf("%v", f.Props))

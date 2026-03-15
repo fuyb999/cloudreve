@@ -69,6 +69,20 @@ func (fc *FileCreate) SetName(s string) *FileCreate {
 	return fc
 }
 
+// SetFileExt sets the "file_ext" field.
+func (fc *FileCreate) SetFileExt(s string) *FileCreate {
+	fc.mutation.SetFileExt(s)
+	return fc
+}
+
+// SetNillableFileExt sets the "file_ext" field if the given value is not nil.
+func (fc *FileCreate) SetNillableFileExt(s *string) *FileCreate {
+	if s != nil {
+		fc.SetFileExt(*s)
+	}
+	return fc
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (fc *FileCreate) SetOwnerID(i int) *FileCreate {
 	fc.mutation.SetOwnerID(i)
@@ -127,6 +141,20 @@ func (fc *FileCreate) SetIsSymbolic(b bool) *FileCreate {
 func (fc *FileCreate) SetNillableIsSymbolic(b *bool) *FileCreate {
 	if b != nil {
 		fc.SetIsSymbolic(*b)
+	}
+	return fc
+}
+
+// SetTreePath sets the "tree_path" field.
+func (fc *FileCreate) SetTreePath(s string) *FileCreate {
+	fc.mutation.SetTreePath(s)
+	return fc
+}
+
+// SetNillableTreePath sets the "tree_path" field if the given value is not nil.
+func (fc *FileCreate) SetNillableTreePath(s *string) *FileCreate {
+	if s != nil {
+		fc.SetTreePath(*s)
 	}
 	return fc
 }
@@ -320,6 +348,10 @@ func (fc *FileCreate) defaults() error {
 		v := file.DefaultUpdatedAt()
 		fc.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := fc.mutation.FileExt(); !ok {
+		v := file.DefaultFileExt
+		fc.mutation.SetFileExt(v)
+	}
 	if _, ok := fc.mutation.Size(); !ok {
 		v := file.DefaultSize
 		fc.mutation.SetSize(v)
@@ -344,6 +376,9 @@ func (fc *FileCreate) check() error {
 	}
 	if _, ok := fc.mutation.Name(); !ok {
 		return &ValidationError{Name: "name", err: errors.New(`ent: missing required field "File.name"`)}
+	}
+	if _, ok := fc.mutation.FileExt(); !ok {
+		return &ValidationError{Name: "file_ext", err: errors.New(`ent: missing required field "File.file_ext"`)}
 	}
 	if _, ok := fc.mutation.OwnerID(); !ok {
 		return &ValidationError{Name: "owner_id", err: errors.New(`ent: missing required field "File.owner_id"`)}
@@ -407,6 +442,10 @@ func (fc *FileCreate) createSpec() (*File, *sqlgraph.CreateSpec) {
 		_spec.SetField(file.FieldName, field.TypeString, value)
 		_node.Name = value
 	}
+	if value, ok := fc.mutation.FileExt(); ok {
+		_spec.SetField(file.FieldFileExt, field.TypeString, value)
+		_node.FileExt = value
+	}
 	if value, ok := fc.mutation.Size(); ok {
 		_spec.SetField(file.FieldSize, field.TypeInt64, value)
 		_node.Size = value
@@ -418,6 +457,10 @@ func (fc *FileCreate) createSpec() (*File, *sqlgraph.CreateSpec) {
 	if value, ok := fc.mutation.IsSymbolic(); ok {
 		_spec.SetField(file.FieldIsSymbolic, field.TypeBool, value)
 		_node.IsSymbolic = value
+	}
+	if value, ok := fc.mutation.TreePath(); ok {
+		_spec.SetField(file.FieldTreePath, field.TypeString, value)
+		_node.TreePath = value
 	}
 	if value, ok := fc.mutation.Props(); ok {
 		_spec.SetField(file.FieldProps, field.TypeJSON, value)
@@ -648,6 +691,18 @@ func (u *FileUpsert) UpdateName() *FileUpsert {
 	return u
 }
 
+// SetFileExt sets the "file_ext" field.
+func (u *FileUpsert) SetFileExt(v string) *FileUpsert {
+	u.Set(file.FieldFileExt, v)
+	return u
+}
+
+// UpdateFileExt sets the "file_ext" field to the value that was provided on create.
+func (u *FileUpsert) UpdateFileExt() *FileUpsert {
+	u.SetExcluded(file.FieldFileExt)
+	return u
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (u *FileUpsert) SetOwnerID(v int) *FileUpsert {
 	u.Set(file.FieldOwnerID, v)
@@ -729,6 +784,24 @@ func (u *FileUpsert) SetIsSymbolic(v bool) *FileUpsert {
 // UpdateIsSymbolic sets the "is_symbolic" field to the value that was provided on create.
 func (u *FileUpsert) UpdateIsSymbolic() *FileUpsert {
 	u.SetExcluded(file.FieldIsSymbolic)
+	return u
+}
+
+// SetTreePath sets the "tree_path" field.
+func (u *FileUpsert) SetTreePath(v string) *FileUpsert {
+	u.Set(file.FieldTreePath, v)
+	return u
+}
+
+// UpdateTreePath sets the "tree_path" field to the value that was provided on create.
+func (u *FileUpsert) UpdateTreePath() *FileUpsert {
+	u.SetExcluded(file.FieldTreePath)
+	return u
+}
+
+// ClearTreePath clears the value of the "tree_path" field.
+func (u *FileUpsert) ClearTreePath() *FileUpsert {
+	u.SetNull(file.FieldTreePath)
 	return u
 }
 
@@ -862,6 +935,20 @@ func (u *FileUpsertOne) UpdateName() *FileUpsertOne {
 	})
 }
 
+// SetFileExt sets the "file_ext" field.
+func (u *FileUpsertOne) SetFileExt(v string) *FileUpsertOne {
+	return u.Update(func(s *FileUpsert) {
+		s.SetFileExt(v)
+	})
+}
+
+// UpdateFileExt sets the "file_ext" field to the value that was provided on create.
+func (u *FileUpsertOne) UpdateFileExt() *FileUpsertOne {
+	return u.Update(func(s *FileUpsert) {
+		s.UpdateFileExt()
+	})
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (u *FileUpsertOne) SetOwnerID(v int) *FileUpsertOne {
 	return u.Update(func(s *FileUpsert) {
@@ -957,6 +1044,27 @@ func (u *FileUpsertOne) SetIsSymbolic(v bool) *FileUpsertOne {
 func (u *FileUpsertOne) UpdateIsSymbolic() *FileUpsertOne {
 	return u.Update(func(s *FileUpsert) {
 		s.UpdateIsSymbolic()
+	})
+}
+
+// SetTreePath sets the "tree_path" field.
+func (u *FileUpsertOne) SetTreePath(v string) *FileUpsertOne {
+	return u.Update(func(s *FileUpsert) {
+		s.SetTreePath(v)
+	})
+}
+
+// UpdateTreePath sets the "tree_path" field to the value that was provided on create.
+func (u *FileUpsertOne) UpdateTreePath() *FileUpsertOne {
+	return u.Update(func(s *FileUpsert) {
+		s.UpdateTreePath()
+	})
+}
+
+// ClearTreePath clears the value of the "tree_path" field.
+func (u *FileUpsertOne) ClearTreePath() *FileUpsertOne {
+	return u.Update(func(s *FileUpsert) {
+		s.ClearTreePath()
 	})
 }
 
@@ -1267,6 +1375,20 @@ func (u *FileUpsertBulk) UpdateName() *FileUpsertBulk {
 	})
 }
 
+// SetFileExt sets the "file_ext" field.
+func (u *FileUpsertBulk) SetFileExt(v string) *FileUpsertBulk {
+	return u.Update(func(s *FileUpsert) {
+		s.SetFileExt(v)
+	})
+}
+
+// UpdateFileExt sets the "file_ext" field to the value that was provided on create.
+func (u *FileUpsertBulk) UpdateFileExt() *FileUpsertBulk {
+	return u.Update(func(s *FileUpsert) {
+		s.UpdateFileExt()
+	})
+}
+
 // SetOwnerID sets the "owner_id" field.
 func (u *FileUpsertBulk) SetOwnerID(v int) *FileUpsertBulk {
 	return u.Update(func(s *FileUpsert) {
@@ -1362,6 +1484,27 @@ func (u *FileUpsertBulk) SetIsSymbolic(v bool) *FileUpsertBulk {
 func (u *FileUpsertBulk) UpdateIsSymbolic() *FileUpsertBulk {
 	return u.Update(func(s *FileUpsert) {
 		s.UpdateIsSymbolic()
+	})
+}
+
+// SetTreePath sets the "tree_path" field.
+func (u *FileUpsertBulk) SetTreePath(v string) *FileUpsertBulk {
+	return u.Update(func(s *FileUpsert) {
+		s.SetTreePath(v)
+	})
+}
+
+// UpdateTreePath sets the "tree_path" field to the value that was provided on create.
+func (u *FileUpsertBulk) UpdateTreePath() *FileUpsertBulk {
+	return u.Update(func(s *FileUpsert) {
+		s.UpdateTreePath()
+	})
+}
+
+// ClearTreePath clears the value of the "tree_path" field.
+func (u *FileUpsertBulk) ClearTreePath() *FileUpsertBulk {
+	return u.Update(func(s *FileUpsert) {
+		s.ClearTreePath()
 	})
 }
 

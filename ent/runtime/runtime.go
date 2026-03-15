@@ -102,12 +102,16 @@ func init() {
 	fileDescUpdatedAt := fileFields[1].Descriptor()
 	// file.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	file.DefaultUpdatedAt = fileDescUpdatedAt.Default.(func() time.Time)
+	// fileDescFileExt is the schema descriptor for file_ext field.
+	fileDescFileExt := fileFields[4].Descriptor()
+	// file.DefaultFileExt holds the default value on creation for the file_ext field.
+	file.DefaultFileExt = fileDescFileExt.Default.(string)
 	// fileDescSize is the schema descriptor for size field.
-	fileDescSize := fileFields[5].Descriptor()
+	fileDescSize := fileFields[6].Descriptor()
 	// file.DefaultSize holds the default value on creation for the size field.
 	file.DefaultSize = fileDescSize.Default.(int64)
 	// fileDescIsSymbolic is the schema descriptor for is_symbolic field.
-	fileDescIsSymbolic := fileFields[8].Descriptor()
+	fileDescIsSymbolic := fileFields[9].Descriptor()
 	// file.DefaultIsSymbolic holds the default value on creation for the is_symbolic field.
 	file.DefaultIsSymbolic = fileDescIsSymbolic.Default.(bool)
 	fseventMixin := schema.FsEvent{}.Mixin()

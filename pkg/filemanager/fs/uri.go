@@ -22,6 +22,7 @@ const (
 
 const (
 	QuerySearchName           = "name"
+	QuerySearchExt            = "ext"
 	QuerySearchNameOpOr       = "name_op_or"
 	QuerySearchUseOr          = "use_or"
 	QuerySearchMetadataPrefix = "meta_"
@@ -226,6 +227,11 @@ func (u *URI) SearchParameters() *inventory.SearchFileParameters {
 	if names, ok := q[QuerySearchName]; ok {
 		withSearch = len(names) > 0
 		res.Name = names
+	}
+
+	if exts, ok := q[QuerySearchExt]; ok {
+		res.Ext = exts
+		withSearch = withSearch || len(exts) > 0
 	}
 
 	if _, ok := q[QuerySearchNameOpOr]; ok {
