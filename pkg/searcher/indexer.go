@@ -3,21 +3,87 @@ package searcher
 import (
 	"context"
 	"io"
+	"time"
 )
 
-type SearchDocument struct {
-	ID       string       `json:"id"`
-	FileID   int          `json:"file_id"`
-	OwnerID  int          `json:"owner_id"`
-	EntityID int          `json:"entity_id"`
-	ChunkIdx int          `json:"chunk_idx"`
-	FileName string       `json:"file_name"`
-	Text     string       `json:"text"`
-	Formated *FormatedHit `json:"_formatted,omitempty"`
+type SearchPathDocument struct {
+	Path      string `json:"path"`
+	IsPrimary bool   `json:"is_primary"`
+	Bucket    string `json:"bucket,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+	FileType  string `json:"file_type,omitempty"`
+	EntityID  int    `json:"entity_id,omitempty"`
+	VersionID int    `json:"version_id,omitempty"`
 }
 
-type FormatedHit struct {
-	Text string `json:"text"`
+type SearchAttachmentDocument struct {
+	ID        string            `json:"id"`
+	ParentID  int               `json:"parent_id"`
+	EntityID  int               `json:"entity_id,omitempty"`
+	Type      string            `json:"type,omitempty"`
+	Name      string            `json:"name,omitempty"`
+	Path      string            `json:"path,omitempty"`
+	Bucket    string            `json:"bucket,omitempty"`
+	Size      int64             `json:"size,omitempty"`
+	MimeType  string            `json:"mime_type,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	Content   string            `json:"content,omitempty"`
+	CreatedAt time.Time         `json:"created_at,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at,omitempty"`
+}
+
+type SearchFileVersionDocument struct {
+	ID              string         `json:"id"`
+	EntityID        int            `json:"entity_id"`
+	EntityType      string         `json:"entity_type"`
+	EntityTypeValue int            `json:"entity_type_value"`
+	Source          string         `json:"source,omitempty"`
+	Size            int64          `json:"size,omitempty"`
+	CreatedAt       time.Time      `json:"created_at,omitempty"`
+	UpdatedAt       time.Time      `json:"updated_at,omitempty"`
+	StoragePolicyID int            `json:"storage_policy_id,omitempty"`
+	StorageType     string         `json:"storage_type,omitempty"`
+	StorageName     string         `json:"storage_name,omitempty"`
+	Bucket          string         `json:"bucket,omitempty"`
+	MimeType        string         `json:"mime_type,omitempty"`
+	ReferenceCount  int            `json:"reference_count,omitempty"`
+	Encrypted       bool           `json:"encrypted,omitempty"`
+	Props           map[string]any `json:"props,omitempty"`
+}
+
+type SearchFileDocument struct {
+	ID              string                      `json:"id"`
+	FileID          int                         `json:"file_id"`
+	OwnerID         int                         `json:"owner_id"`
+	EntityID        int                         `json:"entity_id,omitempty"`
+	ParentID        int                         `json:"parent_id,omitempty"`
+	FileName        string                      `json:"file_name"`
+	FileExt         string                      `json:"file_ext,omitempty"`
+	FileType        string                      `json:"file_type"`
+	FileTypeValue   int                         `json:"file_type_value"`
+	Size            int64                       `json:"size"`
+	CreatedAt       time.Time                   `json:"created_at,omitempty"`
+	UpdatedAt       time.Time                   `json:"updated_at,omitempty"`
+	IsSymbolic      bool                        `json:"is_symbolic,omitempty"`
+	Shared          bool                        `json:"shared,omitempty"`
+	TreePath        string                      `json:"tree_path,omitempty"`
+	StoragePolicyID int                         `json:"storage_policy_id,omitempty"`
+	StorageType     string                      `json:"storage_type,omitempty"`
+	StorageName     string                      `json:"storage_name,omitempty"`
+	StorageBucket   string                      `json:"storage_bucket,omitempty"`
+	Metadata        map[string]string           `json:"metadata,omitempty"`
+	MetadataText    string                      `json:"metadata_text,omitempty"`
+	Props           map[string]any              `json:"props,omitempty"`
+	PathText        string                      `json:"path_text,omitempty"`
+	Content         string                      `json:"content,omitempty"`
+	ContentExcerpt  string                      `json:"content_excerpt,omitempty"`
+	LatestVersion   *SearchFileVersionDocument  `json:"latest_version,omitempty"`
+	Versions        []SearchFileVersionDocument `json:"versions,omitempty"`
+	Paths           []SearchPathDocument        `json:"paths,omitempty"`
+	Attachments     []SearchAttachmentDocument  `json:"attachments,omitempty"`
+	SnapshotVersion int                         `json:"snapshot_version"`
+	SynchronizedAt  time.Time                   `json:"synchronized_at,omitempty"`
 }
 
 type SearchResult struct {
@@ -29,11 +95,9 @@ type SearchResult struct {
 }
 
 type SearchIndexer interface {
-	IndexFile(ctx context.Context, ownerID, fileID, entityID int, fileName, text string) error
+	UpsertFile(ctx context.Context, doc *SearchFileDocument) error
+	BulkUpsertFiles(ctx context.Context, docs []*SearchFileDocument) error
 	DeleteByFileIDs(ctx context.Context, fileID ...int) error
-	ChangeOwner(ctx context.Context, fileID, oldOwnerID, newOwnerID int) error
-	CopyByFileID(ctx context.Context, srcFileID, dstFileID, dstOwnerID, dstEntityID int) error
-	Rename(ctx context.Context, fileID, entityID int, newFileName string) error
 	Search(ctx context.Context, ownerID int, query string, offset int) ([]SearchResult, int64, error)
 	// IndexReady reports whether the search index exists and has the required
 	// configuration (filterable/searchable attributes, etc.).

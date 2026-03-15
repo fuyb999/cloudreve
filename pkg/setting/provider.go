@@ -234,6 +234,8 @@ type (
 		FTSExtractorType(ctx context.Context) FTSExtractorType
 		// FTSIndexMeilisearch returns Meilisearch index settings.
 		FTSIndexMeilisearch(ctx context.Context) *FTSIndexMeilisearchSetting
+		// FTSIndexElasticsearch returns Elasticsearch index settings.
+		FTSIndexElasticsearch(ctx context.Context) *FTSIndexElasticsearchSetting
 		// FTSTikaExtractor returns Tika extractor settings.
 		FTSTikaExtractor(ctx context.Context) *FTSTikaExtractorSetting
 		// FTSChunkSize returns the maximum chunk size in bytes for full-text search indexing.
@@ -673,6 +675,19 @@ func (s *settingProvider) FTSIndexMeilisearch(ctx context.Context) *FTSIndexMeil
 		PageSize:         s.getInt(ctx, "fts_meilisearch_page_size", 5),
 		EmbeddingEnbaled: s.getBoolean(ctx, "fts_meilisearch_embed_enabled", false),
 		EmbeddingSetting: s.getString(ctx, "fts_meilisearch_embed_config", "{}"),
+	}
+}
+
+func (s *settingProvider) FTSIndexElasticsearch(ctx context.Context) *FTSIndexElasticsearchSetting {
+	return &FTSIndexElasticsearchSetting{
+		Endpoint:      s.getString(ctx, "fts_elasticsearch_endpoint", ""),
+		CloudID:       s.getString(ctx, "fts_elasticsearch_cloud_id", ""),
+		APIKey:        s.getString(ctx, "fts_elasticsearch_api_key", ""),
+		Username:      s.getString(ctx, "fts_elasticsearch_username", ""),
+		Password:      s.getString(ctx, "fts_elasticsearch_password", ""),
+		Index:         s.getString(ctx, "fts_elasticsearch_index", "cloudreve_files"),
+		PageSize:      s.getInt(ctx, "fts_elasticsearch_page_size", 5),
+		SkipTLSVerify: s.getBoolean(ctx, "fts_elasticsearch_skip_tls_verify", false),
 	}
 }
 

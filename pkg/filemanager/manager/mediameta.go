@@ -159,6 +159,8 @@ func (m *manager) ExtractAndSaveMediaMeta(ctx context.Context, uri *fs.URI, enti
 		})...); err != nil {
 			return fmt.Errorf("failed to save media meta: %s (%w)", err, queue.CriticalErr)
 		}
+
+		m.queueFullTextSync(ctx, uri, file.ID(), file.OwnerID(), file.PrimaryEntityID())
 	}
 
 	return nil

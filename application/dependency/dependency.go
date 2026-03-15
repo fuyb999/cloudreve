@@ -405,26 +405,53 @@ func (d *dependency) SearchIndexer(ctx context.Context) searcher.SearchIndexer {
 	}
 
 	sp := d.SettingProvider()
-	if !sp.FTSEnabled(ctx) || sp.FTSIndexType(ctx) != setting.FTSIndexTypeMeilisearch {
+	if !sp.FTSEnabled(ctx) {
 		d.searchIndexer = &indexer.NoopIndexer{}
 		return d.searchIndexer
 	}
 
-	msCfg := sp.FTSIndexMeilisearch(ctx)
-	if msCfg.Endpoint == "" {
+	switch sp.FTSIndexType(ctx) {
+	case setting.FTSIndexTypeMeilisearch:
+		msCfg := sp.FTSIndexMeilisearch(ctx)
+		if msCfg.Endpoint == "" {
+			d.searchIndexer = &indexer.NoopIndexer{}
+			return d.searchIndexer
+		}
+
+		idx := indexer.NewMeilisearchIndexer(msCfg, sp.FTSChunkSize(ctx), d.Logger())
+		if err := idx.EnsureIndex(ctx); err != nil {
+			d.Logger().Warning("Failed to ensure Meilisearch index: %s, falling back to noop", err)
+			d.searchIndexer = &indexer.NoopIndexer{}
+			return d.searchIndexer
+		}
+
+		d.searchIndexer = idx
+		return d.searchIndexer
+	case setting.FTSIndexTypeElasticsearch:
+		esCfg := sp.FTSIndexElasticsearch(ctx)
+		if esCfg.Endpoint == "" && esCfg.CloudID == "" {
+			d.searchIndexer = &indexer.NoopIndexer{}
+			return d.searchIndexer
+		}
+
+		idx, err := indexer.NewElasticsearchIndexer(esCfg, d.Logger())
+		if err != nil {
+			d.Logger().Warning("Failed to create Elasticsearch indexer: %s, falling back to noop", err)
+			d.searchIndexer = &indexer.NoopIndexer{}
+			return d.searchIndexer
+		}
+		if err := idx.EnsureIndex(ctx); err != nil {
+			d.Logger().Warning("Failed to ensure Elasticsearch index: %s, falling back to noop", err)
+			d.searchIndexer = &indexer.NoopIndexer{}
+			return d.searchIndexer
+		}
+
+		d.searchIndexer = idx
+		return d.searchIndexer
+	default:
 		d.searchIndexer = &indexer.NoopIndexer{}
 		return d.searchIndexer
 	}
-
-	idx := indexer.NewMeilisearchIndexer(msCfg, sp.FTSChunkSize(ctx), d.Logger())
-	if err := idx.EnsureIndex(ctx); err != nil {
-		d.Logger().Warning("Failed to ensure Meilisearch index: %s, falling back to noop", err)
-		d.searchIndexer = &indexer.NoopIndexer{}
-		return d.searchIndexer
-	}
-
-	d.searchIndexer = idx
-	return d.searchIndexer
 }
 
 func (d *dependency) TextExtractor(ctx context.Context) searcher.TextExtractor {
@@ -642,7 +669,7 @@ func (d *dependency) MediaMetaQueue(ctx context.Context) queue.Queue {
 	settings := d.SettingProvider()
 	queueSetting := settings.Queue(context.Background(), setting.QueueTypeMediaMeta)
 
-	d.mediaMetaQueue = queue.New(d.Logger(), d.TaskClient(), nil, d,
+	d.mediaMetaQueue = queue.New(d.Logger(), d.TaskClient(), d.TaskRegistry(), d,
 		queue.WithBackoffFactor(queueSetting.BackoffFactor),
 		queue.WithMaxRetry(queueSetting.MaxRetry),
 		queue.WithBackoffMaxDuration(queueSetting.BackoffMaxDuration),

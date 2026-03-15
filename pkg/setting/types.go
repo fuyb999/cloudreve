@@ -231,8 +231,9 @@ type CustomHTML struct {
 type FTSIndexType string
 
 const (
-	FTSIndexTypeNone        = FTSIndexType("")
-	FTSIndexTypeMeilisearch = FTSIndexType("meilisearch")
+	FTSIndexTypeNone          = FTSIndexType("")
+	FTSIndexTypeMeilisearch   = FTSIndexType("meilisearch")
+	FTSIndexTypeElasticsearch = FTSIndexType("elasticsearch")
 )
 
 type FTSExtractorType string
@@ -248,6 +249,17 @@ type FTSIndexMeilisearchSetting struct {
 	PageSize         int
 	EmbeddingEnbaled bool
 	EmbeddingSetting string
+}
+
+type FTSIndexElasticsearchSetting struct {
+	Endpoint      string
+	CloudID       string
+	APIKey        string
+	Username      string
+	Password      string
+	Index         string
+	PageSize      int
+	SkipTLSVerify bool
 }
 
 type FTSTikaExtractorSetting struct {

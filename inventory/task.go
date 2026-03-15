@@ -35,8 +35,12 @@ type TaskClient interface {
 	New(ctx context.Context, task *TaskArgs) (*ent.Task, error)
 	// Update updates the task with the given args.
 	Update(ctx context.Context, task *ent.Task, args *TaskArgs) (*ent.Task, error)
+	// UpdatePrivateState updates only the private state of a task.
+	UpdatePrivateState(ctx context.Context, task *ent.Task, privateState string) (*ent.Task, error)
 	// GetPendingTasks returns all pending tasks of given type.
 	GetPendingTasks(ctx context.Context, taskType ...string) ([]*ent.Task, error)
+	// FindPendingByPrivateStateContains returns pending tasks filtered by type and private state fragment.
+	FindPendingByPrivateStateContains(ctx context.Context, contains string, taskType ...string) ([]*ent.Task, error)
 	// GetTaskByID returns the task with the given ID.
 	GetTaskByID(ctx context.Context, taskID int) (*ent.Task, error)
 	// SetCompleteByID sets the task with the given ID to complete.
@@ -162,6 +166,19 @@ func (c *taskClient) Update(ctx context.Context, task *ent.Task, args *TaskArgs)
 	return task, nil
 }
 
+func (c *taskClient) UpdatePrivateState(ctx context.Context, taskModel *ent.Task, privateState string) (*ent.Task, error) {
+	res, err := c.client.Task.UpdateOne(taskModel).
+		SetPrivateState(privateState).
+		Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update task private state: %w", err)
+	}
+
+	taskModel.PrivateState = privateState
+	taskModel.UpdatedAt = res.UpdatedAt
+	return res, nil
+}
+
 func (c *taskClient) GetPendingTasks(ctx context.Context, taskType ...string) ([]*ent.Task, error) {
 	tasks, err := withTaskEagerLoading(ctx, c.client.Task.Query()).
 		Where(task.StatusIn(task.StatusProcessing, task.StatusQueued, task.StatusSuspending)).
@@ -172,6 +189,36 @@ func (c *taskClient) GetPendingTasks(ctx context.Context, taskType ...string) ([
 	}
 
 	// Anonymous user is not loaded by default, so we need to load it manually.
+	userClient := NewUserClient(c.client)
+	anonymous, err := userClient.AnonymousUser(ctx)
+	for _, t := range tasks {
+		if t.UserTasks == 0 {
+			if err != nil {
+				return nil, err
+			}
+			t.SetUser(anonymous)
+		}
+	}
+
+	return tasks, nil
+}
+
+func (c *taskClient) FindPendingByPrivateStateContains(ctx context.Context, contains string, taskType ...string) ([]*ent.Task, error) {
+	query := withTaskEagerLoading(ctx, c.client.Task.Query()).
+		Where(task.StatusIn(task.StatusProcessing, task.StatusQueued, task.StatusSuspending))
+
+	if len(taskType) > 0 {
+		query = query.Where(task.TypeIn(taskType...))
+	}
+	if contains != "" {
+		query = query.Where(task.PrivateStateContains(contains))
+	}
+
+	tasks, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending tasks by private state: %w", err)
+	}
+
 	userClient := NewUserClient(c.client)
 	anonymous, err := userClient.AnonymousUser(ctx)
 	for _, t := range tasks {

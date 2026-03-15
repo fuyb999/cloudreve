@@ -365,7 +365,6 @@ func (f *fileClient) indexableFilesQuery() *ent.FileQuery {
 	return f.client.File.Query().Where(
 		file.Type(int(types.FileTypeFile)),
 		file.NameNEQ(""),
-		file.SizeGT(0),
 		file.FileChildrenNotNil(),
 	).Order(file.ByID())
 }

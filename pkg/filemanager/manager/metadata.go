@@ -289,6 +289,16 @@ func (m *manager) PatchMedata(ctx context.Context, path []*fs.URI, data ...fs.Me
 		return err
 	}
 
+	for _, item := range path {
+		file, err := m.Get(ctx, item, dbfs.WithFileEntities(), dbfs.WithNotRoot())
+		if err != nil {
+			m.l.Warning("Failed to reload file for full text sync after metadata patch: %s", err)
+			continue
+		}
+
+		m.queueFullTextSync(ctx, item, file.ID(), file.OwnerID(), file.PrimaryEntityID())
+	}
+
 	keys := lo.Map(data, func(item fs.MetadataPatch, _ int) string {
 		return item.Key
 	})

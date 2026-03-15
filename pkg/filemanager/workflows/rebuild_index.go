@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -193,16 +194,17 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 	user := inventory.UserFromContext(ctx)
 
 	var (
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-		failed int
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		failed   int
+		docs     []*searcher.SearchFileDocument
+		fileByID = make(map[int]*ent.File, len(files))
 	)
 
 	sem := make(chan struct{}, RebuildIndexConcurrent)
-	indexer := dep.SearchIndexer(ctx)
-	extractor := dep.TextExtractor(ctx)
-
 	for _, f := range files {
+		fileByID[f.ID] = f
+
 		select {
 		case <-ctx.Done():
 			return failed
@@ -216,76 +218,65 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 				wg.Done()
 			}()
 
-			if err := m.indexSingleFile(ctx, dep, user, indexer, extractor, f); err != nil {
+			doc, _, err := manager.BuildFTSFileDocument(ctx, dep, user, f.ID)
+			if err != nil {
+				var notFound *ent.NotFoundError
+				if errors.As(err, &notFound) {
+					return
+				}
+
 				m.l.Warning("Failed to index file %d (%s): %s", f.ID, f.Name, err)
 				mu.Lock()
 				failed++
 				mu.Unlock()
+				return
 			}
+
+			if len(m.state.FilteredStoragePolicy) > 0 {
+				policyID := doc.StoragePolicyID
+				if doc.LatestVersion != nil && doc.LatestVersion.StoragePolicyID > 0 {
+					policyID = doc.LatestVersion.StoragePolicyID
+				}
+				if !slices.Contains(m.state.FilteredStoragePolicy, policyID) {
+					return
+				}
+			}
+
+			mu.Lock()
+			docs = append(docs, doc)
+			mu.Unlock()
 		}(f)
 	}
 
 	wg.Wait()
-	return failed
-}
 
-// indexSingleFile extracts text from a single file and indexes it.
-func (m *RebuildIndexTask) indexSingleFile(
-	ctx context.Context,
-	dep dependency.Dep,
-	user *ent.User,
-	indexer searcher.SearchIndexer,
-	extractor searcher.TextExtractor,
-	f *ent.File,
-) error {
-	fm := manager.NewFileManager(dep, user)
-	defer fm.Recycle()
-
-	entityID := f.PrimaryEntity
-	if entityID == 0 {
-		// No primary entity, index with just the file name (no text content).
-		m.l.Debug("No primary entity for file %d, skipping.", f.ID)
-		return nil
+	if len(docs) == 0 {
+		return failed
 	}
 
-	// Check if this file type is eligible for text extraction
-	var text string
-	if manager.ShouldExtractText(extractor, f.Name, f.Size) {
-		source, err := fm.GetEntitySource(ctx, entityID)
-		if err != nil {
-			// Cannot get source; index with file name only.
-			m.l.Debug("Cannot get entity source for file %d: %s, skipping.", f.ID, err)
-			return fmt.Errorf("cannot get entity source for file %d: %w", f.ID, err)
-		}
-		defer source.Close()
+	if err := dep.SearchIndexer(ctx).BulkUpsertFiles(ctx, docs); err != nil {
+		m.l.Warning("Failed to bulk upsert rebuild batch starting at file %d: %s", files[0].ID, err)
+		return failed + len(docs)
+	}
 
-		if len(m.state.FilteredStoragePolicy) > 0 {
-			if !slices.Contains(m.state.FilteredStoragePolicy, source.Entity().PolicyID()) {
-				m.l.Debug("Entity source for file %d is not in filtered storage policy, skipping.", f.ID)
-				return nil
-			}
+	for _, doc := range docs {
+		if doc.EntityID == 0 {
+			continue
 		}
 
-		extracted, err := extractor.Extract(ctx, source)
-		if err != nil {
-			m.l.Debug("Failed to extract text for file %d: %s, skipping", f.ID, err)
-			return nil
-		} else {
-			text = extracted
+		fileModel, ok := fileByID[doc.FileID]
+		if !ok {
+			continue
 		}
 
-		if err := indexer.IndexFile(ctx, f.OwnerID, f.ID, entityID, f.Name, text); err != nil {
-			return fmt.Errorf("failed to index file %d: %w", f.ID, err)
-		}
-
-		if err := dep.FileClient().UpsertMetadata(ctx, f, map[string]string{
-			dbfs.FullTextIndexKey: hashid.EncodeEntityID(dep.HashIDEncoder(), entityID),
+		if err := dep.FileClient().UpsertMetadata(ctx, fileModel, map[string]string{
+			dbfs.FullTextIndexKey: hashid.EncodeEntityID(dep.HashIDEncoder(), doc.EntityID),
 		}, nil); err != nil {
-			m.l.Warning("Failed to upsert metadata for file %d: %s", f.ID, err)
+			m.l.Warning("Failed to upsert metadata for file %d: %s", doc.FileID, err)
 		}
 	}
 
-	return nil
+	return failed
 }
 
 func (m *RebuildIndexTask) Progress(ctx context.Context) queue.Progresses {

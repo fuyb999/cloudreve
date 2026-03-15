@@ -407,6 +407,13 @@ func (m *manager) PatchView(ctx context.Context, uri *fs.URI, view *types.Explor
 		return err
 	}
 
+	file, err := m.Get(ctx, uri, dbfs.WithFileEntities(), dbfs.WithNotRoot())
+	if err != nil {
+		m.l.Warning("Failed to reload file for full text sync after props patch: %s", err)
+	} else {
+		m.queueFullTextSync(ctx, uri, file.ID(), file.OwnerID(), file.PrimaryEntityID())
+	}
+
 	target := m.getAuditFile(ctx, uri)
 	m.publishAudit(ctx, audit.UpdateView, map[string]any{
 		"path":       uri.String(),

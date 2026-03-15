@@ -32,6 +32,8 @@ type (
 		Owner() *ent.User
 		// State returns the internal Task state
 		State() string
+		// UpdateState updates the internal task state.
+		UpdateState(state string)
 		// ShouldPersist returns true if the Task should be persisted into DB
 		ShouldPersist() bool
 		// Persisted returns true if the Task is persisted in DB
@@ -207,6 +209,15 @@ func (t *DBTask) State() string {
 		return t.Task.PrivateState
 	}
 	return ""
+}
+
+func (t *DBTask) UpdateState(state string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.Task != nil {
+		t.Task.PrivateState = state
+	}
 }
 
 func (t *DBTask) Persisted() bool {

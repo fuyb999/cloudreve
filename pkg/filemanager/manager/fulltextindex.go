@@ -3,7 +3,9 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -25,11 +27,20 @@ type (
 		*queue.DBTask
 	}
 
-	FullTextIndexTaskState struct {
-		Uri      *fs.URI `json:"uri"`
-		EntityID int     `json:"entity_id"`
+	FullTextIndexTaskItem struct {
+		Uri      *fs.URI `json:"uri,omitempty"`
+		EntityID int     `json:"entity_id,omitempty"`
 		FileID   int     `json:"file_id"`
-		OwnerID  int     `json:"owner_id"`
+		OwnerID  int     `json:"owner_id,omitempty"`
+	}
+
+	FullTextIndexTaskState struct {
+		Uri      *fs.URI                 `json:"uri,omitempty"`
+		EntityID int                     `json:"entity_id,omitempty"`
+		FileID   int                     `json:"file_id,omitempty"`
+		OwnerID  int                     `json:"owner_id,omitempty"`
+		FileIDs  []int                   `json:"file_ids,omitempty"`
+		Files    []FullTextIndexTaskItem `json:"files,omitempty"`
 	}
 
 	ftsFileInfo struct {
@@ -39,6 +50,15 @@ type (
 		FileName string
 	}
 )
+
+var fullTextMergeableTaskTypes = []string{
+	queue.FullTextIndexTaskType,
+}
+
+var fullTextEnqueueLocks [64]sync.Mutex
+var fullTextPendingMergeLock sync.Mutex
+
+const fullTextMaxFilesPerTask = 64
 
 func (m *manager) SearchFullText(ctx context.Context, query string, offset int) (*FullTextSearchResults, error) {
 	indexer := m.dep.SearchIndexer(ctx)
@@ -85,13 +105,8 @@ func init() {
 }
 
 func NewFullTextIndexTask(ctx context.Context, uri *fs.URI, entityID, fileID, ownerID int, creator *ent.User) (*FullTextIndexTask, error) {
-	state := &FullTextIndexTaskState{
-		Uri:      uri,
-		EntityID: entityID,
-		FileID:   fileID,
-		OwnerID:  ownerID,
-	}
-	stateBytes, err := json.Marshal(state)
+	state := newFullTextIndexTaskState(uri, entityID, fileID, ownerID)
+	stateBytes, err := marshalFullTextIndexTaskState(state)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal state: %w", err)
 	}
@@ -115,6 +130,148 @@ func NewFullTextIndexTaskFromModel(t *ent.Task) queue.Task {
 			Task: t,
 		},
 	}
+}
+
+func newFullTextIndexTaskState(uri *fs.URI, entityID, fileID, ownerID int) *FullTextIndexTaskState {
+	state := &FullTextIndexTaskState{}
+	state.Upsert(FullTextIndexTaskItem{
+		Uri:      uri,
+		EntityID: entityID,
+		FileID:   fileID,
+		OwnerID:  ownerID,
+	})
+	return state
+}
+
+func parseFullTextIndexTaskState(raw string) (*FullTextIndexTaskState, error) {
+	state := &FullTextIndexTaskState{}
+	if raw == "" {
+		return state, nil
+	}
+
+	if err := json.Unmarshal([]byte(raw), state); err != nil {
+		return nil, err
+	}
+
+	state.normalize()
+	return state, nil
+}
+
+func marshalFullTextIndexTaskState(state *FullTextIndexTaskState) ([]byte, error) {
+	state.normalize()
+	return json.Marshal(state)
+}
+
+func (s *FullTextIndexTaskState) normalize() {
+	items := append([]FullTextIndexTaskItem(nil), s.Files...)
+	if len(items) == 0 && s.FileID > 0 {
+		items = append(items, FullTextIndexTaskItem{
+			Uri:      s.Uri,
+			EntityID: s.EntityID,
+			FileID:   s.FileID,
+			OwnerID:  s.OwnerID,
+		})
+	}
+
+	normalized := make([]FullTextIndexTaskItem, 0, len(items))
+	positions := make(map[int]int, len(items))
+	for _, item := range items {
+		if item.FileID <= 0 {
+			continue
+		}
+
+		if idx, ok := positions[item.FileID]; ok {
+			normalized[idx] = item
+			continue
+		}
+
+		positions[item.FileID] = len(normalized)
+		normalized = append(normalized, item)
+	}
+
+	s.Files = normalized
+	if len(normalized) == 0 {
+		s.Uri = nil
+		s.EntityID = 0
+		s.FileID = 0
+		s.OwnerID = 0
+		s.FileIDs = nil
+		return
+	}
+
+	s.FileIDs = make([]int, 0, len(normalized))
+	for _, item := range normalized {
+		s.FileIDs = append(s.FileIDs, item.FileID)
+	}
+
+	head := normalized[0]
+	s.Uri = head.Uri
+	s.EntityID = head.EntityID
+	s.FileID = head.FileID
+	s.OwnerID = head.OwnerID
+}
+
+func (s *FullTextIndexTaskState) Upsert(item FullTextIndexTaskItem) {
+	s.normalize()
+	if item.FileID <= 0 {
+		return
+	}
+
+	for i := range s.Files {
+		if s.Files[i].FileID == item.FileID {
+			s.Files[i] = item
+			s.normalize()
+			return
+		}
+	}
+
+	s.Files = append(s.Files, item)
+	s.normalize()
+}
+
+func (s *FullTextIndexTaskState) Remove(fileID int) bool {
+	s.normalize()
+	if fileID <= 0 || len(s.Files) == 0 {
+		return false
+	}
+
+	filtered := s.Files[:0]
+	removed := false
+	for _, item := range s.Files {
+		if item.FileID == fileID {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+
+	if !removed {
+		return false
+	}
+
+	s.Files = append([]FullTextIndexTaskItem(nil), filtered...)
+	s.normalize()
+	return true
+}
+
+func (s *FullTextIndexTaskState) Contains(fileID int) bool {
+	s.normalize()
+	for _, item := range s.Files {
+		if item.FileID == fileID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *FullTextIndexTaskState) Items() []FullTextIndexTaskItem {
+	s.normalize()
+	return append([]FullTextIndexTaskItem(nil), s.Files...)
+}
+
+func (s *FullTextIndexTaskState) Len() int {
+	s.normalize()
+	return len(s.Files)
 }
 
 type (
@@ -180,33 +337,11 @@ func (t *FullTextCopyTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
 
-	// Get fresh file to make sure task is not stale.
-	file, err := fm.Get(ctx, state.Uri, dbfs.WithFilePublicMetadata())
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to get latest file: %w", err)
+	status, err := performIndexing(ctx, fm, state.FileID)
+	if err == nil {
+		l.Debug("Successfully rebuilt full text index for copied file %d.", state.FileID)
 	}
-
-	if file.PrimaryEntityID() != state.EntityID {
-		l.Debug("File %d entity changed, skipping copy index.", state.FileID)
-		return task.StatusCompleted, nil
-	}
-
-	indexer := dep.SearchIndexer(ctx)
-	if err := indexer.CopyByFileID(ctx, state.OriginalFileID, state.FileID, state.OwnerID, state.EntityID); err != nil {
-		l.Warning("Failed to copy index from file %d to %d, falling back to full indexing: %s", state.OriginalFileID, state.FileID, err)
-		return performIndexing(ctx, fm, state.Uri, state.EntityID, state.FileID, state.OwnerID, file.Name(), false)
-	}
-
-	// Patch metadata to mark file as indexed.
-	if err := fm.fs.PatchMetadata(ctx, []*fs.URI{state.Uri}, fs.MetadataPatch{
-		Key:   dbfs.FullTextIndexKey,
-		Value: hashid.EncodeEntityID(fm.hasher, state.EntityID),
-	}); err != nil {
-		return task.StatusError, fmt.Errorf("failed to patch metadata: %w", err)
-	}
-
-	l.Debug("Successfully copied index from file %d to %d.", state.OriginalFileID, state.FileID)
-	return task.StatusCompleted, nil
+	return status, err
 }
 
 type (
@@ -272,24 +407,11 @@ func (t *FullTextChangeOwnerTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
 
-	// Get fresh file to make sure task is not stale.
-	file, err := fm.Get(ctx, state.Uri, dbfs.WithFilePublicMetadata())
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to get latest file: %w", err)
+	status, err := performIndexing(ctx, fm, state.FileID)
+	if err == nil {
+		l.Debug("Successfully rebuilt full text index for owner-updated file %d.", state.FileID)
 	}
-
-	if file.PrimaryEntityID() != state.EntityID {
-		l.Debug("File %d entity changed, skipping owner change.", state.FileID)
-		return task.StatusCompleted, nil
-	}
-
-	indexer := dep.SearchIndexer(ctx)
-	if err := indexer.ChangeOwner(ctx, state.FileID, state.OriginalOwnerID, state.NewOwnerID); err != nil {
-		return task.StatusError, fmt.Errorf("failed to change owner for file %d: %w", state.FileID, err)
-	}
-
-	l.Debug("Successfully changed index owner for file %d from %d to %d.", state.FileID, state.OriginalOwnerID, state.NewOwnerID)
-	return task.StatusCompleted, nil
+	return status, err
 }
 
 type (
@@ -335,10 +457,23 @@ func NewFullTextDeleteTaskFromModel(t *ent.Task) queue.Task {
 func (t *FullTextDeleteTask) Do(ctx context.Context) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
+	fm := NewFileManager(dep, inventory.UserFromContext(ctx)).(*manager)
 
 	var state FullTextDeleteTaskState
 	if err := json.Unmarshal([]byte(t.State()), &state); err != nil {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
+	}
+
+	if fm.settings.FTSEnabled(ctx) {
+		for _, fileID := range state.FileIDs {
+			status, err := performIndexing(ctx, fm, fileID)
+			if err != nil {
+				return status, err
+			}
+		}
+
+		l.Debug("Successfully reconciled full text index for %d file(s) from legacy delete task.", len(state.FileIDs))
+		return task.StatusCompleted, nil
 	}
 
 	indexer := dep.SearchIndexer(ctx)
@@ -362,80 +497,66 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 	}
 
 	// Unmarshal state
-	var state FullTextIndexTaskState
-	if err := json.Unmarshal([]byte(t.State()), &state); err != nil {
+	state, err := parseFullTextIndexTaskState(t.State())
+	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
 
-	// Get fresh file to make sure task is not stale
-	file, err := fm.Get(ctx, state.Uri, dbfs.WithFilePublicMetadata())
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to get latest file: %w", err)
-	}
-
-	if file.PrimaryEntityID() != state.EntityID {
-		l.Debug("File %d is not the latest version, skipping indexing.", state.FileID)
+	items := state.Items()
+	if len(items) == 0 {
+		l.Debug("No files left in full text reconcile task, skipping.")
 		return task.StatusCompleted, nil
 	}
 
-	deleteOldChunks := false
-	if _, ok := file.Metadata()[dbfs.FullTextIndexKey]; ok {
-		deleteOldChunks = true
+	for _, item := range items {
+		status, err := performIndexing(ctx, fm, item.FileID)
+		if err != nil {
+			return status, err
+		}
 	}
 
-	return performIndexing(ctx, fm, state.Uri, state.EntityID, state.FileID, state.OwnerID, state.Uri.Name(), deleteOldChunks)
+	l.Debug("Successfully reconciled full text index for %d file(s).", len(items))
+	return task.StatusCompleted, nil
 }
 
-// performIndexing extracts text from the entity and indexes it. This is shared between
-// the regular index task and the copy task (as a fallback when copy fails).
-func performIndexing(ctx context.Context, fm *manager, uri *fs.URI, entityID, fileID, ownerID int, fileName string, deleteOldChunks bool) (task.Status, error) {
+func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
-
-	// Get entity source
-	source, err := fm.GetEntitySource(ctx, entityID)
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to get entity source: %w", err)
-	}
-	defer source.Close()
-
-	// Extract text
-	var text string
-	if source.Entity().Size() > 0 {
-		extractor := dep.TextExtractor(ctx)
-		text, err = extractor.Extract(ctx, source)
-		if err != nil {
-			l.Warning("Failed to extract text for file %d: %s", fileID, err)
-			return task.StatusCompleted, nil
-		}
-	}
-
 	indexer := dep.SearchIndexer(ctx)
 
-	// Delete old chunks first so that stale chunks from a previously longer
-	// version of the file are removed before upserting the new (possibly fewer)
-	// chunks.
-	if deleteOldChunks {
-		if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
-			l.Warning("Failed to delete old index chunks for file %d: %s", fileID, err)
+	doc, uri, err := fm.buildFTSFileDocument(ctx, fileID)
+	if err != nil {
+		if shouldIgnoreFTSSyncError(err) {
+			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
+			}
+
+			l.Debug("File %d disappeared before full text sync finished, removed stale index entry.", fileID)
+			return task.StatusCompleted, nil
 		}
+		return task.StatusError, fmt.Errorf("failed to build search document for file %d: %w", fileID, err)
 	}
 
-	// Index via SearchIndexer
-	if err := indexer.IndexFile(ctx, ownerID, fileID, entityID, fileName, text); err != nil {
+	if err := indexer.UpsertFile(ctx, doc); err != nil {
 		return task.StatusError, fmt.Errorf("failed to index file %d: %w", fileID, err)
 	}
 
-	// Upsert metadata
-	if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
-		Key:   dbfs.FullTextIndexKey,
-		Value: hashid.EncodeEntityID(fm.hasher, entityID),
-	}); err != nil {
-		return task.StatusError, fmt.Errorf("failed to patch metadata: %w", err)
+	if doc.EntityID > 0 && uri != nil {
+		if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
+			Key:   dbfs.FullTextIndexKey,
+			Value: hashid.EncodeEntityID(fm.hasher, doc.EntityID),
+		}); err != nil {
+			return task.StatusError, fmt.Errorf("failed to patch metadata: %w", err)
+		}
 	}
 
-	l.Debug("Successfully indexed file %d for owner %d.", fileID, ownerID)
+	l.Debug("Successfully indexed file %d for owner %d.", fileID, doc.OwnerID)
 	return task.StatusCompleted, nil
+}
+
+func shouldIgnoreFTSSyncError(err error) bool {
+	var notFound *ent.NotFoundError
+	return errors.As(err, &notFound)
 }
 
 // ShouldExtractText checks if a file is eligible for text extraction based on
@@ -461,18 +582,165 @@ func (m *manager) fullTextIndexForNewEntity(ctx context.Context, session *fs.Upl
 		return
 	}
 
-	if !m.shouldIndexFullText(ctx, session.Props.Uri.Name(), session.Props.Size) {
+	if !m.settings.FTSEnabled(ctx) {
 		return
 	}
 
-	t, err := NewFullTextIndexTask(ctx, session.Props.Uri, session.EntityID, session.FileID, owner, m.user)
-	if err != nil {
-		m.l.Warning("Failed to create full text index task: %s", err)
+	m.queueFullTextReconcile(ctx, session.Props.Uri, session.FileID, owner, session.EntityID)
+}
+
+func (m *manager) queueFullTextSync(ctx context.Context, uri *fs.URI, fileID, ownerID, entityID int) {
+	m.queueFullTextReconcile(ctx, uri, fileID, ownerID, entityID)
+}
+
+func (m *manager) queueFullTextDelete(ctx context.Context, fileID int) {
+	m.queueFullTextReconcile(ctx, nil, fileID, 0, 0)
+}
+
+func (m *manager) queueFullTextReconcile(ctx context.Context, uri *fs.URI, fileID, ownerID, entityID int) {
+	if !m.settings.FTSEnabled(ctx) || fileID <= 0 {
 		return
 	}
-	if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
-		m.l.Warning("Failed to queue full text index task: %s", err)
+
+	lock := &fullTextEnqueueLocks[fileID%len(fullTextEnqueueLocks)]
+	lock.Lock()
+	defer lock.Unlock()
+
+	state := newFullTextIndexTaskState(uri, entityID, fileID, ownerID)
+	merged, err := m.mergePendingFullTextTask(ctx, state)
+	if err != nil {
+		m.l.Warning("Failed to merge pending full text reconcile task for file %d: %s", fileID, err)
 	}
+	if merged {
+		return
+	}
+
+	t, err := NewFullTextIndexTask(ctx, uri, entityID, fileID, ownerID, m.user)
+	if err != nil {
+		m.l.Warning("Failed to create full text reconcile task: %s", err)
+		return
+	}
+
+	if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
+		m.l.Warning("Failed to queue full text reconcile task: %s", err)
+	}
+}
+
+func (m *manager) mergePendingFullTextTask(ctx context.Context, state *FullTextIndexTaskState) (bool, error) {
+	items := state.Items()
+	if len(items) == 0 {
+		return false, nil
+	}
+	item := items[0]
+
+	fullTextPendingMergeLock.Lock()
+	defer fullTextPendingMergeLock.Unlock()
+
+	candidates, err := m.dep.TaskClient().GetPendingTasks(ctx, fullTextMergeableTaskTypes...)
+	if err != nil {
+		return false, err
+	}
+
+	type pendingTaskState struct {
+		task  *ent.Task
+		state *FullTextIndexTaskState
+	}
+
+	pending := make([]pendingTaskState, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Status != task.StatusQueued && candidate.Status != task.StatusSuspending {
+			continue
+		}
+
+		parsed, err := parseFullTextIndexTaskState(candidate.PrivateState)
+		if err != nil {
+			m.l.Warning("Failed to parse pending full text task %d state: %s", candidate.ID, err)
+			continue
+		}
+
+		pending = append(pending, pendingTaskState{task: candidate, state: parsed})
+	}
+
+	if len(pending) == 0 {
+		return false, nil
+	}
+
+	targetIndex := -1
+	for i := range pending {
+		if !pending[i].state.Contains(item.FileID) {
+			continue
+		}
+		if targetIndex == -1 || pending[i].task.UpdatedAt.After(pending[targetIndex].task.UpdatedAt) {
+			targetIndex = i
+		}
+	}
+
+	if targetIndex == -1 {
+		for i := range pending {
+			if pending[i].state.Len() >= fullTextMaxFilesPerTask {
+				continue
+			}
+			if targetIndex == -1 || pending[i].task.UpdatedAt.After(pending[targetIndex].task.UpdatedAt) {
+				targetIndex = i
+			}
+		}
+	}
+
+	if targetIndex == -1 {
+		return false, nil
+	}
+
+	for i := range pending {
+		if i == targetIndex {
+			continue
+		}
+		if !pending[i].state.Remove(item.FileID) {
+			continue
+		}
+
+		stateBytes, err := marshalFullTextIndexTaskState(pending[i].state)
+		if err != nil {
+			return false, err
+		}
+
+		updated, err := m.dep.TaskClient().UpdatePrivateState(ctx, pending[i].task, string(stateBytes))
+		if err != nil {
+			return false, err
+		}
+		m.updatePendingTaskStateInRegistry(updated.ID, updated.PrivateState)
+	}
+
+	pending[targetIndex].state.Upsert(item)
+	stateBytes, err := marshalFullTextIndexTaskState(pending[targetIndex].state)
+	if err != nil {
+		return false, err
+	}
+
+	updated, err := m.dep.TaskClient().UpdatePrivateState(ctx, pending[targetIndex].task, string(stateBytes))
+	if err != nil {
+		return false, err
+	}
+	m.updatePendingTaskStateInRegistry(updated.ID, updated.PrivateState)
+	m.l.Debug(
+		"Merged full text reconcile task for file %d into pending task %d with %d file(s).",
+		item.FileID,
+		updated.ID,
+		pending[targetIndex].state.Len(),
+	)
+	return true, nil
+}
+
+func (m *manager) updatePendingTaskStateInRegistry(taskID int, privateState string) {
+	registry := m.dep.TaskRegistry()
+	if registry == nil {
+		return
+	}
+
+	pending, ok := registry.Get(taskID)
+	if !ok {
+		return
+	}
+	pending.UpdateState(privateState)
 }
 
 func (m *manager) processIndexDiff(ctx context.Context, diff *fs.IndexDiff) {
@@ -481,56 +749,24 @@ func (m *manager) processIndexDiff(ctx context.Context, diff *fs.IndexDiff) {
 	}
 
 	for _, update := range diff.IndexToUpdate {
-		t, err := NewFullTextIndexTask(ctx, &update.Uri, update.EntityID, update.FileID, update.OwnerID, m.user)
-		if err != nil {
-			m.l.Warning("Failed to create full text update task: %s", err)
-			continue
-		}
-		if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
-			m.l.Warning("Failed to queue full text update task: %s", err)
-		}
+		m.queueFullTextSync(ctx, &update.Uri, update.FileID, update.OwnerID, update.EntityID)
 	}
 
 	for _, cp := range diff.IndexToCopy {
-		t, err := NewFullTextCopyTask(ctx, &cp.Uri, cp.OriginalFileID, cp.FileID, cp.OwnerID, cp.EntityID, m.user)
-		if err != nil {
-			m.l.Warning("Failed to create full text copy task: %s", err)
-			continue
-		}
-		if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
-			m.l.Warning("Failed to queue full text copy task: %s", err)
-		}
+		m.queueFullTextSync(ctx, &cp.Uri, cp.FileID, cp.OwnerID, cp.EntityID)
 	}
 
 	for _, change := range diff.IndexToChangeOwner {
-		t, err := NewFullTextChangeOwnerTask(ctx, &change.Uri, change.EntityID, change.FileID, change.OriginalOwnerID, change.NewOwnerID, m.user)
-		if err != nil {
-			m.l.Warning("Failed to create full text change owner task: %s", err)
-			continue
-		}
-		if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
-			m.l.Warning("Failed to queue full text change owner task: %s", err)
-		}
+		m.queueFullTextSync(ctx, &change.Uri, change.FileID, change.NewOwnerID, change.EntityID)
 	}
 
 	if len(diff.IndexToDelete) > 0 && m.dep.SettingProvider().FTSEnabled(ctx) {
-		t, err := NewFullTextDeleteTask(ctx, diff.IndexToDelete, m.user)
-		if err != nil {
-			m.l.Warning("Failed to create full text delete task: %s", err)
-			return
-		}
-		if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
-			m.l.Warning("Failed to queue full text delete task: %s", err)
+		for _, fileID := range diff.IndexToDelete {
+			m.queueFullTextDelete(ctx, fileID)
 		}
 	}
 
-	ctx = context.WithoutCancel(ctx)
-	indexer := m.dep.SearchIndexer(ctx)
-	go func() {
-		for _, rename := range diff.IndexToRename {
-			if err := indexer.Rename(ctx, rename.FileID, rename.EntityID, rename.Uri.Name()); err != nil {
-				m.l.Warning("Failed to rename index for file %d: %s", rename.FileID, err)
-			}
-		}
-	}()
+	for _, rename := range diff.IndexToRename {
+		m.queueFullTextSync(ctx, &rename.Uri, rename.FileID, 0, rename.EntityID)
+	}
 }

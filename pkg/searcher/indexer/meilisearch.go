@@ -19,6 +19,21 @@ const (
 	embeddingTemplate = "Chunk #{{doc.chunk_idx}} in a file named '{{doc.file_name}}': {{ doc.text }}"
 )
 
+type meilisearchDocument struct {
+	ID       string                   `json:"id"`
+	FileID   int                      `json:"file_id"`
+	OwnerID  int                      `json:"owner_id"`
+	EntityID int                      `json:"entity_id"`
+	ChunkIdx int                      `json:"chunk_idx"`
+	FileName string                   `json:"file_name"`
+	Text     string                   `json:"text"`
+	Formated *meilisearchFormattedHit `json:"_formatted,omitempty"`
+}
+
+type meilisearchFormattedHit struct {
+	Text string `json:"text"`
+}
+
 // MeilisearchIndexer implements SearchIndexer using Meilisearch.
 type MeilisearchIndexer struct {
 	client    meilisearch.ServiceManager
@@ -51,30 +66,25 @@ func (m *MeilisearchIndexer) IndexReady(ctx context.Context) (bool, error) {
 
 	settings, err := index.GetSettingsWithContext(ctx)
 	if err != nil {
-		// If the index doesn't exist, Meilisearch returns an error.
 		return false, nil
 	}
 
-	// Check filterable attributes.
 	for _, attr := range requiredFilterable {
 		if !slices.Contains(settings.FilterableAttributes, attr) {
 			return false, nil
 		}
 	}
 
-	// Check searchable attributes.
 	for _, attr := range requiredSearchable {
 		if !slices.Contains(settings.SearchableAttributes, attr) {
 			return false, nil
 		}
 	}
 
-	// Check distinct attribute.
 	if settings.DistinctAttribute == nil || *settings.DistinctAttribute != requiredDistinct {
 		return false, nil
 	}
 
-	// Check embedder if embedding is enabled.
 	if m.cfg.EmbeddingEnbaled {
 		if settings.Embedders == nil {
 			return false, nil
@@ -108,8 +118,7 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 		return fmt.Errorf("failed to set searchable attributes: %w", err)
 	}
 
-	_, err = index.UpdateDistinctAttributeWithContext(ctx, "file_id")
-	if err != nil {
+	if _, err := index.UpdateDistinctAttributeWithContext(ctx, "file_id"); err != nil {
 		return fmt.Errorf("failed to set distinct attribute: %w", err)
 	}
 
@@ -138,28 +147,55 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 	return nil
 }
 
-func (m *MeilisearchIndexer) IndexFile(ctx context.Context, ownerID, fileID, entityID int, fileName, text string) error {
-	chunks := ChunkText(text, m.chunkSize)
-	if len(chunks) == 0 {
+func (m *MeilisearchIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
+	if doc == nil {
 		return nil
 	}
 
-	docs := make([]searcher.SearchDocument, 0, len(chunks))
-	for i, chunk := range chunks {
-		docs = append(docs, searcher.SearchDocument{
-			ID:       fmt.Sprintf("%d_%d", fileID, i),
-			FileID:   fileID,
-			OwnerID:  ownerID,
-			EntityID: entityID,
-			ChunkIdx: i,
-			FileName: fileName,
-			Text:     chunk,
-		})
+	if err := m.DeleteByFileIDs(ctx, doc.FileID); err != nil {
+		return err
+	}
+
+	docs := m.buildDocuments(doc)
+	if len(docs) == 0 {
+		return nil
 	}
 
 	index := m.client.Index(indexName)
 	pk := "id"
 	if _, err := index.AddDocumentsWithContext(ctx, docs, &meilisearch.DocumentOptions{PrimaryKey: &pk}); err != nil {
+		return fmt.Errorf("failed to add documents: %w", err)
+	}
+
+	return nil
+}
+
+func (m *MeilisearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*searcher.SearchFileDocument) error {
+	if len(docs) == 0 {
+		return nil
+	}
+
+	ids := make([]int, 0, len(docs))
+	meiliDocs := make([]meilisearchDocument, 0)
+	for _, doc := range docs {
+		if doc == nil {
+			continue
+		}
+		ids = append(ids, doc.FileID)
+		meiliDocs = append(meiliDocs, m.buildDocuments(doc)...)
+	}
+
+	if err := m.DeleteByFileIDs(ctx, ids...); err != nil {
+		return err
+	}
+
+	if len(meiliDocs) == 0 {
+		return nil
+	}
+
+	index := m.client.Index(indexName)
+	pk := "id"
+	if _, err := index.AddDocumentsWithContext(ctx, meiliDocs, &meilisearch.DocumentOptions{PrimaryKey: &pk}); err != nil {
 		return fmt.Errorf("failed to add documents: %w", err)
 	}
 
@@ -180,153 +216,6 @@ func (m *MeilisearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int)
 	if _, err := index.DeleteDocumentsByFilterWithContext(ctx, filter, nil); err != nil {
 		return fmt.Errorf("failed to delete documents by file_ids: %w", err)
 	}
-	return nil
-}
-
-func (m *MeilisearchIndexer) ChangeOwner(ctx context.Context, fileID, oldOwnerID, newOwnerID int) error {
-	index := m.client.Index(indexName)
-	filter := fmt.Sprintf("file_id = %d AND owner_id = %d", fileID, oldOwnerID)
-
-	// Fetch all existing document chunks in batches.
-	const batchSize int64 = 100
-	var allDocs []searcher.SearchDocument
-	for offset := int64(0); ; offset += batchSize {
-		var result meilisearch.DocumentsResult
-		if err := index.GetDocumentsWithContext(ctx, &meilisearch.DocumentsQuery{
-			Filter: filter,
-			Limit:  batchSize,
-			Offset: offset,
-		}, &result); err != nil {
-			return fmt.Errorf("failed to get documents: %w", err)
-		}
-
-		for _, hit := range result.Results {
-			var doc searcher.SearchDocument
-			if err := hit.DecodeInto(&doc); err != nil {
-				m.l.Warning("Failed to decode document during owner change: %s", err)
-				continue
-			}
-			allDocs = append(allDocs, doc)
-		}
-
-		if int64(len(result.Results)) < batchSize {
-			break
-		}
-	}
-
-	if len(allDocs) == 0 {
-		return nil
-	}
-
-	// Update owner_id in place — primary key is {fileID}_{chunkIdx} so it stays the same.
-	for i := range allDocs {
-		allDocs[i].OwnerID = newOwnerID
-	}
-
-	if _, err := index.UpdateDocumentsInBatchesWithContext(ctx, allDocs, 100, nil); err != nil {
-		return fmt.Errorf("failed to update documents with new owner: %w", err)
-	}
-
-	return nil
-}
-
-func (m *MeilisearchIndexer) CopyByFileID(ctx context.Context, srcFileID, dstFileID, dstOwnerID, dstEntityID int) error {
-	index := m.client.Index(indexName)
-	filter := fmt.Sprintf("file_id = %d", srcFileID)
-
-	const batchSize int64 = 100
-	var allDocs []searcher.SearchDocument
-	for offset := int64(0); ; offset += batchSize {
-		var result meilisearch.DocumentsResult
-		if err := index.GetDocumentsWithContext(ctx, &meilisearch.DocumentsQuery{
-			Filter: filter,
-			Limit:  batchSize,
-			Offset: offset,
-		}, &result); err != nil {
-			return fmt.Errorf("failed to get source documents: %w", err)
-		}
-
-		for _, hit := range result.Results {
-			var doc searcher.SearchDocument
-			if err := hit.DecodeInto(&doc); err != nil {
-				m.l.Warning("Failed to decode document during copy: %s", err)
-				continue
-			}
-			allDocs = append(allDocs, doc)
-		}
-
-		if int64(len(result.Results)) < batchSize {
-			break
-		}
-	}
-
-	if len(allDocs) == 0 {
-		return fmt.Errorf("no source documents found for file %d", srcFileID)
-	}
-
-	for i := range allDocs {
-		if allDocs[i].EntityID != dstEntityID {
-			m.l.Warning("Entity id mismatch for file %d, original: %d, destination: %d", srcFileID, allDocs[i].EntityID, dstEntityID)
-			continue
-		}
-
-		allDocs[i].ID = fmt.Sprintf("%d_%d", dstFileID, allDocs[i].ChunkIdx)
-		allDocs[i].FileID = dstFileID
-		allDocs[i].OwnerID = dstOwnerID
-		allDocs[i].EntityID = dstEntityID
-	}
-
-	if len(allDocs) == 0 {
-		return fmt.Errorf("no source documents found for file %d", srcFileID)
-	}
-
-	pk := "id"
-	if _, err := index.AddDocumentsWithContext(ctx, allDocs, &meilisearch.DocumentOptions{PrimaryKey: &pk}); err != nil {
-		return fmt.Errorf("failed to add copied documents: %w", err)
-	}
-
-	return nil
-}
-
-func (m *MeilisearchIndexer) Rename(ctx context.Context, fileID, entityID int, newFileName string) error {
-	index := m.client.Index(indexName)
-	filter := fmt.Sprintf("file_id = %d AND entity_id = %d", fileID, entityID)
-
-	const batchSize int64 = 100
-	var allDocs []searcher.SearchDocument
-	for offset := int64(0); ; offset += batchSize {
-		var result meilisearch.DocumentsResult
-		if err := index.GetDocumentsWithContext(ctx, &meilisearch.DocumentsQuery{
-			Filter: filter,
-			Limit:  batchSize,
-			Offset: offset,
-		}, &result); err != nil {
-			return fmt.Errorf("failed to get documents for rename: %w", err)
-		}
-
-		for _, hit := range result.Results {
-			var doc searcher.SearchDocument
-			if err := hit.DecodeInto(&doc); err != nil {
-				m.l.Warning("Failed to decode document during rename: %s", err)
-				continue
-			}
-			doc.FileName = newFileName
-			allDocs = append(allDocs, doc)
-		}
-
-		if int64(len(result.Results)) < batchSize {
-			break
-		}
-	}
-
-	if len(allDocs) == 0 {
-		return nil
-	}
-
-	if _, err := index.UpdateDocumentsInBatchesWithContext(ctx, allDocs, 100, nil); err != nil {
-		return fmt.Errorf("failed to update documents with new file name: %w", err)
-	}
-
 	return nil
 }
 
@@ -354,7 +243,7 @@ func (m *MeilisearchIndexer) Search(ctx context.Context, ownerID int, query stri
 	results := make([]searcher.SearchResult, 0, len(resp.Hits))
 	seen := make(map[int]struct{})
 	for _, hit := range resp.Hits {
-		var doc searcher.SearchDocument
+		var doc meilisearchDocument
 		if err := hit.DecodeInto(&doc); err != nil {
 			continue
 		}
@@ -364,15 +253,15 @@ func (m *MeilisearchIndexer) Search(ctx context.Context, ownerID int, query stri
 		}
 		seen[doc.FileID] = struct{}{}
 
-		// Extract text from raw JSON for display
 		textStr := doc.Text
-		if doc.Formated != nil {
+		if doc.Formated != nil && doc.Formated.Text != "" {
 			textStr = doc.Formated.Text
 		}
 
 		results = append(results, searcher.SearchResult{
 			FileID:   doc.FileID,
 			OwnerID:  doc.OwnerID,
+			EntityID: doc.EntityID,
 			FileName: doc.FileName,
 			Text:     textStr,
 		})
@@ -391,4 +280,59 @@ func (m *MeilisearchIndexer) DeleteAll(ctx context.Context) error {
 
 func (m *MeilisearchIndexer) Close() error {
 	return nil
+}
+
+func (m *MeilisearchIndexer) buildDocuments(doc *searcher.SearchFileDocument) []meilisearchDocument {
+	searchable := buildSearchableText(doc)
+	chunks := ChunkText(searchable, m.chunkSize)
+	if len(chunks) == 0 {
+		chunks = []string{doc.FileName}
+	}
+
+	docs := make([]meilisearchDocument, 0, len(chunks))
+	for i, chunk := range chunks {
+		docs = append(docs, meilisearchDocument{
+			ID:       fmt.Sprintf("%d_%d", doc.FileID, i),
+			FileID:   doc.FileID,
+			OwnerID:  doc.OwnerID,
+			EntityID: doc.EntityID,
+			ChunkIdx: i,
+			FileName: doc.FileName,
+			Text:     chunk,
+		})
+	}
+
+	return docs
+}
+
+func buildSearchableText(doc *searcher.SearchFileDocument) string {
+	parts := []string{
+		doc.FileName,
+		doc.FileExt,
+		doc.PathText,
+		doc.MetadataText,
+		doc.Content,
+	}
+
+	for _, path := range doc.Paths {
+		parts = append(parts, path.Path, path.Bucket)
+	}
+
+	if doc.LatestVersion != nil {
+		parts = append(parts, doc.LatestVersion.Source, doc.LatestVersion.Bucket, doc.LatestVersion.MimeType)
+	}
+
+	for _, attachment := range doc.Attachments {
+		parts = append(parts, attachment.Name, attachment.Path, attachment.Content, attachment.Bucket)
+	}
+
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			filtered = append(filtered, part)
+		}
+	}
+
+	return strings.Join(filtered, "\n")
 }
