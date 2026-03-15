@@ -1,0 +1,21 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="go build github.com/cloudreve/Cloudreve/v4" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+    <module name="cloudreve" />
+    <working_directory value="$PROJECT_DIR$" />
+    <envs>
+      <env name="CR_CONF_System.Debug" value="true" />
+      <env name="CR_CONF_Database.Type" value="postgres" />
+      <env name="CR_CONF_Database.Host" value="127.0.0.1" />
+      <env name="CR_CONF_Database.Port" value="5432" />
+      <env name="CR_CONF_Database.Name" value="cloudreve" />
+      <env name="CR_CONF_Database.User" value="cloudreve" />
+      <env name="CR_CONF_Database.Password" value="cloudreve" />
+      <env name="CR_CONF_Redis.Server" value="127.0.0.1:6379" />
+    </envs>
+    <kind value="DIRECTORY" />
+    <package value="github.com/cloudreve/Cloudreve/v4" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/main.go" />
+    <method v="2" />
+  </configuration>
+</component>

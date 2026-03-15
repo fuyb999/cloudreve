@@ -14,6 +14,7 @@ import (
 var systemOAuthClientGUIDs = []string{
 	inventory.OAuthClientDesktopGUID,
 	inventory.OAuthClientiOSGUID,
+	inventory.OAuthClientSyncthingGUID,
 }
 
 type (

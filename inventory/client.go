@@ -38,6 +38,9 @@ func InitializeDBClient(l logging.Logger,
 		}
 	} else {
 		l.Info("Database schema is up to date.")
+		if err := migrateOAuthClient(l, client, ctx); err != nil {
+			return nil, fmt.Errorf("failed to ensure default OAuth clients: %w", err)
+		}
 	}
 
 	//createMockData(client, ctx)

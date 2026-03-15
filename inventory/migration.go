@@ -284,7 +284,17 @@ const (
 	OAuthClientiOSSecret          = "1kxOW4IyVOkPlsKCnTwzfHyP8XrbpfaF"
 	OAuthClientiOSName            = "application:setting.iOSApp"
 	OAuthClientiOSRedirectURI     = "/callback/ios"
+	OAuthClientSyncthingGUID      = "5367e9c5-4711-440a-b440-0e1ff8cbb2d6"
+	OAuthClientSyncthingSecret    = "cOdExnJuMTCF7qTNAUPYTRtWa6BlMADw"
+	OAuthClientSyncthingName      = "Syncthing"
 )
+
+var oauthClientSyncthingRedirectURIs = []string{
+	"http://127.0.0.1:8384/rest/noauth/auth/cloudreve/callback",
+	"http://localhost:8384/rest/noauth/auth/cloudreve/callback",
+	"https://127.0.0.1:8384/rest/noauth/auth/cloudreve/callback",
+	"https://localhost:8384/rest/noauth/auth/cloudreve/callback",
+}
 
 func migrateOAuthClient(l logging.Logger, client *ent.Client, ctx context.Context) error {
 	if err := migrateOAuthClientDesktop(l, client, ctx); err != nil {
@@ -293,6 +303,31 @@ func migrateOAuthClient(l logging.Logger, client *ent.Client, ctx context.Contex
 
 	if err := migrateOAuthClientiOS(l, client, ctx); err != nil {
 		return err
+	}
+
+	if err := migrateOAuthClientSyncthing(l, client, ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func migrateOAuthClientSyncthing(l logging.Logger, client *ent.Client, ctx context.Context) error {
+	if _, err := client.OAuthClient.Query().Where(oauthclient.GUID(OAuthClientSyncthingGUID)).First(ctx); err == nil {
+		l.Info("Default OAuth client (GUID=%s) already exists, skip migrating.", OAuthClientSyncthingGUID)
+		return nil
+	}
+
+	if _, err := client.OAuthClient.Create().
+		SetGUID(OAuthClientSyncthingGUID).
+		SetSecret(OAuthClientSyncthingSecret).
+		SetName(OAuthClientSyncthingName).
+		SetRedirectUris(oauthClientSyncthingRedirectURIs).
+		SetScopes([]string{"profile", "email", "openid", "offline_access", "UserInfo.Write", "Workflow.Write", "Files.Write", "Shares.Write"}).
+		SetProps(&types.OAuthClientProps{Description: "Built-in OAuth client for Syncthing.", RefreshTokenTTL: 7776000}).
+		SetIsEnabled(true).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to create default OAuth client: %w", err)
 	}
 
 	return nil
