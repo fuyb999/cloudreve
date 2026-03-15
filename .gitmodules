@@ -1,3 +1,4 @@
 [submodule "assets"]
 	path = assets
 	url = https://github.com/fuyb999/cloudreve-frontend
+	branch = feat/audit-log-ui
