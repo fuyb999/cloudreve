@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
@@ -28,6 +29,7 @@ type EntityQuery struct {
 	withFile          *FileQuery
 	withUser          *UserQuery
 	withStoragePolicy *StoragePolicyQuery
+	withAuditLogs     *AuditLogQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -123,6 +125,28 @@ func (eq *EntityQuery) QueryStoragePolicy() *StoragePolicyQuery {
 			sqlgraph.From(entity.Table, entity.FieldID, selector),
 			sqlgraph.To(storagepolicy.Table, storagepolicy.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, entity.StoragePolicyTable, entity.StoragePolicyColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(eq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryAuditLogs chains the current query on the "audit_logs" edge.
+func (eq *EntityQuery) QueryAuditLogs() *AuditLogQuery {
+	query := (&AuditLogClient{config: eq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := eq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := eq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(entity.Table, entity.FieldID, selector),
+			sqlgraph.To(auditlog.Table, auditlog.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, entity.AuditLogsTable, entity.AuditLogsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(eq.driver.Dialect(), step)
 		return fromU, nil
@@ -325,6 +349,7 @@ func (eq *EntityQuery) Clone() *EntityQuery {
 		withFile:          eq.withFile.Clone(),
 		withUser:          eq.withUser.Clone(),
 		withStoragePolicy: eq.withStoragePolicy.Clone(),
+		withAuditLogs:     eq.withAuditLogs.Clone(),
 		// clone intermediate query.
 		sql:  eq.sql.Clone(),
 		path: eq.path,
@@ -361,6 +386,17 @@ func (eq *EntityQuery) WithStoragePolicy(opts ...func(*StoragePolicyQuery)) *Ent
 		opt(query)
 	}
 	eq.withStoragePolicy = query
+	return eq
+}
+
+// WithAuditLogs tells the query-builder to eager-load the nodes that are connected to
+// the "audit_logs" edge. The optional arguments are used to configure the query builder of the edge.
+func (eq *EntityQuery) WithAuditLogs(opts ...func(*AuditLogQuery)) *EntityQuery {
+	query := (&AuditLogClient{config: eq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	eq.withAuditLogs = query
 	return eq
 }
 
@@ -442,10 +478,11 @@ func (eq *EntityQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Entit
 	var (
 		nodes       = []*Entity{}
 		_spec       = eq.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [4]bool{
 			eq.withFile != nil,
 			eq.withUser != nil,
 			eq.withStoragePolicy != nil,
+			eq.withAuditLogs != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -482,6 +519,13 @@ func (eq *EntityQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Entit
 	if query := eq.withStoragePolicy; query != nil {
 		if err := eq.loadStoragePolicy(ctx, query, nodes, nil,
 			func(n *Entity, e *StoragePolicy) { n.Edges.StoragePolicy = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := eq.withAuditLogs; query != nil {
+		if err := eq.loadAuditLogs(ctx, query, nodes,
+			func(n *Entity) { n.Edges.AuditLogs = []*AuditLog{} },
+			func(n *Entity, e *AuditLog) { n.Edges.AuditLogs = append(n.Edges.AuditLogs, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -604,6 +648,36 @@ func (eq *EntityQuery) loadStoragePolicy(ctx context.Context, query *StoragePoli
 		for i := range nodes {
 			assign(nodes[i], n)
 		}
+	}
+	return nil
+}
+func (eq *EntityQuery) loadAuditLogs(ctx context.Context, query *AuditLogQuery, nodes []*Entity, init func(*Entity), assign func(*Entity, *AuditLog)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*Entity)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(auditlog.FieldEntityID)
+	}
+	query.Where(predicate.AuditLog(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(entity.AuditLogsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.EntityID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "entity_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
@@ -43,6 +44,15 @@ func (s *EntityDownloadService) Serve(c *gin.Context) error {
 
 	isDownload := c.Query(routes.IsDownloadQuery) != ""
 	isThumb := c.Query(routes.IsThumbQuery) != ""
+	_ = audit.Publish(c, &audit.Event{
+		Type:     audit.EntityDownloaded,
+		EntityID: hashid.FromContext(c),
+		Content: map[string]any{
+			"download": isDownload,
+			"thumb":    isThumb,
+			"name":     s.Name,
+		},
+	})
 	entitySource.Serve(c.Writer, c.Request,
 		entitysource.WithSpeedLimit(s.SpeedLimit),
 		entitysource.WithDownload(isDownload),

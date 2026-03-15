@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
@@ -110,6 +111,11 @@ func (m *manager) GetDirectLink(ctx context.Context, urls ...*fs.URI) ([]DirectL
 				File: file,
 				Url:  routes.MasterDirectLink(siteUrl, linkHashID, link.Name).String(),
 			})
+			m.publishAudit(ctx, audit.GetDirectLink, map[string]any{
+				"path":           url.String(),
+				"direct_link_id": linkHashID,
+				"redirected":     true,
+			}, file, target)
 		} else {
 			// Use direct source
 			policy, d, err := m.getEntityPolicyDriver(ctx, target, nil)
@@ -133,6 +139,10 @@ func (m *manager) GetDirectLink(ctx context.Context, urls ...*fs.URI) ([]DirectL
 				File: file,
 				Url:  sourceUrl.Url,
 			})
+			m.publishAudit(ctx, audit.GetDirectLink, map[string]any{
+				"path":       url.String(),
+				"redirected": false,
+			}, file, target)
 		}
 
 	}
@@ -346,14 +356,50 @@ func (m *manager) GetEntitySource(ctx context.Context, entityID int, opts ...fs.
 }
 
 func (l *manager) SetCurrentVersion(ctx context.Context, path *fs.URI, version int) error {
+	file := l.getAuditFile(ctx, path)
 	indexDiff, err := l.fs.VersionControl(ctx, path, version, false)
 
 	l.processIndexDiff(ctx, indexDiff)
+	if err == nil {
+		fileID := 0
+		if file != nil {
+			fileID = file.ID()
+		}
+		if publishErr := audit.Publish(ctx, &audit.Event{
+			Type:     audit.SetCurrentVersion,
+			UserID:   l.user.ID,
+			FileID:   fileID,
+			EntityID: version,
+			Content: map[string]any{
+				"path": path.String(),
+			},
+		}); publishErr != nil {
+			l.l.Warning("Failed to publish audit event %d: %s", audit.SetCurrentVersion, publishErr)
+		}
+	}
 	return err
 }
 
 func (l *manager) DeleteVersion(ctx context.Context, path *fs.URI, version int) error {
+	file := l.getAuditFile(ctx, path)
 	_, err := l.fs.VersionControl(ctx, path, version, true)
+	if err == nil {
+		fileID := 0
+		if file != nil {
+			fileID = file.ID()
+		}
+		if publishErr := audit.Publish(ctx, &audit.Event{
+			Type:     audit.DeleteVersion,
+			UserID:   l.user.ID,
+			FileID:   fileID,
+			EntityID: version,
+			Content: map[string]any{
+				"path": path.String(),
+			},
+		}); publishErr != nil {
+			l.l.Warning("Failed to publish audit event %d: %s", audit.DeleteVersion, publishErr)
+		}
+	}
 	return err
 }
 

@@ -37,3 +37,4 @@ tmp/
 .devcontainer/
 cloudreve
 .DS_Store
+/assets/assets/

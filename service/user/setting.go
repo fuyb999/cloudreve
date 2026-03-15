@@ -15,6 +15,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
@@ -172,6 +173,14 @@ func UpdateUserAvatar(c *gin.Context) error {
 			return serializer.NewError(serializer.CodeDBError, "Failed to update user avatar", err)
 		}
 
+		_ = audit.Publish(c, &audit.Event{
+			Type:   audit.ChangeAvatar,
+			UserID: u.ID,
+			Content: map[string]any{
+				"mode": "gravatar",
+			},
+		})
+
 		return nil
 	}
 
@@ -213,6 +222,14 @@ func updateAvatarFile(ctx context.Context, u *ent.User, contentType string, file
 		return serializer.NewError(serializer.CodeDBError, "Failed to update user avatar", err)
 	}
 
+	_ = audit.Publish(ctx, &audit.Event{
+		Type:   audit.ChangeAvatar,
+		UserID: u.ID,
+		Content: map[string]any{
+			"mode": "file",
+		},
+	})
+
 	return nil
 }
 
@@ -241,9 +258,18 @@ func (s *PatchUserSetting) Patch(c *gin.Context) error {
 	saveSetting := false
 
 	if s.Nick != nil {
+		oldNick := u.Nick
 		if _, err := userClient.UpdateNickname(c, u, *s.Nick); err != nil {
 			return serializer.NewError(serializer.CodeDBError, "Failed to update user nick", err)
 		}
+		_ = audit.Publish(c, &audit.Event{
+			Type:   audit.ChangeNick,
+			UserID: u.ID,
+			Content: map[string]any{
+				"old": oldNick,
+				"new": *s.Nick,
+			},
+		})
 	}
 
 	if s.Language != nil {
@@ -293,6 +319,10 @@ func (s *PatchUserSetting) Patch(c *gin.Context) error {
 		if _, err := userClient.UpdatePassword(c, u, *s.NewPassword); err != nil {
 			return serializer.NewError(serializer.CodeDBError, "Failed to update user password", err)
 		}
+		_ = audit.Publish(c, &audit.Event{
+			Type:   audit.ChangePassword,
+			UserID: u.ID,
+		})
 	}
 
 	if s.TwoFAEnabled != nil {
@@ -314,6 +344,10 @@ func (s *PatchUserSetting) Patch(c *gin.Context) error {
 			if _, err := userClient.UpdateTwoFASecret(c, u, secret.(string)); err != nil {
 				return serializer.NewError(serializer.CodeDBError, "Failed to update user 2FA", err)
 			}
+			_ = audit.Publish(c, &audit.Event{
+				Type:   audit.Enable2FA,
+				UserID: u.ID,
+			})
 
 		} else {
 			if !totp.Validate(*s.TwoFACode, u.TwoFactorSecret) {
@@ -323,6 +357,10 @@ func (s *PatchUserSetting) Patch(c *gin.Context) error {
 			if _, err := userClient.UpdateTwoFASecret(c, u, ""); err != nil {
 				return serializer.NewError(serializer.CodeDBError, "Failed to update user 2FA", err)
 			}
+			_ = audit.Publish(c, &audit.Event{
+				Type:   audit.Disable2FA,
+				UserID: u.ID,
+			})
 
 		}
 	}

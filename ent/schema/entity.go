@@ -45,6 +45,7 @@ func (Entity) Edges() []ent.Edge {
 			Field("storage_policy_entities").
 			Unique().
 			Required(),
+		edge.To("audit_logs", AuditLog.Type),
 	}
 }
 

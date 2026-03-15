@@ -43,6 +43,8 @@ const (
 	EdgeUser = "user"
 	// EdgeStoragePolicy holds the string denoting the storage_policy edge name in mutations.
 	EdgeStoragePolicy = "storage_policy"
+	// EdgeAuditLogs holds the string denoting the audit_logs edge name in mutations.
+	EdgeAuditLogs = "audit_logs"
 	// Table holds the table name of the entity in the database.
 	Table = "entities"
 	// FileTable is the table that holds the file relation/edge. The primary key declared below.
@@ -64,6 +66,13 @@ const (
 	StoragePolicyInverseTable = "storage_policies"
 	// StoragePolicyColumn is the table column denoting the storage_policy relation/edge.
 	StoragePolicyColumn = "storage_policy_entities"
+	// AuditLogsTable is the table that holds the audit_logs relation/edge.
+	AuditLogsTable = "audit_logs"
+	// AuditLogsInverseTable is the table name for the AuditLog entity.
+	// It exists in this package in order to avoid circular dependency with the "auditlog" package.
+	AuditLogsInverseTable = "audit_logs"
+	// AuditLogsColumn is the table column denoting the audit_logs relation/edge.
+	AuditLogsColumn = "entity_id"
 )
 
 // Columns holds all SQL columns for entity fields.
@@ -201,6 +210,20 @@ func ByStoragePolicyField(field string, opts ...sql.OrderTermOption) OrderOption
 		sqlgraph.OrderByNeighborTerms(s, newStoragePolicyStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByAuditLogsCount orders the results by audit_logs count.
+func ByAuditLogsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newAuditLogsStep(), opts...)
+	}
+}
+
+// ByAuditLogs orders the results by audit_logs terms.
+func ByAuditLogs(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newAuditLogsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newFileStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -220,5 +243,12 @@ func newStoragePolicyStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(StoragePolicyInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, StoragePolicyTable, StoragePolicyColumn),
+	)
+}
+func newAuditLogsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(AuditLogsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, AuditLogsTable, AuditLogsColumn),
 	)
 }

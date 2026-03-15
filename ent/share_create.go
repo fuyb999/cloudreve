@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
@@ -179,6 +180,21 @@ func (sc *ShareCreate) SetNillableFileID(id *int) *ShareCreate {
 // SetFile sets the "file" edge to the File entity.
 func (sc *ShareCreate) SetFile(f *File) *ShareCreate {
 	return sc.SetFileID(f.ID)
+}
+
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (sc *ShareCreate) AddAuditLogIDs(ids ...int) *ShareCreate {
+	sc.mutation.AddAuditLogIDs(ids...)
+	return sc
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (sc *ShareCreate) AddAuditLogs(a ...*AuditLog) *ShareCreate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return sc.AddAuditLogIDs(ids...)
 }
 
 // Mutation returns the ShareMutation object of the builder.
@@ -359,6 +375,22 @@ func (sc *ShareCreate) createSpec() (*Share, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.file_shares = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := sc.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec

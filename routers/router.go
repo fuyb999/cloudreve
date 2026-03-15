@@ -965,6 +965,14 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 					// queue.POST("import", controllers.AdminCreateImportTask)
 				}
 
+				event := admin.Group("event")
+				{
+					event.POST("",
+						controllers.FromJSON[adminsvc.AdminListService](adminsvc.AdminListServiceParamsCtx{}),
+						controllers.AdminListAuditLogs,
+					)
+				}
+
 				// 存储策略管理
 				policy := admin.Group("policy")
 				{

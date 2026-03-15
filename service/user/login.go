@@ -8,6 +8,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/email"
@@ -167,6 +168,16 @@ func IssueToken(c *gin.Context) (*BuiltinLoginResponse, error) {
 		return nil, serializer.NewError(serializer.CodeEncryptError, "Failed to issue token pair", err)
 	}
 
+	if err := audit.Publish(c, &audit.Event{
+		Type:   audit.UserLogin,
+		UserID: u.ID,
+		Content: map[string]any{
+			"account": u.Email,
+		},
+	}); err != nil {
+		dep.Logger().Warning("Failed to publish login audit log: %s", err)
+	}
+
 	return &BuiltinLoginResponse{
 		User:  BuildUser(u, dep.HashIDEncoder()),
 		Token: *token,
@@ -183,9 +194,26 @@ type RefreshTokenService struct {
 
 func (s *RefreshTokenService) Refresh(c *gin.Context) (*auth.Token, error) {
 	dep := dependency.FromContext(c)
+	claims, err := dep.TokenAuth().Claims(c, s.RefreshToken)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to issue token pair", err)
+	}
+
 	token, err := dep.TokenAuth().Refresh(c, s.RefreshToken)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to issue token pair", err)
+	}
+
+	if userID, decodeErr := dep.HashIDEncoder().Decode(claims.Subject, hashid.UserID); decodeErr == nil {
+		if publishErr := audit.Publish(c, &audit.Event{
+			Type:   audit.UserTokenRefresh,
+			UserID: userID,
+			Content: map[string]any{
+				"client_id": claims.Audience,
+			},
+		}); publishErr != nil {
+			dep.Logger().Warning("Failed to publish token refresh audit log: %s", publishErr)
+		}
 	}
 
 	return token, nil

@@ -27,6 +27,16 @@ type ListTaskResponse struct {
 	Tasks      []GetTaskResponse            `json:"tasks"`
 }
 
+type ListAuditLogResponse struct {
+	Pagination *inventory.PaginationResults `json:"pagination"`
+	Logs       []GetAuditLogResponse        `json:"logs"`
+}
+
+type GetAuditLogResponse struct {
+	*ent.AuditLog
+	UserHashID string `json:"user_hash_id,omitempty"`
+}
+
 type GetTaskResponse struct {
 	*ent.Task
 	UserHashID string         `json:"user_hash_id,omitempty"`

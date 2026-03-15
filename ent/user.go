@@ -70,9 +70,11 @@ type UserEdges struct {
 	Entities []*Entity `json:"entities,omitempty"`
 	// OauthGrants holds the value of the oauth_grants edge.
 	OauthGrants []*OAuthGrant `json:"oauth_grants,omitempty"`
+	// AuditLogs holds the value of the audit_logs edge.
+	AuditLogs []*AuditLog `json:"audit_logs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [9]bool
+	loadedTypes [10]bool
 }
 
 // GroupOrErr returns the Group value or an error if the edge
@@ -158,6 +160,15 @@ func (e UserEdges) OauthGrantsOrErr() ([]*OAuthGrant, error) {
 		return e.OauthGrants, nil
 	}
 	return nil, &NotLoadedError{edge: "oauth_grants"}
+}
+
+// AuditLogsOrErr returns the AuditLogs value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) AuditLogsOrErr() ([]*AuditLog, error) {
+	if e.loadedTypes[9] {
+		return e.AuditLogs, nil
+	}
+	return nil, &NotLoadedError{edge: "audit_logs"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -327,6 +338,11 @@ func (u *User) QueryOauthGrants() *OAuthGrantQuery {
 	return NewUserClient(u.config).QueryOauthGrants(u)
 }
 
+// QueryAuditLogs queries the "audit_logs" edge of the User entity.
+func (u *User) QueryAuditLogs() *AuditLogQuery {
+	return NewUserClient(u.config).QueryAuditLogs(u)
+}
+
 // Update returns a builder for updating this User.
 // Note that you need to call User.Unwrap() before calling this method if this User
 // was returned from a transaction, and the transaction was committed or rolled back.
@@ -441,6 +457,12 @@ func (e *User) SetEntities(v []*Entity) {
 func (e *User) SetOauthGrants(v []*OAuthGrant) {
 	e.Edges.OauthGrants = v
 	e.Edges.loadedTypes[8] = true
+}
+
+// SetAuditLogs manually set the edge as loaded state.
+func (e *User) SetAuditLogs(v []*AuditLog) {
+	e.Edges.AuditLogs = v
+	e.Edges.loadedTypes[9] = true
 }
 
 // Users is a parsable slice of User.

@@ -7,6 +7,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver/oss"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
@@ -121,12 +122,20 @@ func WebDAVAuth() gin.HandlerFunc {
 		userClient := dep.UserClient()
 		expectedUser, err := userClient.GetActiveByDavAccount(c, username, password)
 		if err != nil {
-			if username == "" {
+			event := &audit.Event{
+				Type: audit.WebdavLoginFailed,
+				Content: map[string]any{
+					"account": username,
+					"reason":  "invalid_credentials",
+				},
+			}
+			if username != "" {
 				if u, err := userClient.GetByEmail(c, username); err == nil {
-					// Try login with known user but incorrect password, record audit log
 					SetUserCtxByUser(c, u)
+					event.UserID = u.ID
 				}
 			}
+			_ = audit.Publish(c, event)
 
 			l.Debug("WebDAVAuth: failed to get user %q with provided credential: %s", username, err)
 			c.Status(http.StatusUnauthorized)
@@ -137,6 +146,14 @@ func WebDAVAuth() gin.HandlerFunc {
 		// Validate dav account
 		accounts, err := expectedUser.Edges.DavAccountsOrErr()
 		if err != nil || len(accounts) == 0 {
+			_ = audit.Publish(c, &audit.Event{
+				Type:   audit.WebdavLoginFailed,
+				UserID: expectedUser.ID,
+				Content: map[string]any{
+					"account": username,
+					"reason":  "account_not_found",
+				},
+			})
 			l.Debug("WebDAVAuth: failed to get user dav accounts %q with provided credential: %s", username, err)
 			c.Status(http.StatusUnauthorized)
 			c.Abort()
@@ -153,6 +170,14 @@ func WebDAVAuth() gin.HandlerFunc {
 		}
 
 		if !group.Permissions.Enabled(int(types.GroupPermissionWebDAV)) {
+			_ = audit.Publish(c, &audit.Event{
+				Type:   audit.WebdavLoginFailed,
+				UserID: expectedUser.ID,
+				Content: map[string]any{
+					"account": username,
+					"reason":  "permission_denied",
+				},
+			})
 			c.Status(http.StatusForbidden)
 			l.Debug("WebDAVAuth: user %q does not have WebDAV permission.", expectedUser.Email)
 			c.Abort()

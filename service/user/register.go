@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/email"
@@ -78,6 +79,16 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 		return serializer.DBErr(c, "Failed to commit user row", err)
 	}
 
+	if err := audit.Publish(c, &audit.Event{
+		Type:   audit.UserSignup,
+		UserID: expectedUser.ID,
+		Content: map[string]any{
+			"account": expectedUser.Email,
+		},
+	}); err != nil {
+		dep.Logger().Warning("Failed to publish signup audit log: %s", err)
+	}
+
 	if isEmailRequired {
 		if err := sendActivationEmail(c, dep, expectedUser); err != nil {
 			return serializer.ErrWithDetails(c, serializer.CodeNotSet, "", err)
@@ -141,6 +152,16 @@ func ActivateUser(c *gin.Context) serializer.Response {
 	activeUser, err := userClient.SetStatus(c, inactiveUser, user.StatusActive)
 	if err != nil {
 		return serializer.DBErr(c, "Failed to update user", err)
+	}
+
+	if err := audit.Publish(c, &audit.Event{
+		Type:   audit.UserActivated,
+		UserID: activeUser.ID,
+		Content: map[string]any{
+			"account": activeUser.Email,
+		},
+	}); err != nil {
+		dep.Logger().Warning("Failed to publish activation audit log: %s", err)
 	}
 
 	util.WithValue(c, inventory.UserCtx{}, activeUser)

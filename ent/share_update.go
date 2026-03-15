@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
@@ -216,6 +217,21 @@ func (su *ShareUpdate) SetFile(f *File) *ShareUpdate {
 	return su.SetFileID(f.ID)
 }
 
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (su *ShareUpdate) AddAuditLogIDs(ids ...int) *ShareUpdate {
+	su.mutation.AddAuditLogIDs(ids...)
+	return su
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (su *ShareUpdate) AddAuditLogs(a ...*AuditLog) *ShareUpdate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return su.AddAuditLogIDs(ids...)
+}
+
 // Mutation returns the ShareMutation object of the builder.
 func (su *ShareUpdate) Mutation() *ShareMutation {
 	return su.mutation
@@ -231,6 +247,27 @@ func (su *ShareUpdate) ClearUser() *ShareUpdate {
 func (su *ShareUpdate) ClearFile() *ShareUpdate {
 	su.mutation.ClearFile()
 	return su
+}
+
+// ClearAuditLogs clears all "audit_logs" edges to the AuditLog entity.
+func (su *ShareUpdate) ClearAuditLogs() *ShareUpdate {
+	su.mutation.ClearAuditLogs()
+	return su
+}
+
+// RemoveAuditLogIDs removes the "audit_logs" edge to AuditLog entities by IDs.
+func (su *ShareUpdate) RemoveAuditLogIDs(ids ...int) *ShareUpdate {
+	su.mutation.RemoveAuditLogIDs(ids...)
+	return su
+}
+
+// RemoveAuditLogs removes "audit_logs" edges to AuditLog entities.
+func (su *ShareUpdate) RemoveAuditLogs(a ...*AuditLog) *ShareUpdate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return su.RemoveAuditLogIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -383,6 +420,51 @@ func (su *ShareUpdate) sqlSave(ctx context.Context) (n int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(file.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if su.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := su.mutation.RemovedAuditLogsIDs(); len(nodes) > 0 && !su.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := su.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -595,6 +677,21 @@ func (suo *ShareUpdateOne) SetFile(f *File) *ShareUpdateOne {
 	return suo.SetFileID(f.ID)
 }
 
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (suo *ShareUpdateOne) AddAuditLogIDs(ids ...int) *ShareUpdateOne {
+	suo.mutation.AddAuditLogIDs(ids...)
+	return suo
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (suo *ShareUpdateOne) AddAuditLogs(a ...*AuditLog) *ShareUpdateOne {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return suo.AddAuditLogIDs(ids...)
+}
+
 // Mutation returns the ShareMutation object of the builder.
 func (suo *ShareUpdateOne) Mutation() *ShareMutation {
 	return suo.mutation
@@ -610,6 +707,27 @@ func (suo *ShareUpdateOne) ClearUser() *ShareUpdateOne {
 func (suo *ShareUpdateOne) ClearFile() *ShareUpdateOne {
 	suo.mutation.ClearFile()
 	return suo
+}
+
+// ClearAuditLogs clears all "audit_logs" edges to the AuditLog entity.
+func (suo *ShareUpdateOne) ClearAuditLogs() *ShareUpdateOne {
+	suo.mutation.ClearAuditLogs()
+	return suo
+}
+
+// RemoveAuditLogIDs removes the "audit_logs" edge to AuditLog entities by IDs.
+func (suo *ShareUpdateOne) RemoveAuditLogIDs(ids ...int) *ShareUpdateOne {
+	suo.mutation.RemoveAuditLogIDs(ids...)
+	return suo
+}
+
+// RemoveAuditLogs removes "audit_logs" edges to AuditLog entities.
+func (suo *ShareUpdateOne) RemoveAuditLogs(a ...*AuditLog) *ShareUpdateOne {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return suo.RemoveAuditLogIDs(ids...)
 }
 
 // Where appends a list predicates to the ShareUpdate builder.
@@ -792,6 +910,51 @@ func (suo *ShareUpdateOne) sqlSave(ctx context.Context) (_node *Share, err error
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(file.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if suo.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := suo.mutation.RemovedAuditLogsIDs(); len(nodes) > 0 && !suo.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := suo.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   share.AuditLogsTable,
+			Columns: []string{share.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

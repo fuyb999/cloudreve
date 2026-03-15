@@ -53,9 +53,11 @@ type ShareEdges struct {
 	User *User `json:"user,omitempty"`
 	// File holds the value of the file edge.
 	File *File `json:"file,omitempty"`
+	// AuditLogs holds the value of the audit_logs edge.
+	AuditLogs []*AuditLog `json:"audit_logs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [3]bool
 }
 
 // UserOrErr returns the User value or an error if the edge
@@ -82,6 +84,15 @@ func (e ShareEdges) FileOrErr() (*File, error) {
 		return e.File, nil
 	}
 	return nil, &NotLoadedError{edge: "file"}
+}
+
+// AuditLogsOrErr returns the AuditLogs value or an error if the edge
+// was not loaded in eager-loading.
+func (e ShareEdges) AuditLogsOrErr() ([]*AuditLog, error) {
+	if e.loadedTypes[2] {
+		return e.AuditLogs, nil
+	}
+	return nil, &NotLoadedError{edge: "audit_logs"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -218,6 +229,11 @@ func (s *Share) QueryFile() *FileQuery {
 	return NewShareClient(s.config).QueryFile(s)
 }
 
+// QueryAuditLogs queries the "audit_logs" edge of the Share entity.
+func (s *Share) QueryAuditLogs() *AuditLogQuery {
+	return NewShareClient(s.config).QueryAuditLogs(s)
+}
+
 // Update returns a builder for updating this Share.
 // Note that you need to call Share.Unwrap() before calling this method if this Share
 // was returned from a transaction, and the transaction was committed or rolled back.
@@ -287,6 +303,12 @@ func (e *Share) SetUser(v *User) {
 func (e *Share) SetFile(v *File) {
 	e.Edges.File = v
 	e.Edges.loadedTypes[1] = true
+}
+
+// SetAuditLogs manually set the edge as loaded state.
+func (e *Share) SetAuditLogs(v []*AuditLog) {
+	e.Edges.AuditLogs = v
+	e.Edges.loadedTypes[2] = true
 }
 
 // Shares is a parsable slice of Share.

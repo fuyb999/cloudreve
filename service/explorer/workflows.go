@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/downloader"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
@@ -214,6 +215,15 @@ func (service *ArchiveWorkflowService) CreateExtractTask(c *gin.Context) (*TaskR
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to queue task", err)
 	}
 
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.ExtractArchive,
+		UserID: user.ID,
+		Content: map[string]any{
+			"from": service.Src[0],
+			"to":   service.Dst,
+		},
+	})
+
 	return BuildTaskResponse(t, nil, hasher), nil
 }
 
@@ -257,6 +267,15 @@ func (service *ArchiveWorkflowService) CreateCompressTask(c *gin.Context) (*Task
 	if err := dep.IoIntenseQueue(c).QueueTask(c, t); err != nil {
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to queue task", err)
 	}
+
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.CreateArchive,
+		UserID: user.ID,
+		Content: map[string]any{
+			"from": service.Src,
+			"to":   service.Dst,
+		},
+	})
 
 	return BuildTaskResponse(t, nil, hasher), nil
 }

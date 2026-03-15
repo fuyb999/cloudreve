@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/directlink"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
@@ -295,6 +296,21 @@ func (fc *FileCreate) AddDirectLinks(d ...*DirectLink) *FileCreate {
 		ids[i] = d[i].ID
 	}
 	return fc.AddDirectLinkIDs(ids...)
+}
+
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (fc *FileCreate) AddAuditLogIDs(ids ...int) *FileCreate {
+	fc.mutation.AddAuditLogIDs(ids...)
+	return fc
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (fc *FileCreate) AddAuditLogs(a ...*AuditLog) *FileCreate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return fc.AddAuditLogIDs(ids...)
 }
 
 // Mutation returns the FileMutation object of the builder.
@@ -590,6 +606,22 @@ func (fc *FileCreate) createSpec() (*File, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(directlink.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := fc.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

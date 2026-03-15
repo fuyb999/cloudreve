@@ -54,6 +54,9 @@ func InitializeDBClient(l logging.Logger,
 	if err := ensureFileExtSupport(ctx, l, client); err != nil {
 		return nil, fmt.Errorf("failed to ensure file_ext support: %w", err)
 	}
+	if err := ensureDefaultSettings(ctx, l, client, "audit_log_enabled_types"); err != nil {
+		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)
+	}
 
 	//createMockData(client, ctx)
 	return client, nil

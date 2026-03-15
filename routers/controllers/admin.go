@@ -95,6 +95,17 @@ func AdminListPolicies(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
+func AdminListAuditLogs(c *gin.Context) {
+	service := ParametersFromContext[*admin.AdminListService](c, admin.AdminListServiceParamsCtx{})
+	res, err := service.AuditLogs(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
 func AdminGetPolicy(c *gin.Context) {
 	service := ParametersFromContext[*admin.SingleStoragePolicyService](c, admin.GetStoragePolicyParamCtx{})
 	res, err := service.Get(c)

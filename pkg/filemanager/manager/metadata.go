@@ -11,6 +11,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
@@ -284,7 +285,21 @@ func (m *manager) PatchMedata(ctx context.Context, path []*fs.URI, data ...fs.Me
 		return err
 	}
 
-	return m.fs.PatchMetadata(ctx, path, data...)
+	if err := m.fs.PatchMetadata(ctx, path, data...); err != nil {
+		return err
+	}
+
+	keys := lo.Map(data, func(item fs.MetadataPatch, _ int) string {
+		return item.Key
+	})
+	for _, item := range path {
+		m.publishAudit(ctx, audit.UpdateMetadata, map[string]any{
+			"path": item.String(),
+			"keys": keys,
+		}, m.getAuditFile(ctx, item), nil)
+	}
+
+	return nil
 }
 
 func (m *manager) validateMetadata(ctx context.Context, data ...fs.MetadataPatch) ([]fs.MetadataPatch, error) {

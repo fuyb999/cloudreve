@@ -12,6 +12,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
@@ -437,6 +438,27 @@ func (m *manager) updateStateless(ctx context.Context, req *fs.UploadRequest, o 
 
 func (m *manager) onNewEntityUploaded(ctx context.Context, session *fs.UploadSession, d driver.Handler, owner int) {
 	if !m.stateless {
+		eventType := audit.EntityUploaded
+		if session.Importing {
+			eventType = audit.FileImported
+		} else if session.Props.EntityType != nil && *session.Props.EntityType == types.EntityTypeLivePhoto {
+			eventType = audit.LivePhotoUploaded
+		}
+
+		if err := audit.Publish(ctx, &audit.Event{
+			Type:     eventType,
+			UserID:   owner,
+			FileID:   session.FileID,
+			EntityID: session.EntityID,
+			Content: map[string]any{
+				"path":      session.Props.Uri.String(),
+				"size":      session.Props.Size,
+				"importing": session.Importing,
+			},
+		}); err != nil {
+			m.l.Warning("Failed to publish audit event %d: %s", eventType, err)
+		}
+
 		// Submit media meta task for new entity
 		m.mediaMetaForNewEntity(ctx, session, d)
 		// Submit full text index task for new entity

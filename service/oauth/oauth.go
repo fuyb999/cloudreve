@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
@@ -116,6 +117,17 @@ func (s *GrantService) Get(c *gin.Context) (*GrantResponse, error) {
 		return nil, serializer.NewError(serializer.CodeCacheOperation, "Failed to store authorization code", err)
 	}
 
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.OAuthGrantCreate,
+		UserID: user.ID,
+		Content: map[string]any{
+			"client_id":      s.ClientID,
+			"redirect_uri":   s.RedirectURI,
+			"scopes":         requestedScopes,
+			"pkce_requested": s.CodeChallenge != "",
+		},
+	})
+
 	return &GrantResponse{
 		Code:  code,
 		State: s.State,
@@ -212,7 +224,14 @@ func (s *ExchangeTokenService) Exchange(c *gin.Context) (*TokenResponse, error) 
 		dep.Logger().Warning("Failed to update grant last used at: %s", err)
 	}
 
-	// 10.
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.OAuthTokenExchange,
+		UserID: user.ID,
+		Content: map[string]any{
+			"client_id": s.ClientID,
+			"scopes":    authCode.Scopes,
+		},
+	})
 
 	// 11. Build response, only include refresh token if offline_access scope is present
 	resp := &TokenResponse{
@@ -254,6 +273,14 @@ func (s *DeleteOAuthGrantService) Delete(c *gin.Context) error {
 	if !deleted {
 		return serializer.NewError(serializer.CodeNotFound, "OAuth grant not found", nil)
 	}
+
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.OAuthGrantRevoke,
+		UserID: user.ID,
+		Content: map[string]any{
+			"client_id": s.AppID,
+		},
+	})
 
 	return nil
 }

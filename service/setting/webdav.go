@@ -6,6 +6,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
@@ -117,6 +118,16 @@ func (service *CreateDavAccountService) Create(c *gin.Context) (*DavAccount, err
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to create dav account", err)
 	}
 
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.WebdavAccountCreate,
+		UserID: user.ID,
+		Content: map[string]any{
+			"account":     account.Name,
+			"account_id":  account.ID,
+			"account_uri": account.URI,
+		},
+	})
+
 	accountRes := BuildDavAccount(account, dep.HashIDEncoder())
 	return &accountRes, nil
 }
@@ -148,6 +159,16 @@ func (service *CreateDavAccountService) Update(c *gin.Context) (*DavAccount, err
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to update dav account", err)
 	}
+
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.WebdavAccountUpdate,
+		UserID: user.ID,
+		Content: map[string]any{
+			"account":     account.Name,
+			"account_id":  account.ID,
+			"account_uri": account.URI,
+		},
+	})
 
 	accountRes := BuildDavAccount(account, dep.HashIDEncoder())
 	return &accountRes, nil
@@ -191,7 +212,7 @@ func DeleteDavAccount(c *gin.Context) error {
 
 	// Find existing account
 	davAccountClient := dep.DavAccountClient()
-	_, err := davAccountClient.GetByIDAndUserID(c, accountId, user.ID)
+	account, err := davAccountClient.GetByIDAndUserID(c, accountId, user.ID)
 	if err != nil {
 		return serializer.NewError(serializer.CodeNotFound, "Account not exist", err)
 	}
@@ -199,6 +220,16 @@ func DeleteDavAccount(c *gin.Context) error {
 	if err := davAccountClient.Delete(c, accountId); err != nil {
 		return serializer.NewError(serializer.CodeDBError, "Failed to delete dav account", err)
 	}
+
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.WebdavAccountDelete,
+		UserID: user.ID,
+		Content: map[string]any{
+			"account":     account.Name,
+			"account_id":  account.ID,
+			"account_uri": account.URI,
+		},
+	})
 
 	return nil
 }

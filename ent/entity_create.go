@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
@@ -184,6 +185,21 @@ func (ec *EntityCreate) SetStoragePolicyID(id int) *EntityCreate {
 // SetStoragePolicy sets the "storage_policy" edge to the StoragePolicy entity.
 func (ec *EntityCreate) SetStoragePolicy(s *StoragePolicy) *EntityCreate {
 	return ec.SetStoragePolicyID(s.ID)
+}
+
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (ec *EntityCreate) AddAuditLogIDs(ids ...int) *EntityCreate {
+	ec.mutation.AddAuditLogIDs(ids...)
+	return ec
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (ec *EntityCreate) AddAuditLogs(a ...*AuditLog) *EntityCreate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return ec.AddAuditLogIDs(ids...)
 }
 
 // Mutation returns the EntityMutation object of the builder.
@@ -388,6 +404,22 @@ func (ec *EntityCreate) createSpec() (*Entity, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.StoragePolicyEntities = nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := ec.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   entity.AuditLogsTable,
+			Columns: []string{entity.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec

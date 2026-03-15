@@ -12,6 +12,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver/local"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
@@ -217,6 +218,11 @@ func (m *manager) generateThumb(ctx context.Context, uri *fs.URI, ext string, es
 		m.l.Debug("GC after thumb generation")
 		runtime.GC()
 	}
+
+	m.publishAudit(ctx, audit.ThumbGenerated, map[string]any{
+		"path": uri.String(),
+		"ext":  ext,
+	}, m.getAuditFile(ctx, uri), thumbEntity)
 
 	return thumbEntity, nil
 }

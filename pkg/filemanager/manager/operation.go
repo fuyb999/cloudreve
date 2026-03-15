@@ -11,6 +11,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/lock"
@@ -134,22 +135,66 @@ func (m *manager) Create(ctx context.Context, path *fs.URI, fileType types.FileT
 		opts = append(opts, dbfs.WithSymbolicLink())
 	}
 
-	return m.fs.Create(ctx, path, fileType, opts...)
+	file, err := m.fs.Create(ctx, path, fileType, opts...)
+	if err == nil {
+		m.publishAudit(ctx, audit.FileCreate, map[string]any{
+			"path": path.String(),
+			"type": fileType,
+			"name": path.Name(),
+		}, file, nil)
+	}
+
+	return file, err
 }
 
 func (m *manager) Rename(ctx context.Context, path *fs.URI, newName string) (fs.File, error) {
+	originalName := path.Name()
 	file, indexDiff, err := m.fs.Rename(ctx, path, newName)
 	m.processIndexDiff(ctx, indexDiff)
+	if err == nil {
+		m.publishAudit(ctx, audit.FileRename, map[string]any{
+			"path":     path.String(),
+			"old_name": originalName,
+			"new_name": newName,
+		}, file, nil)
+	}
 	return file, err
 }
 
 func (m *manager) MoveOrCopy(ctx context.Context, src []*fs.URI, dst *fs.URI, isCopy bool) error {
+	type auditTarget struct {
+		uri  *fs.URI
+		file fs.File
+	}
+
+	targets := make([]auditTarget, 0, len(src))
+	for _, item := range src {
+		targets = append(targets, auditTarget{
+			uri:  item,
+			file: m.getAuditFile(ctx, item),
+		})
+	}
+
 	indexDiff, err := m.fs.MoveOrCopy(ctx, src, dst, isCopy)
 	if err != nil {
 		return err
 	}
 
 	m.processIndexDiff(ctx, indexDiff)
+	for _, target := range targets {
+		content := map[string]any{
+			"from":    target.uri.String(),
+			"to":      dst.String(),
+			"is_copy": isCopy,
+		}
+		if isCopy {
+			m.publishAudit(ctx, audit.CopyFrom, content, target.file, nil)
+			m.publishAudit(ctx, audit.CopyTo, content, target.file, nil)
+			continue
+		}
+
+		m.publishAudit(ctx, audit.MoveTo, content, target.file, nil)
+	}
 	return nil
 }
 
@@ -163,8 +208,25 @@ func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option)
 		opt.Apply(o)
 	}
 
+	targets := make([]fs.File, 0, len(path))
+	for _, item := range path {
+		if file := m.getAuditFile(ctx, item); file != nil {
+			targets = append(targets, file)
+		}
+	}
+
 	if !o.SkipSoftDelete && !o.SysSkipSoftDelete {
-		return m.SoftDelete(ctx, path...)
+		if err := m.SoftDelete(ctx, path...); err != nil {
+			return err
+		}
+
+		for _, file := range targets {
+			m.publishAudit(ctx, audit.MoveToTrash, map[string]any{
+				"path": file.Uri(true).String(),
+				"name": file.DisplayName(),
+			}, file, nil)
+		}
+		return nil
 	}
 
 	staleEntities, indexDiff, err := m.fs.Delete(ctx, path, fs.WithUnlinkOnly(o.UnlinkOnly), fs.WithSysSkipSoftDelete(o.SysSkipSoftDelete))
@@ -191,6 +253,14 @@ func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option)
 	// Process index diff
 	if indexDiff != nil {
 		m.processIndexDiff(ctx, indexDiff)
+	}
+
+	for _, file := range targets {
+		m.publishAudit(ctx, audit.DeleteFile, map[string]any{
+			"path":        file.Uri(true).String(),
+			"name":        file.DisplayName(),
+			"unlink_only": o.UnlinkOnly,
+		}, file, nil)
 	}
 
 	return nil
@@ -336,6 +406,12 @@ func (m *manager) PatchView(ctx context.Context, uri *fs.URI, view *types.Explor
 	if err := m.fs.PatchProps(ctx, uri, patch, isDelete); err != nil {
 		return err
 	}
+
+	target := m.getAuditFile(ctx, uri)
+	m.publishAudit(ctx, audit.UpdateView, map[string]any{
+		"path":       uri.String(),
+		"view_reset": isDelete,
+	}, target, nil)
 
 	return nil
 }

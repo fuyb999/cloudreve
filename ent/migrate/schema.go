@@ -8,6 +8,90 @@ import (
 )
 
 var (
+	// AuditLogsColumns holds the columns for the "audit_logs" table.
+	AuditLogsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "type", Type: field.TypeInt},
+		{Name: "correlation_id", Type: field.TypeString, Nullable: true},
+		{Name: "ip", Type: field.TypeString, Nullable: true},
+		{Name: "content", Type: field.TypeJSON, Nullable: true},
+		{Name: "entity_id", Type: field.TypeInt, Nullable: true},
+		{Name: "file_id", Type: field.TypeInt, Nullable: true},
+		{Name: "share_id", Type: field.TypeInt, Nullable: true},
+		{Name: "user_id", Type: field.TypeInt, Nullable: true},
+	}
+	// AuditLogsTable holds the schema information for the "audit_logs" table.
+	AuditLogsTable = &schema.Table{
+		Name:       "audit_logs",
+		Columns:    AuditLogsColumns,
+		PrimaryKey: []*schema.Column{AuditLogsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "audit_logs_entities_audit_logs",
+				Columns:    []*schema.Column{AuditLogsColumns[8]},
+				RefColumns: []*schema.Column{EntitiesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "audit_logs_files_audit_logs",
+				Columns:    []*schema.Column{AuditLogsColumns[9]},
+				RefColumns: []*schema.Column{FilesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "audit_logs_shares_audit_logs",
+				Columns:    []*schema.Column{AuditLogsColumns[10]},
+				RefColumns: []*schema.Column{SharesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "audit_logs_users_audit_logs",
+				Columns:    []*schema.Column{AuditLogsColumns[11]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "auditlog_type",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[4]},
+			},
+			{
+				Name:    "auditlog_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[1]},
+			},
+			{
+				Name:    "auditlog_correlation_id",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[5]},
+			},
+			{
+				Name:    "auditlog_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[11]},
+			},
+			{
+				Name:    "auditlog_file_id",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[9]},
+			},
+			{
+				Name:    "auditlog_entity_id",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[8]},
+			},
+			{
+				Name:    "auditlog_share_id",
+				Unique:  false,
+				Columns: []*schema.Column{AuditLogsColumns[10]},
+			},
+		},
+	}
 	// DavAccountsColumns holds the columns for the "dav_accounts" table.
 	DavAccountsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -535,6 +619,7 @@ var (
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		AuditLogsTable,
 		DavAccountsTable,
 		DirectLinksTable,
 		EntitiesTable,
@@ -556,6 +641,10 @@ var (
 )
 
 func init() {
+	AuditLogsTable.ForeignKeys[0].RefTable = EntitiesTable
+	AuditLogsTable.ForeignKeys[1].RefTable = FilesTable
+	AuditLogsTable.ForeignKeys[2].RefTable = SharesTable
+	AuditLogsTable.ForeignKeys[3].RefTable = UsersTable
 	DavAccountsTable.ForeignKeys[0].RefTable = UsersTable
 	DirectLinksTable.ForeignKeys[0].RefTable = FilesTable
 	EntitiesTable.ForeignKeys[0].RefTable = StoragePoliciesTable

@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/directlink"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
@@ -364,6 +365,21 @@ func (fu *FileUpdate) AddDirectLinks(d ...*DirectLink) *FileUpdate {
 	return fu.AddDirectLinkIDs(ids...)
 }
 
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (fu *FileUpdate) AddAuditLogIDs(ids ...int) *FileUpdate {
+	fu.mutation.AddAuditLogIDs(ids...)
+	return fu
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (fu *FileUpdate) AddAuditLogs(a ...*AuditLog) *FileUpdate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return fu.AddAuditLogIDs(ids...)
+}
+
 // Mutation returns the FileMutation object of the builder.
 func (fu *FileUpdate) Mutation() *FileMutation {
 	return fu.mutation
@@ -490,6 +506,27 @@ func (fu *FileUpdate) RemoveDirectLinks(d ...*DirectLink) *FileUpdate {
 		ids[i] = d[i].ID
 	}
 	return fu.RemoveDirectLinkIDs(ids...)
+}
+
+// ClearAuditLogs clears all "audit_logs" edges to the AuditLog entity.
+func (fu *FileUpdate) ClearAuditLogs() *FileUpdate {
+	fu.mutation.ClearAuditLogs()
+	return fu
+}
+
+// RemoveAuditLogIDs removes the "audit_logs" edge to AuditLog entities by IDs.
+func (fu *FileUpdate) RemoveAuditLogIDs(ids ...int) *FileUpdate {
+	fu.mutation.RemoveAuditLogIDs(ids...)
+	return fu
+}
+
+// RemoveAuditLogs removes "audit_logs" edges to AuditLog entities.
+func (fu *FileUpdate) RemoveAuditLogs(a ...*AuditLog) *FileUpdate {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return fu.RemoveAuditLogIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -896,6 +933,51 @@ func (fu *FileUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if fu.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := fu.mutation.RemovedAuditLogsIDs(); len(nodes) > 0 && !fu.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := fu.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if n, err = sqlgraph.UpdateNodes(ctx, fu.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{file.Label}
@@ -1245,6 +1327,21 @@ func (fuo *FileUpdateOne) AddDirectLinks(d ...*DirectLink) *FileUpdateOne {
 	return fuo.AddDirectLinkIDs(ids...)
 }
 
+// AddAuditLogIDs adds the "audit_logs" edge to the AuditLog entity by IDs.
+func (fuo *FileUpdateOne) AddAuditLogIDs(ids ...int) *FileUpdateOne {
+	fuo.mutation.AddAuditLogIDs(ids...)
+	return fuo
+}
+
+// AddAuditLogs adds the "audit_logs" edges to the AuditLog entity.
+func (fuo *FileUpdateOne) AddAuditLogs(a ...*AuditLog) *FileUpdateOne {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return fuo.AddAuditLogIDs(ids...)
+}
+
 // Mutation returns the FileMutation object of the builder.
 func (fuo *FileUpdateOne) Mutation() *FileMutation {
 	return fuo.mutation
@@ -1371,6 +1468,27 @@ func (fuo *FileUpdateOne) RemoveDirectLinks(d ...*DirectLink) *FileUpdateOne {
 		ids[i] = d[i].ID
 	}
 	return fuo.RemoveDirectLinkIDs(ids...)
+}
+
+// ClearAuditLogs clears all "audit_logs" edges to the AuditLog entity.
+func (fuo *FileUpdateOne) ClearAuditLogs() *FileUpdateOne {
+	fuo.mutation.ClearAuditLogs()
+	return fuo
+}
+
+// RemoveAuditLogIDs removes the "audit_logs" edge to AuditLog entities by IDs.
+func (fuo *FileUpdateOne) RemoveAuditLogIDs(ids ...int) *FileUpdateOne {
+	fuo.mutation.RemoveAuditLogIDs(ids...)
+	return fuo
+}
+
+// RemoveAuditLogs removes "audit_logs" edges to AuditLog entities.
+func (fuo *FileUpdateOne) RemoveAuditLogs(a ...*AuditLog) *FileUpdateOne {
+	ids := make([]int, len(a))
+	for i := range a {
+		ids[i] = a[i].ID
+	}
+	return fuo.RemoveAuditLogIDs(ids...)
 }
 
 // Where appends a list predicates to the FileUpdate builder.
@@ -1800,6 +1918,51 @@ func (fuo *FileUpdateOne) sqlSave(ctx context.Context) (_node *File, err error) 
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(directlink.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if fuo.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := fuo.mutation.RemovedAuditLogsIDs(); len(nodes) > 0 && !fuo.mutation.AuditLogsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := fuo.mutation.AuditLogsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   file.AuditLogsTable,
+			Columns: []string{file.AuditLogsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(auditlog.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

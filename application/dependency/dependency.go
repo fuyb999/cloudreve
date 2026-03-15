@@ -90,6 +90,8 @@ type Dep interface {
 	DavAccountClient() inventory.DavAccountClient
 	// DirectLinkClient Creates a new inventory.DirectLinkClient instance for access DB direct link store.
 	DirectLinkClient() inventory.DirectLinkClient
+	// AuditLogClient Creates a new inventory.AuditLogClient instance for access DB audit log store.
+	AuditLogClient() inventory.AuditLogClient
 	// OAuthClientClient Creates a new inventory.OAuthClientClient instance for access DB OAuth client store.
 	OAuthClientClient() inventory.OAuthClientClient
 	// HashIDEncoder Get a singleton hashid.Encoder instance for encoding/decoding hashids.
@@ -168,6 +170,7 @@ type dependency struct {
 	nodeClient            inventory.NodeClient
 	davAccountClient      inventory.DavAccountClient
 	directLinkClient      inventory.DirectLinkClient
+	auditLogClient        inventory.AuditLogClient
 	fsEventClient         inventory.FsEventClient
 	oAuthClient           inventory.OAuthClientClient
 	emailClient           email.Driver
@@ -546,7 +549,7 @@ func (d *dependency) EmailClient(ctx context.Context) email.Driver {
 		if d.emailClient != nil {
 			d.emailClient.Close()
 		}
-		d.emailClient = email.NewSMTPPool(d.SettingProvider(), d.Logger())
+		d.emailClient = email.NewAuditedDriver(email.NewSMTPPool(d.SettingProvider(), d.Logger()), d.Logger())
 	}
 
 	return d.emailClient
@@ -834,6 +837,14 @@ func (d *dependency) DirectLinkClient() inventory.DirectLinkClient {
 	}
 
 	return inventory.NewDirectLinkClient(d.DBClient(), d.ConfigProvider().Database().Type, d.HashIDEncoder())
+}
+
+func (d *dependency) AuditLogClient() inventory.AuditLogClient {
+	if d.auditLogClient != nil {
+		return d.auditLogClient
+	}
+
+	return inventory.NewAuditLogClient(d.DBClient(), d.ConfigProvider().Database().Type)
 }
 
 func (d *dependency) HashIDEncoder() hashid.Encoder {

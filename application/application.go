@@ -13,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/crontab"
@@ -82,6 +83,7 @@ func (s *server) Start() error {
 	// TODO: make sure redis is connected in dep before user traffic.
 	if s.config.System().Mode == conf.MasterMode {
 		s.dbClient = s.dep.DBClient()
+		audit.SetDefault(audit.NewManager(s.dep.AuditLogClient(), s.dep.SettingProvider(), s.logger))
 		// TODO: make sure all dep is initialized before server start.
 		s.dep.LockSystem()
 		s.dep.UAParser()
@@ -119,6 +121,10 @@ func (s *server) Start() error {
 		// Start node pool
 		if _, err := s.dep.NodePool(context.Background()); err != nil {
 			return err
+		}
+
+		if err := audit.Publish(context.Background(), &audit.Event{Type: audit.ServerStart}); err != nil {
+			s.logger.Warning("Failed to write startup audit log: %s", err)
 		}
 	} else {
 		s.dep.SlaveQueue(context.Background()).Start()
@@ -195,6 +201,7 @@ func (s *server) Close() {
 	}
 
 	s.dep.EventHub().Close()
+	audit.CloseDefault()
 
 	// Shutdown http server
 	if s.server != nil {

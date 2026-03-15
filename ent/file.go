@@ -71,9 +71,11 @@ type FileEdges struct {
 	Shares []*Share `json:"shares,omitempty"`
 	// DirectLinks holds the value of the direct_links edge.
 	DirectLinks []*DirectLink `json:"direct_links,omitempty"`
+	// AuditLogs holds the value of the audit_logs edge.
+	AuditLogs []*AuditLog `json:"audit_logs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [8]bool
+	loadedTypes [9]bool
 }
 
 // OwnerOrErr returns the Owner value or an error if the edge
@@ -158,6 +160,15 @@ func (e FileEdges) DirectLinksOrErr() ([]*DirectLink, error) {
 		return e.DirectLinks, nil
 	}
 	return nil, &NotLoadedError{edge: "direct_links"}
+}
+
+// AuditLogsOrErr returns the AuditLogs value or an error if the edge
+// was not loaded in eager-loading.
+func (e FileEdges) AuditLogsOrErr() ([]*AuditLog, error) {
+	if e.loadedTypes[8] {
+		return e.AuditLogs, nil
+	}
+	return nil, &NotLoadedError{edge: "audit_logs"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -329,6 +340,11 @@ func (f *File) QueryDirectLinks() *DirectLinkQuery {
 	return NewFileClient(f.config).QueryDirectLinks(f)
 }
 
+// QueryAuditLogs queries the "audit_logs" edge of the File entity.
+func (f *File) QueryAuditLogs() *AuditLogQuery {
+	return NewFileClient(f.config).QueryAuditLogs(f)
+}
+
 // Update returns a builder for updating this File.
 // Note that you need to call File.Unwrap() before calling this method if this File
 // was returned from a transaction, and the transaction was committed or rolled back.
@@ -440,6 +456,12 @@ func (e *File) SetShares(v []*Share) {
 func (e *File) SetDirectLinks(v []*DirectLink) {
 	e.Edges.DirectLinks = v
 	e.Edges.loadedTypes[7] = true
+}
+
+// SetAuditLogs manually set the edge as loaded state.
+func (e *File) SetAuditLogs(v []*AuditLog) {
+	e.Edges.AuditLogs = v
+	e.Edges.loadedTypes[8] = true
 }
 
 // Files is a parsable slice of File.

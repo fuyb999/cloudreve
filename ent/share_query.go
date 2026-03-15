@@ -4,12 +4,14 @@ package ent
 
 import (
 	"context"
+	"database/sql/driver"
 	"fmt"
 	"math"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/ent/share"
@@ -19,13 +21,14 @@ import (
 // ShareQuery is the builder for querying Share entities.
 type ShareQuery struct {
 	config
-	ctx        *QueryContext
-	order      []share.OrderOption
-	inters     []Interceptor
-	predicates []predicate.Share
-	withUser   *UserQuery
-	withFile   *FileQuery
-	withFKs    bool
+	ctx           *QueryContext
+	order         []share.OrderOption
+	inters        []Interceptor
+	predicates    []predicate.Share
+	withUser      *UserQuery
+	withFile      *FileQuery
+	withAuditLogs *AuditLogQuery
+	withFKs       bool
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -99,6 +102,28 @@ func (sq *ShareQuery) QueryFile() *FileQuery {
 			sqlgraph.From(share.Table, share.FieldID, selector),
 			sqlgraph.To(file.Table, file.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, share.FileTable, share.FileColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(sq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryAuditLogs chains the current query on the "audit_logs" edge.
+func (sq *ShareQuery) QueryAuditLogs() *AuditLogQuery {
+	query := (&AuditLogClient{config: sq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := sq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := sq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(share.Table, share.FieldID, selector),
+			sqlgraph.To(auditlog.Table, auditlog.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, share.AuditLogsTable, share.AuditLogsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(sq.driver.Dialect(), step)
 		return fromU, nil
@@ -293,13 +318,14 @@ func (sq *ShareQuery) Clone() *ShareQuery {
 		return nil
 	}
 	return &ShareQuery{
-		config:     sq.config,
-		ctx:        sq.ctx.Clone(),
-		order:      append([]share.OrderOption{}, sq.order...),
-		inters:     append([]Interceptor{}, sq.inters...),
-		predicates: append([]predicate.Share{}, sq.predicates...),
-		withUser:   sq.withUser.Clone(),
-		withFile:   sq.withFile.Clone(),
+		config:        sq.config,
+		ctx:           sq.ctx.Clone(),
+		order:         append([]share.OrderOption{}, sq.order...),
+		inters:        append([]Interceptor{}, sq.inters...),
+		predicates:    append([]predicate.Share{}, sq.predicates...),
+		withUser:      sq.withUser.Clone(),
+		withFile:      sq.withFile.Clone(),
+		withAuditLogs: sq.withAuditLogs.Clone(),
 		// clone intermediate query.
 		sql:  sq.sql.Clone(),
 		path: sq.path,
@@ -325,6 +351,17 @@ func (sq *ShareQuery) WithFile(opts ...func(*FileQuery)) *ShareQuery {
 		opt(query)
 	}
 	sq.withFile = query
+	return sq
+}
+
+// WithAuditLogs tells the query-builder to eager-load the nodes that are connected to
+// the "audit_logs" edge. The optional arguments are used to configure the query builder of the edge.
+func (sq *ShareQuery) WithAuditLogs(opts ...func(*AuditLogQuery)) *ShareQuery {
+	query := (&AuditLogClient{config: sq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	sq.withAuditLogs = query
 	return sq
 }
 
@@ -407,9 +444,10 @@ func (sq *ShareQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Share,
 		nodes       = []*Share{}
 		withFKs     = sq.withFKs
 		_spec       = sq.querySpec()
-		loadedTypes = [2]bool{
+		loadedTypes = [3]bool{
 			sq.withUser != nil,
 			sq.withFile != nil,
+			sq.withAuditLogs != nil,
 		}
 	)
 	if sq.withUser != nil || sq.withFile != nil {
@@ -445,6 +483,13 @@ func (sq *ShareQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Share,
 	if query := sq.withFile; query != nil {
 		if err := sq.loadFile(ctx, query, nodes, nil,
 			func(n *Share, e *File) { n.Edges.File = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := sq.withAuditLogs; query != nil {
+		if err := sq.loadAuditLogs(ctx, query, nodes,
+			func(n *Share) { n.Edges.AuditLogs = []*AuditLog{} },
+			func(n *Share, e *AuditLog) { n.Edges.AuditLogs = append(n.Edges.AuditLogs, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -512,6 +557,36 @@ func (sq *ShareQuery) loadFile(ctx context.Context, query *FileQuery, nodes []*S
 		for i := range nodes {
 			assign(nodes[i], n)
 		}
+	}
+	return nil
+}
+func (sq *ShareQuery) loadAuditLogs(ctx context.Context, query *AuditLogQuery, nodes []*Share, init func(*Share), assign func(*Share, *AuditLog)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*Share)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(auditlog.FieldShareID)
+	}
+	query.Where(predicate.AuditLog(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(share.AuditLogsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ShareID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "share_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
 	}
 	return nil
 }

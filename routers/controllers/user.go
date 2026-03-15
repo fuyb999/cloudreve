@@ -4,6 +4,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -77,6 +78,18 @@ func UserLoginValidation(c *gin.Context) {
 	service := ParametersFromContext[*user.UserLoginService](c, user.LoginParameterCtx{})
 	expectedUser, twoFaSession, err := service.Login(c)
 	if err != nil {
+		dep := dependency.FromContext(c)
+		event := &audit.Event{
+			Type: audit.UserLoginFailed,
+			Content: map[string]any{
+				"account": service.UserName,
+				"reason":  err.Error(),
+			},
+		}
+		if existingUser, getErr := dep.UserClient().GetByEmail(c, service.UserName); getErr == nil {
+			event.UserID = existingUser.ID
+		}
+		_ = audit.Publish(c, event)
 		c.JSON(200, serializer.Err(c, err))
 		c.Abort()
 		return

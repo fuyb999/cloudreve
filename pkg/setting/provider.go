@@ -222,6 +222,10 @@ type (
 		EventHubEnabled(ctx context.Context) bool
 		// EventHubDebounceDelay returns the debounce delay of event hub.
 		EventHubDebounceDelay(ctx context.Context) time.Duration
+		// AuditLogEnabledTypes returns enabled audit event types.
+		AuditLogEnabledTypes(ctx context.Context) []int
+		// AuditLogEnabled returns true if audit log event type is enabled.
+		AuditLogEnabled(ctx context.Context, eventType int) bool
 		// FTSEnabled returns true if full-text search is enabled.
 		FTSEnabled(ctx context.Context) bool
 		// FTSIndexType returns the full-text search index type.
@@ -621,6 +625,30 @@ func (s *settingProvider) EventHubDebounceDelay(ctx context.Context) time.Durati
 
 func (s *settingProvider) EventHubEnabled(ctx context.Context) bool {
 	return s.getBoolean(ctx, "fs_event_push_enabled", true)
+}
+
+func (s *settingProvider) AuditLogEnabledTypes(ctx context.Context) []int {
+	raw := s.getString(ctx, "audit_log_enabled_types", "[]")
+	if raw == "" {
+		return []int{}
+	}
+
+	res := make([]int, 0, 8)
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		return []int{}
+	}
+
+	return res
+}
+
+func (s *settingProvider) AuditLogEnabled(ctx context.Context, eventType int) bool {
+	for _, enabledType := range s.AuditLogEnabledTypes(ctx) {
+		if enabledType == eventType {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *settingProvider) FTSEnabled(ctx context.Context) bool {

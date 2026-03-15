@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
@@ -141,6 +142,15 @@ func DeleteDirectLink(c *gin.Context) error {
 	if err := linkClient.Delete(c, link.ID); err != nil {
 		return serializer.NewError(serializer.CodeDBError, "Failed to delete direct link", err)
 	}
+
+	_ = audit.Publish(c, &audit.Event{
+		Type:   audit.DeleteDirectLink,
+		UserID: user.ID,
+		FileID: link.Edges.File.ID,
+		Content: map[string]any{
+			"direct_link_id": hashid.EncodeSourceLinkID(dep.HashIDEncoder(), link.ID),
+		},
+	})
 
 	return nil
 }
