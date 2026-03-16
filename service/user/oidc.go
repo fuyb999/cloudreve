@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -53,7 +54,7 @@ type (
 		Code  string `json:"code" binding:"required"`
 		State string `json:"state" binding:"required"`
 	}
-	// OIDCExchangeResponse 返回 Cloudreve 本地用户信息和本地签发的 token。
+	// OIDCExchangeResponse 返回 Cloudreve 本地影子用户和上游统一认证中心签发的 token。
 	OIDCExchangeResponse struct {
 		User       User       `json:"user"`
 		Token      auth.Token `json:"token"`
@@ -62,28 +63,38 @@ type (
 )
 
 type oidcDiscovery struct {
-	Issuer           string `json:"issuer"`
-	TokenEndpoint    string `json:"token_endpoint"`
-	UserinfoEndpoint string `json:"userinfo_endpoint"`
+	Issuer                string `json:"issuer"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	UserinfoEndpoint      string `json:"userinfo_endpoint"`
+	JWKSURI               string `json:"jwks_uri"`
+	RevocationEndpoint    string `json:"revocation_endpoint"`
+	IntrospectionEndpoint string `json:"introspection_endpoint"`
+	EndSessionEndpoint    string `json:"end_session_endpoint"`
 }
 
 type oidcTokenPayload struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-	Scope        string `json:"scope"`
-	IDToken      string `json:"id_token"`
+	AccessToken      string `json:"access_token"`
+	RefreshToken     string `json:"refresh_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int64  `json:"expires_in"`
+	RefreshExpiresIn int64  `json:"refresh_expires_in"`
+	Scope            string `json:"scope"`
+	IDToken          string `json:"id_token"`
 }
 
 type oidcUserinfoPayload struct {
-	ID       any    `json:"id"`
-	Username string `json:"username"`
-	Nickname string `json:"nickname"`
-	Email    string `json:"email"`
-	Mobile   string `json:"mobile"`
-	Avatar   string `json:"avatar"`
-	Dept     *struct {
+	ID                any    `json:"id"`
+	Sub               string `json:"sub"`
+	Username          string `json:"username"`
+	PreferredUsername string `json:"preferred_username"`
+	Nickname          string `json:"nickname"`
+	Name              string `json:"name"`
+	Email             string `json:"email"`
+	Mobile            string `json:"mobile"`
+	Avatar            string `json:"avatar"`
+	Picture           string `json:"picture"`
+	Dept              *struct {
 		ID   any    `json:"id"`
 		Name string `json:"name"`
 	} `json:"dept"`
@@ -93,6 +104,11 @@ type oidcEnvelope[T any] struct {
 	Code int    `json:"code"`
 	Data T      `json:"data"`
 	Msg  string `json:"msg"`
+}
+
+type oidcStatePayload struct {
+	Next         string `json:"next"`
+	CodeVerifier string `json:"code_verifier"`
 }
 
 // oidcIdentityProfile 把第三方平台返回的身份字段归一化，后续仅围绕这个结构同步本地影子用户。
@@ -129,12 +145,20 @@ func (service *OIDCPrepareService) Prepare(c *gin.Context) (*OIDCPrepareResponse
 
 	state := util.RandStringRunesCrypto(32)
 	next := sanitizeOIDCRedirectTarget(service.Next)
+	codeVerifier := util.RandStringRunesCrypto(64)
 	// state 只保存短期登录上下文，不把跳转目标直接暴露给前端拼接。
-	if err := dep.KV().Set(oidcStateKey(state), next, oidcStateTTL); err != nil {
+	statePayload, err := json.Marshal(&oidcStatePayload{
+		Next:         next,
+		CodeVerifier: codeVerifier,
+	})
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeInternalSetting, "Failed to encode OIDC login session", err)
+	}
+	if err := dep.KV().Set(oidcStateKey(state), string(statePayload), oidcStateTTL); err != nil {
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "Failed to create OIDC login session", err)
 	}
 
-	redirectURL, err := buildOIDCRedirectURL(oidcSetting, discovery, state, oidcSPACallbackURL(dep.SettingProvider().SiteURL(c)))
+	redirectURL, err := buildOIDCRedirectURL(oidcSetting, discovery, state, codeVerifier, oidcSPACallbackURL(dep.SettingProvider().SiteURL(c)))
 	if err != nil {
 		_ = dep.KV().Delete("", oidcStateKey(state))
 		return nil, err
@@ -146,7 +170,7 @@ func (service *OIDCPrepareService) Prepare(c *gin.Context) (*OIDCPrepareResponse
 	}, nil
 }
 
-// Exchange 用授权码换取远端 access token，再同步/创建本地影子用户并签发 Cloudreve token。
+// Exchange 用授权码换取上游 access token，再同步/创建本地影子用户并把 provider token 直接返回给前端。
 func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeResponse, error) {
 	dep := dependency.FromContext(c)
 	oidcSetting := dep.SettingProvider().OIDC(c)
@@ -154,12 +178,17 @@ func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeRespo
 		return nil, serializer.NewError(serializer.CodeFeatureNotEnabled, "OIDC sign-in is disabled", nil)
 	}
 
-	nextRaw, ok := dep.KV().Get(oidcStateKey(service.State))
+	stateRaw, ok := dep.KV().Get(oidcStateKey(service.State))
 	if !ok {
 		return nil, serializer.NewError(serializer.CodeLoginSessionNotExist, "OIDC login session not found or expired", nil)
 	}
 	// state 只允许消费一次，避免授权码回放。
 	_ = dep.KV().Delete("", oidcStateKey(service.State))
+
+	statePayload, err := parseOIDCStatePayload(stateRaw)
+	if err != nil {
+		return nil, err
+	}
 
 	discovery, err := fetchOIDCDiscovery(c, dep, oidcSetting)
 	if err != nil {
@@ -167,7 +196,7 @@ func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeRespo
 	}
 
 	callbackURL := oidcSPACallbackURL(dep.SettingProvider().SiteURL(c))
-	tokenPayload, err := exchangeOIDCCode(c, dep, oidcSetting, discovery, callbackURL, service)
+	tokenPayload, err := exchangeOIDCCode(c, dep, oidcSetting, discovery, callbackURL, statePayload.CodeVerifier, service)
 	if err != nil {
 		return nil, err
 	}
@@ -187,18 +216,33 @@ func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeRespo
 		return nil, err
 	}
 
-	// 这里仍旧签发 Cloudreve 本地 token，后续请求直接本地验签，不必每次远端 introspection。
-	util.WithValue(c, inventory.UserCtx{}, loginUser)
-	loginResp, err := IssueToken(c)
-	if err != nil {
+	accessExpiresAt := time.Now().Add(time.Duration(tokenPayload.ExpiresIn) * time.Second).Unix()
+	issuedAt := extractJWTIssuedAt(tokenPayload.IDToken)
+	if issuedAt == 0 {
+		issuedAt = time.Now().Unix()
+	}
+	if isOIDCLogoutAfter(getOIDCSubjectLogoutAt(c, dep, profile.Issuer, profile.Subject), issuedAt) {
+		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token has been logged out", nil)
+	}
+	if err := cacheOIDCAccessToken(c, dep, tokenPayload.AccessToken, &oidcAccessTokenCacheEntry{
+		LocalUserID: loginUser.ID,
+		Scopes:      normalizeOIDCScopes(tokenPayload.Scope, nil),
+		ExpiresAt:   accessExpiresAt,
+		IssuedAt:    issuedAt,
+		Issuer:      profile.Issuer,
+		Subject:     profile.Subject,
+	}); err != nil {
+		dep.Logger().Warning("Failed to warm OIDC access token cache: %s", err)
+	}
+
+	if err := afterLoginSuccess(c, loginUser); err != nil {
 		return nil, err
 	}
 
-	next, _ := nextRaw.(string)
 	return &OIDCExchangeResponse{
-		User:       loginResp.User,
-		Token:      loginResp.Token,
-		RedirectTo: sanitizeOIDCRedirectTarget(next),
+		User:       BuildUser(loginUser, dep.HashIDEncoder()),
+		Token:      buildProviderToken(tokenPayload),
+		RedirectTo: sanitizeOIDCRedirectTarget(statePayload.Next),
 	}, nil
 }
 
@@ -226,16 +270,19 @@ func fetchOIDCDiscovery(c *gin.Context, dep dependency.Dep, cfg *setting.OIDCSet
 }
 
 // buildOIDCRedirectURL 生成跳到统一认证前端入口的地址。
-// 第一版按 Yudao 的 /sso 页面约定拼参数，而不是直接拼标准 authorize URL。
-func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, state string, callbackURL string) (string, error) {
-	ssoURL := strings.TrimSpace(cfg.SSOURL)
-	if ssoURL == "" {
-		ssoURL = strings.TrimRight(discovery.Issuer, "/") + "/sso"
+// 优先支持标准 authorization_endpoint；如果手动配置了 SSOURL，则仍允许使用第三方前端入口页。
+func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, state string, codeVerifier string, callbackURL string) (string, error) {
+	redirectURL := strings.TrimSpace(cfg.SSOURL)
+	if redirectURL == "" {
+		redirectURL = discovery.AuthorizationEndpoint
+	}
+	if redirectURL == "" {
+		redirectURL = strings.TrimRight(discovery.Issuer, "/") + "/sso"
 	}
 
-	parsed, err := url.Parse(ssoURL)
+	parsed, err := url.Parse(redirectURL)
 	if err != nil {
-		return "", serializer.NewError(serializer.CodeInternalSetting, "Invalid OIDC SSO entry URL", err)
+		return "", serializer.NewError(serializer.CodeInternalSetting, "Invalid OIDC authorization URL", err)
 	}
 
 	scope := strings.TrimSpace(cfg.Scope)
@@ -249,18 +296,25 @@ func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, st
 	query.Set("redirect_uri", callbackURL)
 	query.Set("state", state)
 	query.Set("scope", scope)
+	if codeVerifier != "" {
+		query.Set("code_challenge", oidcCodeChallenge(codeVerifier))
+		query.Set("code_challenge_method", "S256")
+	}
 	parsed.RawQuery = query.Encode()
 
 	return parsed.String(), nil
 }
 
-// exchangeOIDCCode 使用授权码换取 access token。这里兼容 Yudao 当前 `code/data/msg` 包装格式。
-func exchangeOIDCCode(c *gin.Context, dep dependency.Dep, cfg *setting.OIDCSetting, discovery *oidcDiscovery, callbackURL string, service *OIDCExchangeService) (*oidcTokenPayload, error) {
+// exchangeOIDCCode 使用授权码换取 access token。兼容标准 OIDC 响应和 Yudao 的 CommonResult 包装。
+func exchangeOIDCCode(c *gin.Context, dep dependency.Dep, cfg *setting.OIDCSetting, discovery *oidcDiscovery, callbackURL string, codeVerifier string, service *OIDCExchangeService) (*oidcTokenPayload, error) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", service.Code)
 	form.Set("redirect_uri", callbackURL)
 	form.Set("state", service.State)
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
+	}
 
 	header := http.Header{}
 	header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -271,24 +325,16 @@ func exchangeOIDCCode(c *gin.Context, dep dependency.Dep, cfg *setting.OIDCSetti
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to exchange OIDC authorization code", err)
 	}
 
-	var envelope oidcEnvelope[oidcTokenPayload]
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	tokenPayload, err := parseOIDCPayload[oidcTokenPayload](body)
+	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to parse OIDC token response", err)
 	}
 
-	if envelope.Code != 0 {
-		msg := envelope.Msg
-		if msg == "" {
-			msg = "OIDC token endpoint rejected the request"
-		}
-		return nil, serializer.NewError(serializer.CodeCredentialInvalid, msg, nil)
-	}
-
-	if envelope.Data.AccessToken == "" {
+	if tokenPayload.AccessToken == "" {
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token is empty", nil)
 	}
 
-	return &envelope.Data, nil
+	return tokenPayload, nil
 }
 
 // fetchOIDCUserinfo 使用 access token 拉取外部用户资料。
@@ -301,20 +347,12 @@ func fetchOIDCUserinfo(c *gin.Context, dep dependency.Dep, discovery *oidcDiscov
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to load OIDC userinfo", err)
 	}
 
-	var envelope oidcEnvelope[oidcUserinfoPayload]
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	payload, err := parseOIDCPayload[oidcUserinfoPayload](body)
+	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to parse OIDC userinfo response", err)
 	}
 
-	if envelope.Code != 0 {
-		msg := envelope.Msg
-		if msg == "" {
-			msg = "OIDC userinfo endpoint rejected the request"
-		}
-		return nil, serializer.NewError(serializer.CodeCredentialInvalid, msg, nil)
-	}
-
-	return &envelope.Data, nil
+	return payload, nil
 }
 
 // buildOIDCIdentityProfile 把 ID Token 与 userinfo 中的字段整理成统一结构。
@@ -332,7 +370,10 @@ func buildOIDCIdentityProfile(discovery *oidcDiscovery, tokenPayload *oidcTokenP
 	}
 
 	subject := stringFromAny(claims["sub"])
-	externalUserID := stringFromAny(userinfo.ID)
+	externalUserID := firstNonEmptyString(stringFromAny(userinfo.ID), strings.TrimSpace(userinfo.Sub))
+	if externalUserID == "" {
+		externalUserID = stringFromAny(claims["user_id"])
+	}
 	if subject == "" {
 		subject = externalUserID
 	}
@@ -360,10 +401,10 @@ func buildOIDCIdentityProfile(discovery *oidcDiscovery, tokenPayload *oidcTokenP
 		claims = map[string]any{}
 	}
 	claims["external_user_id"] = externalUserID
-	claims["username"] = userinfo.Username
-	claims["nickname"] = userinfo.Nickname
+	claims["username"] = firstNonEmptyString(userinfo.Username, userinfo.PreferredUsername)
+	claims["nickname"] = firstNonEmptyString(userinfo.Nickname, userinfo.Name)
 	claims["email"] = userinfo.Email
-	claims["avatar"] = userinfo.Avatar
+	claims["avatar"] = firstNonEmptyString(userinfo.Avatar, userinfo.Picture)
 	if departmentID != "" {
 		claims["department_id"] = departmentID
 	}
@@ -375,9 +416,9 @@ func buildOIDCIdentityProfile(discovery *oidcDiscovery, tokenPayload *oidcTokenP
 		TenantID:       firstNonEmptyString(stringFromAny(claims["tenant_id"]), stringFromAny(claims["tenantId"])),
 		DepartmentID:   departmentID,
 		Email:          strings.TrimSpace(userinfo.Email),
-		Username:       strings.TrimSpace(userinfo.Username),
-		Nickname:       strings.TrimSpace(userinfo.Nickname),
-		Avatar:         strings.TrimSpace(userinfo.Avatar),
+		Username:       firstNonEmptyString(strings.TrimSpace(userinfo.Username), strings.TrimSpace(userinfo.PreferredUsername)),
+		Nickname:       firstNonEmptyString(strings.TrimSpace(userinfo.Nickname), strings.TrimSpace(userinfo.Name)),
+		Avatar:         firstNonEmptyString(strings.TrimSpace(userinfo.Avatar), strings.TrimSpace(userinfo.Picture)),
 		Claims:         claims,
 	}, nil
 }
@@ -548,6 +589,75 @@ func updateOIDCShadowUser(c *gin.Context, client *ent.Client, currentUser *ent.U
 	return updatedUser, nil
 }
 
+func parseOIDCStatePayload(raw any) (*oidcStatePayload, error) {
+	payloadStr, ok := raw.(string)
+	if !ok || strings.TrimSpace(payloadStr) == "" {
+		return nil, serializer.NewError(serializer.CodeLoginSessionNotExist, "OIDC login session payload is invalid", nil)
+	}
+
+	payload := &oidcStatePayload{}
+	if err := json.Unmarshal([]byte(payloadStr), payload); err != nil {
+		return nil, serializer.NewError(serializer.CodeLoginSessionNotExist, "Failed to parse OIDC login session", err)
+	}
+
+	return payload, nil
+}
+
+func oidcCodeChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func buildProviderToken(payload *oidcTokenPayload) auth.Token {
+	now := time.Now()
+	accessExpires := now
+	if payload.ExpiresIn > 0 {
+		accessExpires = now.Add(time.Duration(payload.ExpiresIn) * time.Second)
+	}
+	refreshExpires := accessExpires
+	if payload.RefreshExpiresIn > 0 {
+		refreshExpires = now.Add(time.Duration(payload.RefreshExpiresIn) * time.Second)
+	} else if payload.RefreshToken != "" {
+		refreshExpires = now.Add(30 * 24 * time.Hour)
+	}
+
+	return auth.Token{
+		AccessToken:    payload.AccessToken,
+		RefreshToken:   payload.RefreshToken,
+		AccessExpires:  accessExpires,
+		RefreshExpires: refreshExpires,
+		IDToken:        payload.IDToken,
+	}
+}
+
+func parseOIDCPayload[T any](body []byte) (*T, error) {
+	envelope := &oidcEnvelope[json.RawMessage]{}
+	if err := json.Unmarshal(body, envelope); err == nil && (envelope.Code != 0 || len(envelope.Data) > 0 || envelope.Msg != "") {
+		if envelope.Code != 0 {
+			msg := envelope.Msg
+			if msg == "" {
+				msg = "OIDC endpoint rejected the request"
+			}
+			return nil, serializer.NewError(serializer.CodeCredentialInvalid, msg, nil)
+		}
+
+		payload := new(T)
+		if len(envelope.Data) == 0 {
+			return payload, nil
+		}
+		if err := json.Unmarshal(envelope.Data, payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	}
+
+	payload := new(T)
+	if err := json.Unmarshal(body, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
 // doOIDCRequest 封装统一认证相关的出站 HTTP 请求，统一超时、上下文和错误处理。
 func doOIDCRequest(c *gin.Context, dep dependency.Dep, method string, target string, body io.Reader, header http.Header) ([]byte, error) {
 	resp := dep.RequestClient().Request(
@@ -634,4 +744,30 @@ func stringFromAny(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", typed))
 	}
+}
+
+func extractJWTIssuedAt(token string) int64 {
+	if strings.TrimSpace(token) == "" {
+		return 0
+	}
+
+	claims := jwt.MapClaims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
+		return 0
+	}
+
+	switch value := claims["iat"].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return parsed
+		}
+	}
+
+	return 0
 }

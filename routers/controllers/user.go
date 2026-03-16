@@ -381,7 +381,7 @@ func UserPrepareOIDCLogin(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
-// UserOIDCExchange 用授权码换取远端身份，并签发 Cloudreve 本地会话。
+// UserOIDCExchange 用授权码换取远端身份，并返回统一认证中心签发的 token。
 func UserOIDCExchange(c *gin.Context) {
 	service := ParametersFromContext[*user.OIDCExchangeService](c, user.OIDCExchangeParameterCtx{})
 	res, err := service.Exchange(c)
@@ -392,6 +392,28 @@ func UserOIDCExchange(c *gin.Context) {
 	}
 
 	c.JSON(200, serializer.Response{Data: res})
+}
+
+// UserOIDCRevokeCallback 接收统一认证中心推送的 token 失效通知。
+func UserOIDCRevokeCallback(c *gin.Context) {
+	if err := user.HandleOIDCRevokeCallback(c); err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{})
+}
+
+// UserOIDCBackChannelLogout 接收标准 OIDC Back-Channel Logout 请求。
+func UserOIDCBackChannelLogout(c *gin.Context) {
+	if err := user.HandleOIDCBackChannelLogout(c); err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{})
 }
 
 // UserSearch Search user by keyword

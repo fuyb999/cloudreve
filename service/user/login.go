@@ -174,6 +174,19 @@ func IssueToken(c *gin.Context) (*BuiltinLoginResponse, error) {
 		return nil, serializer.NewError(serializer.CodeEncryptError, "Failed to issue token pair", err)
 	}
 
+	if err := afterLoginSuccess(c, u); err != nil {
+		return nil, err
+	}
+
+	return &BuiltinLoginResponse{
+		User:  BuildUser(u, dep.HashIDEncoder()),
+		Token: *token,
+	}, nil
+}
+
+func afterLoginSuccess(c *gin.Context, u *ent.User) error {
+	dep := dependency.FromContext(c)
+
 	if _, err := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder()).ResolveVisibility(c, u); err != nil {
 		dep.Logger().Warning("Failed to warm public visibility for user %d: %s", u.ID, err)
 	}
@@ -188,10 +201,7 @@ func IssueToken(c *gin.Context) (*BuiltinLoginResponse, error) {
 		dep.Logger().Warning("Failed to publish login audit log: %s", err)
 	}
 
-	return &BuiltinLoginResponse{
-		User:  BuildUser(u, dep.HashIDEncoder()),
-		Token: *token,
-	}, nil
+	return nil
 }
 
 // RefreshTokenParameterCtx define key fore RefreshTokenService
@@ -200,10 +210,16 @@ type RefreshTokenParameterCtx struct{}
 // RefreshTokenService refresh token service
 type RefreshTokenService struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
 }
 
 func (s *RefreshTokenService) Refresh(c *gin.Context) (*auth.Token, error) {
 	dep := dependency.FromContext(c)
+	if dep.SettingProvider().OIDCEnabled(c) {
+		return refreshOIDCToken(c, s)
+	}
+
 	claims, err := dep.TokenAuth().Claims(c, s.RefreshToken)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to issue token pair", err)
@@ -231,6 +247,10 @@ func (s *RefreshTokenService) Refresh(c *gin.Context) (*auth.Token, error) {
 
 func (s *RefreshTokenService) Delete(c *gin.Context) (string, error) {
 	dep := dependency.FromContext(c)
+	if dep.SettingProvider().OIDCEnabled(c) {
+		return deleteOIDCToken(c, s)
+	}
+
 	claims, err := dep.TokenAuth().Claims(c, s.RefreshToken)
 	if err != nil {
 		return "", serializer.NewError(serializer.CodeCredentialInvalid, "Failed to parse token", err)

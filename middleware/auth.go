@@ -14,6 +14,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
+	usersvc "github.com/cloudreve/Cloudreve/v4/service/user"
 
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
@@ -57,10 +58,36 @@ func CurrentUser() gin.HandlerFunc {
 		}
 
 		if shouldContinue {
-			// TODO: Logto handler
+			if _, err := usersvc.TryVerifyOIDCAccessToken(c); err != nil {
+				c.JSON(200, serializer.Err(c, err))
+				c.Abort()
+				return
+			}
 		}
 
 		uid := inventory.UserIDFromContext(c)
+		if uid == 0 && dep.SettingProvider().OIDCEnabled(c) {
+			if _, err := usersvc.TryVerifyOIDCAccessToken(c); err != nil {
+				c.JSON(200, serializer.Err(c, err))
+				c.Abort()
+				return
+			}
+			uid = inventory.UserIDFromContext(c)
+		}
+
+		if uid == 0 {
+			anonymous, err := dep.UserClient().AnonymousUser(c)
+			if err != nil {
+				c.JSON(200, serializer.Err(c, serializer.NewError(serializer.CodeDBError, "failed to get anonymous user", err)))
+				c.Abort()
+				return
+			}
+
+			SetUserCtxByUser(c, anonymous)
+			c.Next()
+			return
+		}
+
 		if err := SetUserCtx(c, uid); err != nil {
 			c.JSON(200, serializer.Err(c, err))
 			c.Abort()

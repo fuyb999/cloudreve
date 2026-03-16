@@ -38,3 +38,5 @@ tmp/
 cloudreve
 .DS_Store
 /assets/assets/
+/cloudreve.tar
+/tika.tar

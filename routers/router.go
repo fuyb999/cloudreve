@@ -333,6 +333,8 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 					controllers.FromJSON[usersvc.OIDCExchangeService](usersvc.OIDCExchangeParameterCtx{}),
 					controllers.UserOIDCExchange,
 				)
+				oidc.POST("revokeCallback", controllers.UserOIDCRevokeCallback)
+				oidc.POST("backchannelLogout", controllers.UserOIDCBackChannelLogout)
 			}
 
 			oauthRouter := session.Group("oauth")

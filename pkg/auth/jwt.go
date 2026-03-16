@@ -49,6 +49,8 @@ type Token struct {
 	RefreshToken   string    `json:"refresh_token"`
 	AccessExpires  time.Time `json:"access_expires"`
 	RefreshExpires time.Time `json:"refresh_expires"`
+	// IDToken 仅在统一认证模式下返回，供标准 OIDC 登出时作为 id_token_hint 使用。
+	IDToken string `json:"id_token,omitempty"`
 
 	UID int `json:"-"`
 }
