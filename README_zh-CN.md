@@ -63,6 +63,10 @@
 
 你可以参考 [构建](https://docs.cloudreve.org/overview/build/) 从源代码构建 Cloudreve。
 
+## :book: 扩展文档
+
+- [Cloudreve 与 Yudao OIDC 统一认证接入说明](docs/yudao-oidc-integration.md)
+
 ## :rocket: 贡献
 
 如果你有兴趣为 Cloudreve 贡献代码，请参考 [贡献](https://docs.cloudreve.org/api/contributing/) 了解如何贡献。
