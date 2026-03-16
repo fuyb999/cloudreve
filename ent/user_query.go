@@ -14,6 +14,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/auditlog"
 	"github.com/cloudreve/Cloudreve/v4/ent/davaccount"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
+	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
@@ -29,21 +30,22 @@ import (
 // UserQuery is the builder for querying User entities.
 type UserQuery struct {
 	config
-	ctx                  *QueryContext
-	order                []user.OrderOption
-	inters               []Interceptor
-	predicates           []predicate.User
-	withGroup            *GroupQuery
-	withFiles            *FileQuery
-	withDavAccounts      *DavAccountQuery
-	withSyncthingDevices *SyncthingDeviceQuery
-	withShares           *ShareQuery
-	withPasskey          *PasskeyQuery
-	withTasks            *TaskQuery
-	withFsevents         *FsEventQuery
-	withEntities         *EntityQuery
-	withOauthGrants      *OAuthGrantQuery
-	withAuditLogs        *AuditLogQuery
+	ctx                    *QueryContext
+	order                  []user.OrderOption
+	inters                 []Interceptor
+	predicates             []predicate.User
+	withGroup              *GroupQuery
+	withFiles              *FileQuery
+	withDavAccounts        *DavAccountQuery
+	withSyncthingDevices   *SyncthingDeviceQuery
+	withShares             *ShareQuery
+	withPasskey            *PasskeyQuery
+	withTasks              *TaskQuery
+	withFsevents           *FsEventQuery
+	withEntities           *EntityQuery
+	withOauthGrants        *OAuthGrantQuery
+	withExternalIdentities *ExternalIdentityQuery
+	withAuditLogs          *AuditLogQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -300,6 +302,28 @@ func (uq *UserQuery) QueryOauthGrants() *OAuthGrantQuery {
 	return query
 }
 
+// QueryExternalIdentities chains the current query on the "external_identities" edge.
+func (uq *UserQuery) QueryExternalIdentities() *ExternalIdentityQuery {
+	query := (&ExternalIdentityClient{config: uq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := uq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := uq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(externalidentity.Table, externalidentity.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ExternalIdentitiesTable, user.ExternalIdentitiesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(uq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
 // QueryAuditLogs chains the current query on the "audit_logs" edge.
 func (uq *UserQuery) QueryAuditLogs() *AuditLogQuery {
 	query := (&AuditLogClient{config: uq.config}).Query()
@@ -509,22 +533,23 @@ func (uq *UserQuery) Clone() *UserQuery {
 		return nil
 	}
 	return &UserQuery{
-		config:               uq.config,
-		ctx:                  uq.ctx.Clone(),
-		order:                append([]user.OrderOption{}, uq.order...),
-		inters:               append([]Interceptor{}, uq.inters...),
-		predicates:           append([]predicate.User{}, uq.predicates...),
-		withGroup:            uq.withGroup.Clone(),
-		withFiles:            uq.withFiles.Clone(),
-		withDavAccounts:      uq.withDavAccounts.Clone(),
-		withSyncthingDevices: uq.withSyncthingDevices.Clone(),
-		withShares:           uq.withShares.Clone(),
-		withPasskey:          uq.withPasskey.Clone(),
-		withTasks:            uq.withTasks.Clone(),
-		withFsevents:         uq.withFsevents.Clone(),
-		withEntities:         uq.withEntities.Clone(),
-		withOauthGrants:      uq.withOauthGrants.Clone(),
-		withAuditLogs:        uq.withAuditLogs.Clone(),
+		config:                 uq.config,
+		ctx:                    uq.ctx.Clone(),
+		order:                  append([]user.OrderOption{}, uq.order...),
+		inters:                 append([]Interceptor{}, uq.inters...),
+		predicates:             append([]predicate.User{}, uq.predicates...),
+		withGroup:              uq.withGroup.Clone(),
+		withFiles:              uq.withFiles.Clone(),
+		withDavAccounts:        uq.withDavAccounts.Clone(),
+		withSyncthingDevices:   uq.withSyncthingDevices.Clone(),
+		withShares:             uq.withShares.Clone(),
+		withPasskey:            uq.withPasskey.Clone(),
+		withTasks:              uq.withTasks.Clone(),
+		withFsevents:           uq.withFsevents.Clone(),
+		withEntities:           uq.withEntities.Clone(),
+		withOauthGrants:        uq.withOauthGrants.Clone(),
+		withExternalIdentities: uq.withExternalIdentities.Clone(),
+		withAuditLogs:          uq.withAuditLogs.Clone(),
 		// clone intermediate query.
 		sql:  uq.sql.Clone(),
 		path: uq.path,
@@ -641,6 +666,17 @@ func (uq *UserQuery) WithOauthGrants(opts ...func(*OAuthGrantQuery)) *UserQuery 
 	return uq
 }
 
+// WithExternalIdentities tells the query-builder to eager-load the nodes that are connected to
+// the "external_identities" edge. The optional arguments are used to configure the query builder of the edge.
+func (uq *UserQuery) WithExternalIdentities(opts ...func(*ExternalIdentityQuery)) *UserQuery {
+	query := (&ExternalIdentityClient{config: uq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	uq.withExternalIdentities = query
+	return uq
+}
+
 // WithAuditLogs tells the query-builder to eager-load the nodes that are connected to
 // the "audit_logs" edge. The optional arguments are used to configure the query builder of the edge.
 func (uq *UserQuery) WithAuditLogs(opts ...func(*AuditLogQuery)) *UserQuery {
@@ -730,7 +766,7 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = uq.querySpec()
-		loadedTypes = [11]bool{
+		loadedTypes = [12]bool{
 			uq.withGroup != nil,
 			uq.withFiles != nil,
 			uq.withDavAccounts != nil,
@@ -741,6 +777,7 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 			uq.withFsevents != nil,
 			uq.withEntities != nil,
 			uq.withOauthGrants != nil,
+			uq.withExternalIdentities != nil,
 			uq.withAuditLogs != nil,
 		}
 	)
@@ -828,6 +865,13 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := uq.loadOauthGrants(ctx, query, nodes,
 			func(n *User) { n.Edges.OauthGrants = []*OAuthGrant{} },
 			func(n *User, e *OAuthGrant) { n.Edges.OauthGrants = append(n.Edges.OauthGrants, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := uq.withExternalIdentities; query != nil {
+		if err := uq.loadExternalIdentities(ctx, query, nodes,
+			func(n *User) { n.Edges.ExternalIdentities = []*ExternalIdentity{} },
+			func(n *User, e *ExternalIdentity) { n.Edges.ExternalIdentities = append(n.Edges.ExternalIdentities, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -1126,6 +1170,36 @@ func (uq *UserQuery) loadOauthGrants(ctx context.Context, query *OAuthGrantQuery
 	}
 	query.Where(predicate.OAuthGrant(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.OauthGrantsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (uq *UserQuery) loadExternalIdentities(ctx context.Context, query *ExternalIdentityQuery, nodes []*User, init func(*User), assign func(*User, *ExternalIdentity)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(externalidentity.FieldUserID)
+	}
+	query.Where(predicate.ExternalIdentity(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.ExternalIdentitiesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

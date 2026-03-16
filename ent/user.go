@@ -72,11 +72,13 @@ type UserEdges struct {
 	Entities []*Entity `json:"entities,omitempty"`
 	// OauthGrants holds the value of the oauth_grants edge.
 	OauthGrants []*OAuthGrant `json:"oauth_grants,omitempty"`
+	// ExternalIdentities holds the value of the external_identities edge.
+	ExternalIdentities []*ExternalIdentity `json:"external_identities,omitempty"`
 	// AuditLogs holds the value of the audit_logs edge.
 	AuditLogs []*AuditLog `json:"audit_logs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [11]bool
+	loadedTypes [12]bool
 }
 
 // GroupOrErr returns the Group value or an error if the edge
@@ -173,10 +175,19 @@ func (e UserEdges) OauthGrantsOrErr() ([]*OAuthGrant, error) {
 	return nil, &NotLoadedError{edge: "oauth_grants"}
 }
 
+// ExternalIdentitiesOrErr returns the ExternalIdentities value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) ExternalIdentitiesOrErr() ([]*ExternalIdentity, error) {
+	if e.loadedTypes[10] {
+		return e.ExternalIdentities, nil
+	}
+	return nil, &NotLoadedError{edge: "external_identities"}
+}
+
 // AuditLogsOrErr returns the AuditLogs value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuditLogsOrErr() ([]*AuditLog, error) {
-	if e.loadedTypes[10] {
+	if e.loadedTypes[11] {
 		return e.AuditLogs, nil
 	}
 	return nil, &NotLoadedError{edge: "audit_logs"}
@@ -354,6 +365,11 @@ func (u *User) QueryOauthGrants() *OAuthGrantQuery {
 	return NewUserClient(u.config).QueryOauthGrants(u)
 }
 
+// QueryExternalIdentities queries the "external_identities" edge of the User entity.
+func (u *User) QueryExternalIdentities() *ExternalIdentityQuery {
+	return NewUserClient(u.config).QueryExternalIdentities(u)
+}
+
 // QueryAuditLogs queries the "audit_logs" edge of the User entity.
 func (u *User) QueryAuditLogs() *AuditLogQuery {
 	return NewUserClient(u.config).QueryAuditLogs(u)
@@ -481,10 +497,16 @@ func (e *User) SetOauthGrants(v []*OAuthGrant) {
 	e.Edges.loadedTypes[9] = true
 }
 
+// SetExternalIdentities manually set the edge as loaded state.
+func (e *User) SetExternalIdentities(v []*ExternalIdentity) {
+	e.Edges.ExternalIdentities = v
+	e.Edges.loadedTypes[10] = true
+}
+
 // SetAuditLogs manually set the edge as loaded state.
 func (e *User) SetAuditLogs(v []*AuditLog) {
 	e.Edges.AuditLogs = v
-	e.Edges.loadedTypes[10] = true
+	e.Edges.loadedTypes[11] = true
 }
 
 // Users is a parsable slice of User.

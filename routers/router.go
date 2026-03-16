@@ -322,6 +322,18 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				controllers.UserPrepareLogin,
 			)
 
+			oidc := session.Group("oidc")
+			{
+				oidc.GET("prepare",
+					controllers.FromQuery[usersvc.OIDCPrepareService](usersvc.OIDCPrepareParameterCtx{}),
+					controllers.UserPrepareOIDCLogin,
+				)
+				oidc.POST("exchange",
+					controllers.FromJSON[usersvc.OIDCExchangeService](usersvc.OIDCExchangeParameterCtx{}),
+					controllers.UserOIDCExchange,
+				)
+			}
+
 			oauthRouter := session.Group("oauth")
 			{
 				oauthRouter.GET("app/:app_id",
@@ -355,14 +367,14 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				// WebAuthn login prepare
 				authn.PUT("",
 					middleware.IsFunctionEnabled(func(c *gin.Context) bool {
-						return dep.SettingProvider().AuthnEnabled(c)
+						return dep.SettingProvider().AuthnEnabled(c) && !dep.SettingProvider().OIDCEnabled(c)
 					}),
 					controllers.StartLoginAuthn,
 				)
 				// WebAuthn finish login
 				authn.POST("",
 					middleware.IsFunctionEnabled(func(c *gin.Context) bool {
-						return dep.SettingProvider().AuthnEnabled(c)
+						return dep.SettingProvider().AuthnEnabled(c) && !dep.SettingProvider().OIDCEnabled(c)
 					}),
 					controllers.FromJSON[usersvc.FinishPasskeyLoginService](usersvc.FinishPasskeyLoginParameterCtx{}),
 					controllers.FinishLoginAuthn,

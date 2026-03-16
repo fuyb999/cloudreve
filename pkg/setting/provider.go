@@ -186,6 +186,10 @@ type (
 		ArchiveDownloadSessionTTL(ctx context.Context) int
 		// AppSetting returns the app related settings.
 		AppSetting(ctx context.Context) *AppSetting
+		// OIDC returns the OIDC/unified-auth related settings.
+		OIDC(ctx context.Context) *OIDCSetting
+		// OIDCEnabled returns true if unified auth is enabled.
+		OIDCEnabled(ctx context.Context) bool
 		// Avatar returns the avatar settings.
 		Avatar(ctx context.Context) *Avatar
 		// AvatarProcess returns the avatar process settings.
@@ -360,6 +364,25 @@ func (s *settingProvider) AppSetting(ctx context.Context) *AppSetting {
 		SyncthingLinuxURL:       s.getString(ctx, "syncthing_download_linux_url", "https://syncthing.net/downloads/#linux"),
 		SyncthingWindowsURL:     s.getString(ctx, "syncthing_download_windows_url", "https://syncthing.net/downloads/#windows"),
 	}
+}
+
+// OIDC 返回统一认证配置快照，供登录页和服务端登录流程共享同一套开关与参数。
+func (s *settingProvider) OIDC(ctx context.Context) *OIDCSetting {
+	return &OIDCSetting{
+		Enabled:      s.getBoolean(ctx, "oidc_enabled", false),
+		DisplayName:  s.getString(ctx, "oidc_display_name", "Unified Auth"),
+		AutoRedirect: s.getBoolean(ctx, "oidc_auto_redirect", false),
+		SSOURL:       s.getString(ctx, "oidc_sso_url", ""),
+		WellKnownURL: s.getString(ctx, "oidc_wellknown_url", ""),
+		ClientID:     s.getString(ctx, "oidc_client_id", ""),
+		ClientSecret: s.getString(ctx, "oidc_client_secret", ""),
+		Scope:        s.getString(ctx, "oidc_scope", "openid user_info user.read"),
+	}
+}
+
+// OIDCEnabled 提供一个轻量布尔判断，便于调用方只做开关分支而不必装配完整配置。
+func (s *settingProvider) OIDCEnabled(ctx context.Context) bool {
+	return s.getBoolean(ctx, "oidc_enabled", false)
 }
 
 func (s *settingProvider) MaxParallelTransfer(ctx context.Context) int {

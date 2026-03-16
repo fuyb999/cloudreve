@@ -28,10 +28,14 @@ type SiteConfig struct {
 	CustomHTML     *setting.CustomHTML     `json:"custom_html,omitempty"`
 
 	// Login Section
-	LoginCaptcha     bool                `json:"login_captcha,omitempty"`
-	RegCaptcha       bool                `json:"reg_captcha,omitempty"`
-	ForgetCaptcha    bool                `json:"forget_captcha,omitempty"`
-	Authn            bool                `json:"authn,omitempty"`
+	LoginCaptcha  bool `json:"login_captcha,omitempty"`
+	RegCaptcha    bool `json:"reg_captcha,omitempty"`
+	ForgetCaptcha bool `json:"forget_captcha,omitempty"`
+	Authn         bool `json:"authn,omitempty"`
+	// OIDC 相关字段由登录页读取，用来决定是否显示本地表单、按钮文案和自动跳转行为。
+	OIDCEnabled      bool                `json:"oidc_enabled,omitempty"`
+	OIDCDisplayName  string              `json:"oidc_display_name,omitempty"`
+	OIDCAutoRedirect bool                `json:"oidc_auto_redirect,omitempty"`
 	ReCaptchaKey     string              `json:"captcha_ReCaptchaKey,omitempty"`
 	CaptchaType      setting.CaptchaType `json:"captcha_type,omitempty"`
 	TurnstileSiteID  string              `json:"turnstile_site_id,omitempty"`
@@ -91,12 +95,17 @@ func (s *GetSettingService) GetSiteConfig(c *gin.Context) (*SiteConfig, error) {
 	switch s.Section {
 	case "login":
 		legalDocs := settings.LegalDocuments(c)
+		oidc := settings.OIDC(c)
 		return &SiteConfig{
-			LoginCaptcha:     settings.LoginCaptchaEnabled(c),
-			RegCaptcha:       settings.RegCaptchaEnabled(c),
-			ForgetCaptcha:    settings.ForgotPasswordCaptchaEnabled(c),
-			Authn:            settings.AuthnEnabled(c),
-			RegisterEnabled:  settings.RegisterEnabled(c),
+			LoginCaptcha:  settings.LoginCaptchaEnabled(c),
+			RegCaptcha:    settings.RegCaptchaEnabled(c),
+			ForgetCaptcha: settings.ForgotPasswordCaptchaEnabled(c),
+			// 统一认证开启后，前端必须隐藏本地 Passkey/注册入口，避免与统一入口并存。
+			Authn:            settings.AuthnEnabled(c) && !oidc.Enabled,
+			OIDCEnabled:      oidc.Enabled,
+			OIDCDisplayName:  oidc.DisplayName,
+			OIDCAutoRedirect: oidc.AutoRedirect,
+			RegisterEnabled:  settings.RegisterEnabled(c) && !oidc.Enabled,
 			PrivacyPolicyUrl: legalDocs.PrivacyPolicy,
 			TosUrl:           legalDocs.TermsOfService,
 		}, nil

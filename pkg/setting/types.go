@@ -199,6 +199,24 @@ type AppSetting struct {
 	SyncthingWindowsURL     string
 }
 
+// OIDCSetting 对应后台“参数设置 -> 用户会话 -> OIDC”的统一认证配置。
+// 开关打开后，前后端都会切换到统一认证链路；关闭时则完全回退到原有本地登录逻辑。
+type OIDCSetting struct {
+	Enabled bool
+	// DisplayName 用于登录页按钮文案，例如 “Yudao SSO”。
+	DisplayName string
+	// AutoRedirect 控制是否在用户打开登录页时自动跳转到统一认证入口。
+	AutoRedirect bool
+	// SSOURL 是第三方前端统一登录入口；为空时根据 issuer 自动推导 /sso。
+	SSOURL string
+	// WellKnownURL 用于拉取 OIDC 发现文档，从中解析 token/userinfo 端点。
+	WellKnownURL string
+	ClientID     string
+	ClientSecret string
+	// Scope 至少需要包含 openid、user_info、user.read。
+	Scope string
+}
+
 type EmailTemplate struct {
 	Title    string `json:"title"`
 	Body     string `json:"body"`

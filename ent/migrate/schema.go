@@ -186,6 +186,56 @@ var (
 			},
 		},
 	}
+	// ExternalIdentitiesColumns holds the columns for the "external_identities" table.
+	ExternalIdentitiesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "provider", Type: field.TypeString, Size: 32},
+		{Name: "issuer", Type: field.TypeString, Size: 255},
+		{Name: "subject", Type: field.TypeString, Size: 255},
+		{Name: "external_user_id", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "tenant_id", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "department_id", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "email", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "username", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "nickname", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "avatar", Type: field.TypeString, Nullable: true, Size: 2048},
+		{Name: "claims", Type: field.TypeJSON},
+		{Name: "user_id", Type: field.TypeInt},
+	}
+	// ExternalIdentitiesTable holds the schema information for the "external_identities" table.
+	ExternalIdentitiesTable = &schema.Table{
+		Name:       "external_identities",
+		Columns:    ExternalIdentitiesColumns,
+		PrimaryKey: []*schema.Column{ExternalIdentitiesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "external_identities_users_external_identities",
+				Columns:    []*schema.Column{ExternalIdentitiesColumns[15]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "externalidentity_provider_issuer_subject",
+				Unique:  true,
+				Columns: []*schema.Column{ExternalIdentitiesColumns[4], ExternalIdentitiesColumns[5], ExternalIdentitiesColumns[6]},
+			},
+			{
+				Name:    "externalidentity_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{ExternalIdentitiesColumns[15]},
+			},
+			{
+				Name:    "externalidentity_provider_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{ExternalIdentitiesColumns[4], ExternalIdentitiesColumns[15]},
+			},
+		},
+	}
 	// FilesColumns holds the columns for the "files" table.
 	FilesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -552,6 +602,12 @@ var (
 		{Name: "last_seen_at", Type: field.TypeTime, Nullable: true},
 		{Name: "last_sync_at", Type: field.TypeTime, Nullable: true},
 		{Name: "online", Type: field.TypeBool, Default: false},
+		{Name: "is_bound", Type: field.TypeBool, Default: true},
+		{Name: "cloud_sync_enabled", Type: field.TypeBool, Default: true},
+		{Name: "management_action", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "management_action_id", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "management_action_payload", Type: field.TypeJSON, Nullable: true},
+		{Name: "management_action_updated_at", Type: field.TypeTime, Nullable: true},
 		{Name: "owner_id", Type: field.TypeInt},
 	}
 	// SyncthingDevicesTable holds the schema information for the "syncthing_devices" table.
@@ -562,7 +618,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "syncthing_devices_users_syncthing_devices",
-				Columns:    []*schema.Column{SyncthingDevicesColumns[15]},
+				Columns:    []*schema.Column{SyncthingDevicesColumns[21]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -571,17 +627,17 @@ var (
 			{
 				Name:    "syncthingdevice_owner_id_device_id",
 				Unique:  true,
-				Columns: []*schema.Column{SyncthingDevicesColumns[15], SyncthingDevicesColumns[4]},
+				Columns: []*schema.Column{SyncthingDevicesColumns[21], SyncthingDevicesColumns[4]},
 			},
 			{
 				Name:    "syncthingdevice_owner_id_online",
 				Unique:  false,
-				Columns: []*schema.Column{SyncthingDevicesColumns[15], SyncthingDevicesColumns[14]},
+				Columns: []*schema.Column{SyncthingDevicesColumns[21], SyncthingDevicesColumns[14]},
 			},
 			{
 				Name:    "syncthingdevice_owner_id_last_seen_at",
 				Unique:  false,
-				Columns: []*schema.Column{SyncthingDevicesColumns[15], SyncthingDevicesColumns[12]},
+				Columns: []*schema.Column{SyncthingDevicesColumns[21], SyncthingDevicesColumns[12]},
 			},
 		},
 	}
@@ -673,6 +729,7 @@ var (
 		DavAccountsTable,
 		DirectLinksTable,
 		EntitiesTable,
+		ExternalIdentitiesTable,
 		FilesTable,
 		FsEventsTable,
 		GroupsTable,
@@ -700,6 +757,7 @@ func init() {
 	DirectLinksTable.ForeignKeys[0].RefTable = FilesTable
 	EntitiesTable.ForeignKeys[0].RefTable = StoragePoliciesTable
 	EntitiesTable.ForeignKeys[1].RefTable = UsersTable
+	ExternalIdentitiesTable.ForeignKeys[0].RefTable = UsersTable
 	FilesTable.ForeignKeys[0].RefTable = FilesTable
 	FilesTable.ForeignKeys[1].RefTable = StoragePoliciesTable
 	FilesTable.ForeignKeys[2].RefTable = UsersTable

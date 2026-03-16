@@ -368,6 +368,32 @@ func UserPrepareLogin(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
+// UserPrepareOIDCLogin 生成统一认证跳转地址，前端据此跳到 Yudao 等外部认证入口。
+func UserPrepareOIDCLogin(c *gin.Context) {
+	service := ParametersFromContext[*user.OIDCPrepareService](c, user.OIDCPrepareParameterCtx{})
+	res, err := service.Prepare(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
+// UserOIDCExchange 用授权码换取远端身份，并签发 Cloudreve 本地会话。
+func UserOIDCExchange(c *gin.Context) {
+	service := ParametersFromContext[*user.OIDCExchangeService](c, user.OIDCExchangeParameterCtx{})
+	res, err := service.Exchange(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
 // UserSearch Search user by keyword
 func UserSearch(c *gin.Context) {
 	service := ParametersFromContext[*user.SearchUserService](c, user.SearchUserParamCtx{})

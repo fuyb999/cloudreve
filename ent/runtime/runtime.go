@@ -9,6 +9,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/davaccount"
 	"github.com/cloudreve/Cloudreve/v4/ent/directlink"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
+	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
@@ -111,6 +112,69 @@ func init() {
 	entityDescReferenceCount := entityFields[3].Descriptor()
 	// entity.DefaultReferenceCount holds the default value on creation for the reference_count field.
 	entity.DefaultReferenceCount = entityDescReferenceCount.Default.(int)
+	externalidentityMixin := schema.ExternalIdentity{}.Mixin()
+	externalidentityMixinHooks0 := externalidentityMixin[0].Hooks()
+	externalidentity.Hooks[0] = externalidentityMixinHooks0[0]
+	externalidentityMixinInters0 := externalidentityMixin[0].Interceptors()
+	externalidentity.Interceptors[0] = externalidentityMixinInters0[0]
+	externalidentityMixinFields0 := externalidentityMixin[0].Fields()
+	_ = externalidentityMixinFields0
+	externalidentityFields := schema.ExternalIdentity{}.Fields()
+	_ = externalidentityFields
+	// externalidentityDescCreatedAt is the schema descriptor for created_at field.
+	externalidentityDescCreatedAt := externalidentityMixinFields0[0].Descriptor()
+	// externalidentity.DefaultCreatedAt holds the default value on creation for the created_at field.
+	externalidentity.DefaultCreatedAt = externalidentityDescCreatedAt.Default.(func() time.Time)
+	// externalidentityDescUpdatedAt is the schema descriptor for updated_at field.
+	externalidentityDescUpdatedAt := externalidentityMixinFields0[1].Descriptor()
+	// externalidentity.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	externalidentity.DefaultUpdatedAt = externalidentityDescUpdatedAt.Default.(func() time.Time)
+	// externalidentity.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	externalidentity.UpdateDefaultUpdatedAt = externalidentityDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// externalidentityDescProvider is the schema descriptor for provider field.
+	externalidentityDescProvider := externalidentityFields[0].Descriptor()
+	// externalidentity.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	externalidentity.ProviderValidator = externalidentityDescProvider.Validators[0].(func(string) error)
+	// externalidentityDescIssuer is the schema descriptor for issuer field.
+	externalidentityDescIssuer := externalidentityFields[1].Descriptor()
+	// externalidentity.IssuerValidator is a validator for the "issuer" field. It is called by the builders before save.
+	externalidentity.IssuerValidator = externalidentityDescIssuer.Validators[0].(func(string) error)
+	// externalidentityDescSubject is the schema descriptor for subject field.
+	externalidentityDescSubject := externalidentityFields[2].Descriptor()
+	// externalidentity.SubjectValidator is a validator for the "subject" field. It is called by the builders before save.
+	externalidentity.SubjectValidator = externalidentityDescSubject.Validators[0].(func(string) error)
+	// externalidentityDescExternalUserID is the schema descriptor for external_user_id field.
+	externalidentityDescExternalUserID := externalidentityFields[3].Descriptor()
+	// externalidentity.ExternalUserIDValidator is a validator for the "external_user_id" field. It is called by the builders before save.
+	externalidentity.ExternalUserIDValidator = externalidentityDescExternalUserID.Validators[0].(func(string) error)
+	// externalidentityDescTenantID is the schema descriptor for tenant_id field.
+	externalidentityDescTenantID := externalidentityFields[4].Descriptor()
+	// externalidentity.TenantIDValidator is a validator for the "tenant_id" field. It is called by the builders before save.
+	externalidentity.TenantIDValidator = externalidentityDescTenantID.Validators[0].(func(string) error)
+	// externalidentityDescDepartmentID is the schema descriptor for department_id field.
+	externalidentityDescDepartmentID := externalidentityFields[5].Descriptor()
+	// externalidentity.DepartmentIDValidator is a validator for the "department_id" field. It is called by the builders before save.
+	externalidentity.DepartmentIDValidator = externalidentityDescDepartmentID.Validators[0].(func(string) error)
+	// externalidentityDescEmail is the schema descriptor for email field.
+	externalidentityDescEmail := externalidentityFields[6].Descriptor()
+	// externalidentity.EmailValidator is a validator for the "email" field. It is called by the builders before save.
+	externalidentity.EmailValidator = externalidentityDescEmail.Validators[0].(func(string) error)
+	// externalidentityDescUsername is the schema descriptor for username field.
+	externalidentityDescUsername := externalidentityFields[7].Descriptor()
+	// externalidentity.UsernameValidator is a validator for the "username" field. It is called by the builders before save.
+	externalidentity.UsernameValidator = externalidentityDescUsername.Validators[0].(func(string) error)
+	// externalidentityDescNickname is the schema descriptor for nickname field.
+	externalidentityDescNickname := externalidentityFields[8].Descriptor()
+	// externalidentity.NicknameValidator is a validator for the "nickname" field. It is called by the builders before save.
+	externalidentity.NicknameValidator = externalidentityDescNickname.Validators[0].(func(string) error)
+	// externalidentityDescAvatar is the schema descriptor for avatar field.
+	externalidentityDescAvatar := externalidentityFields[9].Descriptor()
+	// externalidentity.AvatarValidator is a validator for the "avatar" field. It is called by the builders before save.
+	externalidentity.AvatarValidator = externalidentityDescAvatar.Validators[0].(func(string) error)
+	// externalidentityDescClaims is the schema descriptor for claims field.
+	externalidentityDescClaims := externalidentityFields[10].Descriptor()
+	// externalidentity.DefaultClaims holds the default value on creation for the claims field.
+	externalidentity.DefaultClaims = externalidentityDescClaims.Default.(map[string]interface{})
 	fileHooks := schema.File{}.Hooks()
 	file.Hooks[0] = fileHooks[0]
 	fileFields := schema.File{}.Fields()
@@ -444,6 +508,26 @@ func init() {
 	syncthingdeviceDescOnline := syncthingdeviceFields[11].Descriptor()
 	// syncthingdevice.DefaultOnline holds the default value on creation for the online field.
 	syncthingdevice.DefaultOnline = syncthingdeviceDescOnline.Default.(bool)
+	// syncthingdeviceDescIsBound is the schema descriptor for is_bound field.
+	syncthingdeviceDescIsBound := syncthingdeviceFields[12].Descriptor()
+	// syncthingdevice.DefaultIsBound holds the default value on creation for the is_bound field.
+	syncthingdevice.DefaultIsBound = syncthingdeviceDescIsBound.Default.(bool)
+	// syncthingdeviceDescCloudSyncEnabled is the schema descriptor for cloud_sync_enabled field.
+	syncthingdeviceDescCloudSyncEnabled := syncthingdeviceFields[13].Descriptor()
+	// syncthingdevice.DefaultCloudSyncEnabled holds the default value on creation for the cloud_sync_enabled field.
+	syncthingdevice.DefaultCloudSyncEnabled = syncthingdeviceDescCloudSyncEnabled.Default.(bool)
+	// syncthingdeviceDescManagementAction is the schema descriptor for management_action field.
+	syncthingdeviceDescManagementAction := syncthingdeviceFields[14].Descriptor()
+	// syncthingdevice.ManagementActionValidator is a validator for the "management_action" field. It is called by the builders before save.
+	syncthingdevice.ManagementActionValidator = syncthingdeviceDescManagementAction.Validators[0].(func(string) error)
+	// syncthingdeviceDescManagementActionID is the schema descriptor for management_action_id field.
+	syncthingdeviceDescManagementActionID := syncthingdeviceFields[15].Descriptor()
+	// syncthingdevice.ManagementActionIDValidator is a validator for the "management_action_id" field. It is called by the builders before save.
+	syncthingdevice.ManagementActionIDValidator = syncthingdeviceDescManagementActionID.Validators[0].(func(string) error)
+	// syncthingdeviceDescManagementActionPayload is the schema descriptor for management_action_payload field.
+	syncthingdeviceDescManagementActionPayload := syncthingdeviceFields[16].Descriptor()
+	// syncthingdevice.DefaultManagementActionPayload holds the default value on creation for the management_action_payload field.
+	syncthingdevice.DefaultManagementActionPayload = syncthingdeviceDescManagementActionPayload.Default.(map[string]interface{})
 	taskMixin := schema.Task{}.Mixin()
 	taskMixinHooks0 := taskMixin[0].Hooks()
 	task.Hooks[0] = taskMixinHooks0[0]

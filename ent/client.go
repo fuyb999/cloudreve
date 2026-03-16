@@ -19,6 +19,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/davaccount"
 	"github.com/cloudreve/Cloudreve/v4/ent/directlink"
 	"github.com/cloudreve/Cloudreve/v4/ent/entity"
+	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
@@ -50,6 +51,8 @@ type Client struct {
 	DirectLink *DirectLinkClient
 	// Entity is the client for interacting with the Entity builders.
 	Entity *EntityClient
+	// ExternalIdentity is the client for interacting with the ExternalIdentity builders.
+	ExternalIdentity *ExternalIdentityClient
 	// File is the client for interacting with the File builders.
 	File *FileClient
 	// FsEvent is the client for interacting with the FsEvent builders.
@@ -93,6 +96,7 @@ func (c *Client) init() {
 	c.DavAccount = NewDavAccountClient(c.config)
 	c.DirectLink = NewDirectLinkClient(c.config)
 	c.Entity = NewEntityClient(c.config)
+	c.ExternalIdentity = NewExternalIdentityClient(c.config)
 	c.File = NewFileClient(c.config)
 	c.FsEvent = NewFsEventClient(c.config)
 	c.Group = NewGroupClient(c.config)
@@ -197,26 +201,27 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:             ctx,
-		config:          cfg,
-		AuditLog:        NewAuditLogClient(cfg),
-		DavAccount:      NewDavAccountClient(cfg),
-		DirectLink:      NewDirectLinkClient(cfg),
-		Entity:          NewEntityClient(cfg),
-		File:            NewFileClient(cfg),
-		FsEvent:         NewFsEventClient(cfg),
-		Group:           NewGroupClient(cfg),
-		Metadata:        NewMetadataClient(cfg),
-		Node:            NewNodeClient(cfg),
-		OAuthClient:     NewOAuthClientClient(cfg),
-		OAuthGrant:      NewOAuthGrantClient(cfg),
-		Passkey:         NewPasskeyClient(cfg),
-		Setting:         NewSettingClient(cfg),
-		Share:           NewShareClient(cfg),
-		StoragePolicy:   NewStoragePolicyClient(cfg),
-		SyncthingDevice: NewSyncthingDeviceClient(cfg),
-		Task:            NewTaskClient(cfg),
-		User:            NewUserClient(cfg),
+		ctx:              ctx,
+		config:           cfg,
+		AuditLog:         NewAuditLogClient(cfg),
+		DavAccount:       NewDavAccountClient(cfg),
+		DirectLink:       NewDirectLinkClient(cfg),
+		Entity:           NewEntityClient(cfg),
+		ExternalIdentity: NewExternalIdentityClient(cfg),
+		File:             NewFileClient(cfg),
+		FsEvent:          NewFsEventClient(cfg),
+		Group:            NewGroupClient(cfg),
+		Metadata:         NewMetadataClient(cfg),
+		Node:             NewNodeClient(cfg),
+		OAuthClient:      NewOAuthClientClient(cfg),
+		OAuthGrant:       NewOAuthGrantClient(cfg),
+		Passkey:          NewPasskeyClient(cfg),
+		Setting:          NewSettingClient(cfg),
+		Share:            NewShareClient(cfg),
+		StoragePolicy:    NewStoragePolicyClient(cfg),
+		SyncthingDevice:  NewSyncthingDeviceClient(cfg),
+		Task:             NewTaskClient(cfg),
+		User:             NewUserClient(cfg),
 	}, nil
 }
 
@@ -234,26 +239,27 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:             ctx,
-		config:          cfg,
-		AuditLog:        NewAuditLogClient(cfg),
-		DavAccount:      NewDavAccountClient(cfg),
-		DirectLink:      NewDirectLinkClient(cfg),
-		Entity:          NewEntityClient(cfg),
-		File:            NewFileClient(cfg),
-		FsEvent:         NewFsEventClient(cfg),
-		Group:           NewGroupClient(cfg),
-		Metadata:        NewMetadataClient(cfg),
-		Node:            NewNodeClient(cfg),
-		OAuthClient:     NewOAuthClientClient(cfg),
-		OAuthGrant:      NewOAuthGrantClient(cfg),
-		Passkey:         NewPasskeyClient(cfg),
-		Setting:         NewSettingClient(cfg),
-		Share:           NewShareClient(cfg),
-		StoragePolicy:   NewStoragePolicyClient(cfg),
-		SyncthingDevice: NewSyncthingDeviceClient(cfg),
-		Task:            NewTaskClient(cfg),
-		User:            NewUserClient(cfg),
+		ctx:              ctx,
+		config:           cfg,
+		AuditLog:         NewAuditLogClient(cfg),
+		DavAccount:       NewDavAccountClient(cfg),
+		DirectLink:       NewDirectLinkClient(cfg),
+		Entity:           NewEntityClient(cfg),
+		ExternalIdentity: NewExternalIdentityClient(cfg),
+		File:             NewFileClient(cfg),
+		FsEvent:          NewFsEventClient(cfg),
+		Group:            NewGroupClient(cfg),
+		Metadata:         NewMetadataClient(cfg),
+		Node:             NewNodeClient(cfg),
+		OAuthClient:      NewOAuthClientClient(cfg),
+		OAuthGrant:       NewOAuthGrantClient(cfg),
+		Passkey:          NewPasskeyClient(cfg),
+		Setting:          NewSettingClient(cfg),
+		Share:            NewShareClient(cfg),
+		StoragePolicy:    NewStoragePolicyClient(cfg),
+		SyncthingDevice:  NewSyncthingDeviceClient(cfg),
+		Task:             NewTaskClient(cfg),
+		User:             NewUserClient(cfg),
 	}, nil
 }
 
@@ -283,9 +289,9 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.File, c.FsEvent, c.Group,
-		c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey, c.Setting, c.Share,
-		c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
+		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.ExternalIdentity, c.File,
+		c.FsEvent, c.Group, c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey,
+		c.Setting, c.Share, c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -295,9 +301,9 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.File, c.FsEvent, c.Group,
-		c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey, c.Setting, c.Share,
-		c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
+		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.ExternalIdentity, c.File,
+		c.FsEvent, c.Group, c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey,
+		c.Setting, c.Share, c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -314,6 +320,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.DirectLink.mutate(ctx, m)
 	case *EntityMutation:
 		return c.Entity.mutate(ctx, m)
+	case *ExternalIdentityMutation:
+		return c.ExternalIdentity.mutate(ctx, m)
 	case *FileMutation:
 		return c.File.mutate(ctx, m)
 	case *FsEventMutation:
@@ -1044,6 +1052,157 @@ func (c *EntityClient) mutate(ctx context.Context, m *EntityMutation) (Value, er
 		return (&EntityDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Entity mutation op: %q", m.Op())
+	}
+}
+
+// ExternalIdentityClient is a client for the ExternalIdentity schema.
+type ExternalIdentityClient struct {
+	config
+}
+
+// NewExternalIdentityClient returns a client for the ExternalIdentity from the given config.
+func NewExternalIdentityClient(c config) *ExternalIdentityClient {
+	return &ExternalIdentityClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `externalidentity.Hooks(f(g(h())))`.
+func (c *ExternalIdentityClient) Use(hooks ...Hook) {
+	c.hooks.ExternalIdentity = append(c.hooks.ExternalIdentity, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `externalidentity.Intercept(f(g(h())))`.
+func (c *ExternalIdentityClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ExternalIdentity = append(c.inters.ExternalIdentity, interceptors...)
+}
+
+// Create returns a builder for creating a ExternalIdentity entity.
+func (c *ExternalIdentityClient) Create() *ExternalIdentityCreate {
+	mutation := newExternalIdentityMutation(c.config, OpCreate)
+	return &ExternalIdentityCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ExternalIdentity entities.
+func (c *ExternalIdentityClient) CreateBulk(builders ...*ExternalIdentityCreate) *ExternalIdentityCreateBulk {
+	return &ExternalIdentityCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ExternalIdentityClient) MapCreateBulk(slice any, setFunc func(*ExternalIdentityCreate, int)) *ExternalIdentityCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ExternalIdentityCreateBulk{err: fmt.Errorf("calling to ExternalIdentityClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ExternalIdentityCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ExternalIdentityCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ExternalIdentity.
+func (c *ExternalIdentityClient) Update() *ExternalIdentityUpdate {
+	mutation := newExternalIdentityMutation(c.config, OpUpdate)
+	return &ExternalIdentityUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ExternalIdentityClient) UpdateOne(ei *ExternalIdentity) *ExternalIdentityUpdateOne {
+	mutation := newExternalIdentityMutation(c.config, OpUpdateOne, withExternalIdentity(ei))
+	return &ExternalIdentityUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ExternalIdentityClient) UpdateOneID(id int) *ExternalIdentityUpdateOne {
+	mutation := newExternalIdentityMutation(c.config, OpUpdateOne, withExternalIdentityID(id))
+	return &ExternalIdentityUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ExternalIdentity.
+func (c *ExternalIdentityClient) Delete() *ExternalIdentityDelete {
+	mutation := newExternalIdentityMutation(c.config, OpDelete)
+	return &ExternalIdentityDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ExternalIdentityClient) DeleteOne(ei *ExternalIdentity) *ExternalIdentityDeleteOne {
+	return c.DeleteOneID(ei.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ExternalIdentityClient) DeleteOneID(id int) *ExternalIdentityDeleteOne {
+	builder := c.Delete().Where(externalidentity.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ExternalIdentityDeleteOne{builder}
+}
+
+// Query returns a query builder for ExternalIdentity.
+func (c *ExternalIdentityClient) Query() *ExternalIdentityQuery {
+	return &ExternalIdentityQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeExternalIdentity},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ExternalIdentity entity by its id.
+func (c *ExternalIdentityClient) Get(ctx context.Context, id int) (*ExternalIdentity, error) {
+	return c.Query().Where(externalidentity.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ExternalIdentityClient) GetX(ctx context.Context, id int) *ExternalIdentity {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryUser queries the user edge of a ExternalIdentity.
+func (c *ExternalIdentityClient) QueryUser(ei *ExternalIdentity) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := ei.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(externalidentity.Table, externalidentity.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, externalidentity.UserTable, externalidentity.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(ei.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ExternalIdentityClient) Hooks() []Hook {
+	hooks := c.hooks.ExternalIdentity
+	return append(hooks[:len(hooks):len(hooks)], externalidentity.Hooks[:]...)
+}
+
+// Interceptors returns the client interceptors.
+func (c *ExternalIdentityClient) Interceptors() []Interceptor {
+	inters := c.inters.ExternalIdentity
+	return append(inters[:len(inters):len(inters)], externalidentity.Interceptors[:]...)
+}
+
+func (c *ExternalIdentityClient) mutate(ctx context.Context, m *ExternalIdentityMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ExternalIdentityCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ExternalIdentityUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ExternalIdentityUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ExternalIdentityDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ExternalIdentity mutation op: %q", m.Op())
 	}
 }
 
@@ -3501,6 +3660,22 @@ func (c *UserClient) QueryOauthGrants(u *User) *OAuthGrantQuery {
 	return query
 }
 
+// QueryExternalIdentities queries the external_identities edge of a User.
+func (c *UserClient) QueryExternalIdentities(u *User) *ExternalIdentityQuery {
+	query := (&ExternalIdentityClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := u.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(externalidentity.Table, externalidentity.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ExternalIdentitiesTable, user.ExternalIdentitiesColumn),
+		)
+		fromV = sqlgraph.Neighbors(u.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryAuditLogs queries the audit_logs edge of a User.
 func (c *UserClient) QueryAuditLogs(u *User) *AuditLogQuery {
 	query := (&AuditLogClient{config: c.config}).Query()
@@ -3547,14 +3722,14 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AuditLog, DavAccount, DirectLink, Entity, File, FsEvent, Group, Metadata, Node,
-		OAuthClient, OAuthGrant, Passkey, Setting, Share, StoragePolicy,
-		SyncthingDevice, Task, User []ent.Hook
+		AuditLog, DavAccount, DirectLink, Entity, ExternalIdentity, File, FsEvent,
+		Group, Metadata, Node, OAuthClient, OAuthGrant, Passkey, Setting, Share,
+		StoragePolicy, SyncthingDevice, Task, User []ent.Hook
 	}
 	inters struct {
-		AuditLog, DavAccount, DirectLink, Entity, File, FsEvent, Group, Metadata, Node,
-		OAuthClient, OAuthGrant, Passkey, Setting, Share, StoragePolicy,
-		SyncthingDevice, Task, User []ent.Interceptor
+		AuditLog, DavAccount, DirectLink, Entity, ExternalIdentity, File, FsEvent,
+		Group, Metadata, Node, OAuthClient, OAuthGrant, Passkey, Setting, Share,
+		StoragePolicy, SyncthingDevice, Task, User []ent.Interceptor
 	}
 )
 

@@ -141,6 +141,8 @@ type WebAuthnCredentials struct {
 type PrepareLoginResponse struct {
 	WebAuthnEnabled bool `json:"webauthn_enabled"`
 	PasswordEnabled bool `json:"password_enabled"`
+	// SSOEnabled 为 true 时，前端应直接渲染统一认证入口，不再继续本地密码流程。
+	SSOEnabled bool `json:"sso_enabled"`
 }
 
 // BuildWebAuthnList 构建设置页面凭证列表

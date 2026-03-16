@@ -124,6 +124,11 @@ func (service *UserResetEmailService) Reset(c *gin.Context) error {
 // Login 用户登录函数
 func (service *UserLoginService) Login(c *gin.Context) (*ent.User, string, error) {
 	dep := dependency.FromContext(c)
+	// 统一认证开启后，本地密码入口必须完全关闭，避免形成双登录源带来的状态分叉。
+	if dep.SettingProvider().OIDCEnabled(c) {
+		return nil, "", serializer.NewError(serializer.CodeFeatureNotEnabled, "Local sign-in is disabled because OIDC is enabled", nil)
+	}
+
 	userClient := dep.UserClient()
 
 	ctx := context.WithValue(c, inventory.LoadUserGroup{}, true)
@@ -280,6 +285,15 @@ type (
 
 func (service *PrepareLoginService) Prepare(c *gin.Context) (*PrepareLoginResponse, error) {
 	dep := dependency.FromContext(c)
+	// 统一认证开启时，前端不再探测密码/Passkey，而是直接展示统一认证入口。
+	if dep.SettingProvider().OIDCEnabled(c) {
+		return &PrepareLoginResponse{
+			WebAuthnEnabled: false,
+			PasswordEnabled: false,
+			SSOEnabled:      true,
+		}, nil
+	}
+
 	ctx := context.WithValue(c, inventory.LoadUserPasskey{}, true)
 	expectedUser, err := dep.UserClient().GetByEmail(ctx, service.Email)
 	if err != nil {
@@ -289,5 +303,6 @@ func (service *PrepareLoginService) Prepare(c *gin.Context) (*PrepareLoginRespon
 	return &PrepareLoginResponse{
 		WebAuthnEnabled: len(expectedUser.Edges.Passkey) > 0,
 		PasswordEnabled: expectedUser.Password != "",
+		SSOEnabled:      false,
 	}, nil
 }

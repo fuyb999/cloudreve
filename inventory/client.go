@@ -60,6 +60,14 @@ func InitializeDBClient(l logging.Logger,
 		"syncthing_upgrade_version",
 		"syncthing_download_linux_url",
 		"syncthing_download_windows_url",
+		"oidc_enabled",
+		"oidc_display_name",
+		"oidc_auto_redirect",
+		"oidc_sso_url",
+		"oidc_wellknown_url",
+		"oidc_client_id",
+		"oidc_client_secret",
+		"oidc_scope",
 	); err != nil {
 		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)
 	}
