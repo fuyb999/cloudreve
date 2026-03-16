@@ -13,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/email"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gin-gonic/gin"
@@ -171,6 +172,10 @@ func IssueToken(c *gin.Context) (*BuiltinLoginResponse, error) {
 	})
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeEncryptError, "Failed to issue token pair", err)
+	}
+
+	if _, err := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder()).ResolveVisibility(c, u); err != nil {
+		dep.Logger().Warning("Failed to warm public visibility for user %d: %s", u.ID, err)
 	}
 
 	if err := audit.Publish(c, &audit.Event{

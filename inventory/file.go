@@ -49,8 +49,9 @@ type (
 		// Whether to include only folder in results, only applied to cursor pagination
 		FolderOnly bool
 		// SharedWithMe indicates whether to list files shared with the user
-		SharedWithMe bool
-		Search       *SearchFileParameters
+		SharedWithMe   bool
+		Search         *SearchFileParameters
+		ExtraPredicate predicate.File
 	}
 
 	FlattenListFileParameters struct {
@@ -1076,6 +1077,9 @@ func (f *fileClient) SearchSubtreeFiles(ctx context.Context, root *ent.File, own
 	query := withFileEagerLoading(ctx, f.client.File.Query()).
 		Where(file.OwnerIDEQ(ownerID)).
 		Where(treePathVisibleSubtreePredicate(root.TreePath, false, -1))
+	if args.ExtraPredicate != nil {
+		query = query.Where(args.ExtraPredicate)
+	}
 	if args.Search != nil {
 		query = f.applySearchFilters(query, args.Search)
 	}
@@ -1105,10 +1109,14 @@ func (f *fileClient) SearchSubtreeFiles(ctx context.Context, root *ent.File, own
 
 	limitReached := false
 	if maxRecursiveFolders > 0 {
-		folders, err := f.client.File.Query().
+		folderQuery := f.client.File.Query().
 			Where(file.OwnerIDEQ(ownerID)).
 			Where(treePathVisibleSubtreePredicate(root.TreePath, false, -1)).
-			Where(file.TypeEQ(int(types.FileTypeFolder))).
+			Where(file.TypeEQ(int(types.FileTypeFolder)))
+		if args.ExtraPredicate != nil {
+			folderQuery = folderQuery.Where(args.ExtraPredicate)
+		}
+		folders, err := folderQuery.
 			Limit(maxRecursiveFolders + 1).
 			All(ctx)
 		if err != nil {
@@ -1235,6 +1243,9 @@ func (f *fileClient) GetChildFile(ctx context.Context, root *ent.File, ownerID i
 func (f *fileClient) GetChildFiles(ctx context.Context, args *ListFileParameters, ownerID int, roots ...*ent.File) (*ListFileResult, error) {
 	rawQuery := f.childFileQuery(ownerID, args.SharedWithMe, roots...)
 	query := withFileEagerLoading(ctx, rawQuery)
+	if args.ExtraPredicate != nil {
+		query = query.Where(args.ExtraPredicate)
+	}
 	if args.Search != nil {
 		query = f.searchQuery(query, args.Search, roots, ownerID)
 	}

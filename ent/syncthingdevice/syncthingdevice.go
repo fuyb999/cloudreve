@@ -45,6 +45,18 @@ const (
 	FieldLastSyncAt = "last_sync_at"
 	// FieldOnline holds the string denoting the online field in the database.
 	FieldOnline = "online"
+	// FieldIsBound holds the string denoting the is_bound field in the database.
+	FieldIsBound = "is_bound"
+	// FieldCloudSyncEnabled holds the string denoting the cloud_sync_enabled field in the database.
+	FieldCloudSyncEnabled = "cloud_sync_enabled"
+	// FieldManagementAction holds the string denoting the management_action field in the database.
+	FieldManagementAction = "management_action"
+	// FieldManagementActionID holds the string denoting the management_action_id field in the database.
+	FieldManagementActionID = "management_action_id"
+	// FieldManagementActionPayload holds the string denoting the management_action_payload field in the database.
+	FieldManagementActionPayload = "management_action_payload"
+	// FieldManagementActionUpdatedAt holds the string denoting the management_action_updated_at field in the database.
+	FieldManagementActionUpdatedAt = "management_action_updated_at"
 	// EdgeOwner holds the string denoting the owner edge name in mutations.
 	EdgeOwner = "owner"
 	// Table holds the table name of the syncthingdevice in the database.
@@ -76,6 +88,12 @@ var Columns = []string{
 	FieldLastSeenAt,
 	FieldLastSyncAt,
 	FieldOnline,
+	FieldIsBound,
+	FieldCloudSyncEnabled,
+	FieldManagementAction,
+	FieldManagementActionID,
+	FieldManagementActionPayload,
+	FieldManagementActionUpdatedAt,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -120,6 +138,16 @@ var (
 	PlatformValidator func(string) error
 	// DefaultOnline holds the default value on creation for the "online" field.
 	DefaultOnline bool
+	// DefaultIsBound holds the default value on creation for the "is_bound" field.
+	DefaultIsBound bool
+	// DefaultCloudSyncEnabled holds the default value on creation for the "cloud_sync_enabled" field.
+	DefaultCloudSyncEnabled bool
+	// ManagementActionValidator is a validator for the "management_action" field. It is called by the builders before save.
+	ManagementActionValidator func(string) error
+	// ManagementActionIDValidator is a validator for the "management_action_id" field. It is called by the builders before save.
+	ManagementActionIDValidator func(string) error
+	// DefaultManagementActionPayload holds the default value on creation for the "management_action_payload" field.
+	DefaultManagementActionPayload map[string]interface{}
 )
 
 // OrderOption defines the ordering options for the SyncthingDevice queries.
@@ -198,6 +226,31 @@ func ByLastSyncAt(opts ...sql.OrderTermOption) OrderOption {
 // ByOnline orders the results by the online field.
 func ByOnline(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOnline, opts...).ToFunc()
+}
+
+// ByIsBound orders the results by the is_bound field.
+func ByIsBound(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIsBound, opts...).ToFunc()
+}
+
+// ByCloudSyncEnabled orders the results by the cloud_sync_enabled field.
+func ByCloudSyncEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCloudSyncEnabled, opts...).ToFunc()
+}
+
+// ByManagementAction orders the results by the management_action field.
+func ByManagementAction(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldManagementAction, opts...).ToFunc()
+}
+
+// ByManagementActionID orders the results by the management_action_id field.
+func ByManagementActionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldManagementActionID, opts...).ToFunc()
+}
+
+// ByManagementActionUpdatedAt orders the results by the management_action_updated_at field.
+func ByManagementActionUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldManagementActionUpdatedAt, opts...).ToFunc()
 }
 
 // ByOwnerField orders the results by owner field.

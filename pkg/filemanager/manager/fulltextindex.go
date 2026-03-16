@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
@@ -16,6 +17,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -60,9 +62,56 @@ var fullTextPendingMergeLock sync.Mutex
 
 const fullTextMaxFilesPerTask = 64
 
-func (m *manager) SearchFullText(ctx context.Context, query string, offset int) (*FullTextSearchResults, error) {
+func (m *manager) SearchFullText(ctx context.Context, query string, offset int, base *fs.URI) (*FullTextSearchResults, error) {
 	indexer := m.dep.SearchIndexer(ctx)
-	results, total, err := indexer.Search(ctx, m.user.ID, query, offset)
+	searchReq := &searcher.SearchRequest{
+		Query:   query,
+		Offset:  offset,
+		OwnerID: &m.user.ID,
+	}
+
+	if base != nil && base.FileSystem() == constants.FileSystemPublic {
+		publicService := publicshare.NewService(m.l, m.dep.FileClient(), m.dep.SettingClient(), m.hasher)
+		visibility, err := publicService.ResolveVisibility(ctx, m.user)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve public visibility for search: %w", err)
+		}
+
+		filter := visibility.Filter
+		searchReq.OwnerID = nil
+		if !base.IsSame(publicshare.BuildPublicURI(), hashid.EncodeUserID(m.hasher, m.user.ID)) {
+			target, err := m.Get(ctx, base)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve public search base: %w", err)
+			}
+
+			scope := &publicshare.FileFilterExpr{
+				Operator: publicshare.FileFilterOpAnd,
+				Children: []*publicshare.FileFilterExpr{
+					filter,
+					{
+						Match: &publicshare.FileFilterMatch{
+							Kind:      publicshare.FileFilterMatchOwnerIDIn,
+							IntValues: []int{target.OwnerID()},
+						},
+					},
+				},
+			}
+			if model, ok := target.(*dbfs.File); ok && model.Model.TreePath != "" {
+				scope.Children = append(scope.Children, &publicshare.FileFilterExpr{
+					Match: &publicshare.FileFilterMatch{
+						Kind:         publicshare.FileFilterMatchTreePathIn,
+						StringValues: []string{model.Model.TreePath},
+					},
+				})
+			}
+			filter = scope
+		}
+
+		searchReq.VisibilityFilter = filter
+	}
+
+	results, total, err := indexer.Search(ctx, searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search full text: %w", err)
 	}
@@ -88,7 +137,7 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int) 
 
 	if len(files) == 0 {
 		// No valid files, run next offset
-		return m.SearchFullText(ctx, query, offset+len(results))
+		return m.SearchFullText(ctx, query, offset+len(results), base)
 	}
 
 	return &FullTextSearchResults{

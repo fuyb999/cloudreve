@@ -62,6 +62,10 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 			WithError(fmt.Errorf("object with the same name but different type %q already exist", ancestor.Type()))
 	}
 
+	if err := ensureCapability(ancestor, NavigatorCapabilityCreateFile); err != nil {
+		return nil, err
+	}
+
 	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && ancestor.Owner().ID != f.user.ID {
 		return nil, fs.ErrOwnerOnly
 	}
@@ -167,6 +171,10 @@ func (f *DBFS) Rename(ctx context.Context, path *fs.URI, newName string) (fs.Fil
 	}
 	oldName := target.Name()
 
+	if err := ensureCapability(target, NavigatorCapabilityRenameFile); err != nil {
+		return nil, nil, err
+	}
+
 	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.Owner().ID != f.user.ID {
 		return nil, nil, fs.ErrOwnerOnly
 	}
@@ -270,6 +278,11 @@ func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 			continue
 		}
 
+		if err := ensureCapability(target, NavigatorCapabilitySoftDelete); err != nil {
+			ae.Add(p.String(), err)
+			continue
+		}
+
 		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.Owner().ID != f.user.ID {
 			ae.Add(p.String(), fs.ErrOwnerOnly.WithError(fmt.Errorf("only file owner can delete file without trash bin")))
 			continue
@@ -365,6 +378,11 @@ func (f *DBFS) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option) ([
 			continue
 		}
 
+		if err := ensureCapability(target, NavigatorCapabilityDeleteFile); err != nil {
+			ae.Add(p.String(), err)
+			continue
+		}
+
 		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !o.SysSkipSoftDelete && !ok && target.Owner().ID != f.user.ID {
 			ae.Add(p.String(), fs.ErrOwnerOnly)
 			continue
@@ -435,6 +453,10 @@ func (f *DBFS) VersionControl(ctx context.Context, path *fs.URI, versionId int, 
 	target, err := f.getFileByPath(ctx, navigator, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get target file: %w", err)
+	}
+
+	if err := ensureCapability(target, NavigatorCapabilityVersionControl); err != nil {
+		return nil, err
 	}
 
 	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.Owner().ID != f.user.ID {

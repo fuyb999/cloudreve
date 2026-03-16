@@ -49,6 +49,18 @@ type SyncthingDevice struct {
 	LastSyncAt *time.Time `json:"last_sync_at,omitempty"`
 	// Online holds the value of the "online" field.
 	Online bool `json:"online,omitempty"`
+	// IsBound holds the value of the "is_bound" field.
+	IsBound bool `json:"is_bound,omitempty"`
+	// CloudSyncEnabled holds the value of the "cloud_sync_enabled" field.
+	CloudSyncEnabled bool `json:"cloud_sync_enabled,omitempty"`
+	// ManagementAction holds the value of the "management_action" field.
+	ManagementAction string `json:"management_action,omitempty"`
+	// ManagementActionID holds the value of the "management_action_id" field.
+	ManagementActionID string `json:"management_action_id,omitempty"`
+	// ManagementActionPayload holds the value of the "management_action_payload" field.
+	ManagementActionPayload map[string]interface{} `json:"management_action_payload,omitempty"`
+	// ManagementActionUpdatedAt holds the value of the "management_action_updated_at" field.
+	ManagementActionUpdatedAt *time.Time `json:"management_action_updated_at,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SyncthingDeviceQuery when eager-loading is set.
 	Edges        SyncthingDeviceEdges `json:"edges"`
@@ -82,15 +94,15 @@ func (*SyncthingDevice) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case syncthingdevice.FieldJSONRaw:
+		case syncthingdevice.FieldJSONRaw, syncthingdevice.FieldManagementActionPayload:
 			values[i] = new([]byte)
-		case syncthingdevice.FieldOnline:
+		case syncthingdevice.FieldOnline, syncthingdevice.FieldIsBound, syncthingdevice.FieldCloudSyncEnabled:
 			values[i] = new(sql.NullBool)
 		case syncthingdevice.FieldID, syncthingdevice.FieldOwnerID:
 			values[i] = new(sql.NullInt64)
-		case syncthingdevice.FieldDeviceID, syncthingdevice.FieldShortID, syncthingdevice.FieldLastIP, syncthingdevice.FieldAPIKey, syncthingdevice.FieldBindURI, syncthingdevice.FieldClientVersion, syncthingdevice.FieldPlatform:
+		case syncthingdevice.FieldDeviceID, syncthingdevice.FieldShortID, syncthingdevice.FieldLastIP, syncthingdevice.FieldAPIKey, syncthingdevice.FieldBindURI, syncthingdevice.FieldClientVersion, syncthingdevice.FieldPlatform, syncthingdevice.FieldManagementAction, syncthingdevice.FieldManagementActionID:
 			values[i] = new(sql.NullString)
-		case syncthingdevice.FieldCreatedAt, syncthingdevice.FieldUpdatedAt, syncthingdevice.FieldDeletedAt, syncthingdevice.FieldLastSeenAt, syncthingdevice.FieldLastSyncAt:
+		case syncthingdevice.FieldCreatedAt, syncthingdevice.FieldUpdatedAt, syncthingdevice.FieldDeletedAt, syncthingdevice.FieldLastSeenAt, syncthingdevice.FieldLastSyncAt, syncthingdevice.FieldManagementActionUpdatedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -208,6 +220,45 @@ func (sd *SyncthingDevice) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				sd.Online = value.Bool
 			}
+		case syncthingdevice.FieldIsBound:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field is_bound", values[i])
+			} else if value.Valid {
+				sd.IsBound = value.Bool
+			}
+		case syncthingdevice.FieldCloudSyncEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field cloud_sync_enabled", values[i])
+			} else if value.Valid {
+				sd.CloudSyncEnabled = value.Bool
+			}
+		case syncthingdevice.FieldManagementAction:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field management_action", values[i])
+			} else if value.Valid {
+				sd.ManagementAction = value.String
+			}
+		case syncthingdevice.FieldManagementActionID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field management_action_id", values[i])
+			} else if value.Valid {
+				sd.ManagementActionID = value.String
+			}
+		case syncthingdevice.FieldManagementActionPayload:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field management_action_payload", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &sd.ManagementActionPayload); err != nil {
+					return fmt.Errorf("unmarshal field management_action_payload: %w", err)
+				}
+			}
+		case syncthingdevice.FieldManagementActionUpdatedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field management_action_updated_at", values[i])
+			} else if value.Valid {
+				sd.ManagementActionUpdatedAt = new(time.Time)
+				*sd.ManagementActionUpdatedAt = value.Time
+			}
 		default:
 			sd.selectValues.Set(columns[i], values[i])
 		}
@@ -298,6 +349,26 @@ func (sd *SyncthingDevice) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("online=")
 	builder.WriteString(fmt.Sprintf("%v", sd.Online))
+	builder.WriteString(", ")
+	builder.WriteString("is_bound=")
+	builder.WriteString(fmt.Sprintf("%v", sd.IsBound))
+	builder.WriteString(", ")
+	builder.WriteString("cloud_sync_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", sd.CloudSyncEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("management_action=")
+	builder.WriteString(sd.ManagementAction)
+	builder.WriteString(", ")
+	builder.WriteString("management_action_id=")
+	builder.WriteString(sd.ManagementActionID)
+	builder.WriteString(", ")
+	builder.WriteString("management_action_payload=")
+	builder.WriteString(fmt.Sprintf("%v", sd.ManagementActionPayload))
+	builder.WriteString(", ")
+	if v := sd.ManagementActionUpdatedAt; v != nil {
+		builder.WriteString("management_action_updated_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

@@ -385,7 +385,7 @@ func BuildShare(s *ent.Share, base *url.URL, hasher hashid.Encoder, requester *e
 func BuildListResponse(ctx context.Context, u *ent.User, parent fs.File, res *fs.ListFileResult, hasher hashid.Encoder) *ListResponse {
 	r := &ListResponse{
 		Files: lo.Map(res.Files, func(f fs.File, index int) FileResponse {
-			return *BuildFileResponse(ctx, u, f, hasher, res.Props.Capability)
+			return *BuildFileResponse(ctx, u, f, hasher, nil)
 		}),
 		Pagination:            res.Pagination,
 		Props:                 res.Props,
@@ -398,7 +398,7 @@ func BuildListResponse(ctx context.Context, u *ent.User, parent fs.File, res *fs
 	}
 
 	if !res.Parent.IsNil() {
-		r.Parent = *BuildFileResponse(ctx, u, res.Parent, hasher, res.Props.Capability)
+		r.Parent = *BuildFileResponse(ctx, u, res.Parent, hasher, nil)
 	}
 
 	return r

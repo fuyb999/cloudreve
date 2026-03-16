@@ -269,6 +269,106 @@ func (sdu *SyncthingDeviceUpdate) SetNillableOnline(b *bool) *SyncthingDeviceUpd
 	return sdu
 }
 
+// SetIsBound sets the "is_bound" field.
+func (sdu *SyncthingDeviceUpdate) SetIsBound(b bool) *SyncthingDeviceUpdate {
+	sdu.mutation.SetIsBound(b)
+	return sdu
+}
+
+// SetNillableIsBound sets the "is_bound" field if the given value is not nil.
+func (sdu *SyncthingDeviceUpdate) SetNillableIsBound(b *bool) *SyncthingDeviceUpdate {
+	if b != nil {
+		sdu.SetIsBound(*b)
+	}
+	return sdu
+}
+
+// SetCloudSyncEnabled sets the "cloud_sync_enabled" field.
+func (sdu *SyncthingDeviceUpdate) SetCloudSyncEnabled(b bool) *SyncthingDeviceUpdate {
+	sdu.mutation.SetCloudSyncEnabled(b)
+	return sdu
+}
+
+// SetNillableCloudSyncEnabled sets the "cloud_sync_enabled" field if the given value is not nil.
+func (sdu *SyncthingDeviceUpdate) SetNillableCloudSyncEnabled(b *bool) *SyncthingDeviceUpdate {
+	if b != nil {
+		sdu.SetCloudSyncEnabled(*b)
+	}
+	return sdu
+}
+
+// SetManagementAction sets the "management_action" field.
+func (sdu *SyncthingDeviceUpdate) SetManagementAction(s string) *SyncthingDeviceUpdate {
+	sdu.mutation.SetManagementAction(s)
+	return sdu
+}
+
+// SetNillableManagementAction sets the "management_action" field if the given value is not nil.
+func (sdu *SyncthingDeviceUpdate) SetNillableManagementAction(s *string) *SyncthingDeviceUpdate {
+	if s != nil {
+		sdu.SetManagementAction(*s)
+	}
+	return sdu
+}
+
+// ClearManagementAction clears the value of the "management_action" field.
+func (sdu *SyncthingDeviceUpdate) ClearManagementAction() *SyncthingDeviceUpdate {
+	sdu.mutation.ClearManagementAction()
+	return sdu
+}
+
+// SetManagementActionID sets the "management_action_id" field.
+func (sdu *SyncthingDeviceUpdate) SetManagementActionID(s string) *SyncthingDeviceUpdate {
+	sdu.mutation.SetManagementActionID(s)
+	return sdu
+}
+
+// SetNillableManagementActionID sets the "management_action_id" field if the given value is not nil.
+func (sdu *SyncthingDeviceUpdate) SetNillableManagementActionID(s *string) *SyncthingDeviceUpdate {
+	if s != nil {
+		sdu.SetManagementActionID(*s)
+	}
+	return sdu
+}
+
+// ClearManagementActionID clears the value of the "management_action_id" field.
+func (sdu *SyncthingDeviceUpdate) ClearManagementActionID() *SyncthingDeviceUpdate {
+	sdu.mutation.ClearManagementActionID()
+	return sdu
+}
+
+// SetManagementActionPayload sets the "management_action_payload" field.
+func (sdu *SyncthingDeviceUpdate) SetManagementActionPayload(m map[string]interface{}) *SyncthingDeviceUpdate {
+	sdu.mutation.SetManagementActionPayload(m)
+	return sdu
+}
+
+// ClearManagementActionPayload clears the value of the "management_action_payload" field.
+func (sdu *SyncthingDeviceUpdate) ClearManagementActionPayload() *SyncthingDeviceUpdate {
+	sdu.mutation.ClearManagementActionPayload()
+	return sdu
+}
+
+// SetManagementActionUpdatedAt sets the "management_action_updated_at" field.
+func (sdu *SyncthingDeviceUpdate) SetManagementActionUpdatedAt(t time.Time) *SyncthingDeviceUpdate {
+	sdu.mutation.SetManagementActionUpdatedAt(t)
+	return sdu
+}
+
+// SetNillableManagementActionUpdatedAt sets the "management_action_updated_at" field if the given value is not nil.
+func (sdu *SyncthingDeviceUpdate) SetNillableManagementActionUpdatedAt(t *time.Time) *SyncthingDeviceUpdate {
+	if t != nil {
+		sdu.SetManagementActionUpdatedAt(*t)
+	}
+	return sdu
+}
+
+// ClearManagementActionUpdatedAt clears the value of the "management_action_updated_at" field.
+func (sdu *SyncthingDeviceUpdate) ClearManagementActionUpdatedAt() *SyncthingDeviceUpdate {
+	sdu.mutation.ClearManagementActionUpdatedAt()
+	return sdu
+}
+
 // SetOwner sets the "owner" edge to the User entity.
 func (sdu *SyncthingDeviceUpdate) SetOwner(u *User) *SyncthingDeviceUpdate {
 	return sdu.SetOwnerID(u.ID)
@@ -364,6 +464,16 @@ func (sdu *SyncthingDeviceUpdate) check() error {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.platform": %w`, err)}
 		}
 	}
+	if v, ok := sdu.mutation.ManagementAction(); ok {
+		if err := syncthingdevice.ManagementActionValidator(v); err != nil {
+			return &ValidationError{Name: "management_action", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.management_action": %w`, err)}
+		}
+	}
+	if v, ok := sdu.mutation.ManagementActionID(); ok {
+		if err := syncthingdevice.ManagementActionIDValidator(v); err != nil {
+			return &ValidationError{Name: "management_action_id", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.management_action_id": %w`, err)}
+		}
+	}
 	if _, ok := sdu.mutation.OwnerID(); sdu.mutation.OwnerCleared() && !ok {
 		return errors.New(`ent: clearing a required unique edge "SyncthingDevice.owner"`)
 	}
@@ -450,6 +560,36 @@ func (sdu *SyncthingDeviceUpdate) sqlSave(ctx context.Context) (n int, err error
 	}
 	if value, ok := sdu.mutation.Online(); ok {
 		_spec.SetField(syncthingdevice.FieldOnline, field.TypeBool, value)
+	}
+	if value, ok := sdu.mutation.IsBound(); ok {
+		_spec.SetField(syncthingdevice.FieldIsBound, field.TypeBool, value)
+	}
+	if value, ok := sdu.mutation.CloudSyncEnabled(); ok {
+		_spec.SetField(syncthingdevice.FieldCloudSyncEnabled, field.TypeBool, value)
+	}
+	if value, ok := sdu.mutation.ManagementAction(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementAction, field.TypeString, value)
+	}
+	if sdu.mutation.ManagementActionCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementAction, field.TypeString)
+	}
+	if value, ok := sdu.mutation.ManagementActionID(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionID, field.TypeString, value)
+	}
+	if sdu.mutation.ManagementActionIDCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementActionID, field.TypeString)
+	}
+	if value, ok := sdu.mutation.ManagementActionPayload(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionPayload, field.TypeJSON, value)
+	}
+	if sdu.mutation.ManagementActionPayloadCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementActionPayload, field.TypeJSON)
+	}
+	if value, ok := sdu.mutation.ManagementActionUpdatedAt(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionUpdatedAt, field.TypeTime, value)
+	}
+	if sdu.mutation.ManagementActionUpdatedAtCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementActionUpdatedAt, field.TypeTime)
 	}
 	if sdu.mutation.OwnerCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -740,6 +880,106 @@ func (sduo *SyncthingDeviceUpdateOne) SetNillableOnline(b *bool) *SyncthingDevic
 	return sduo
 }
 
+// SetIsBound sets the "is_bound" field.
+func (sduo *SyncthingDeviceUpdateOne) SetIsBound(b bool) *SyncthingDeviceUpdateOne {
+	sduo.mutation.SetIsBound(b)
+	return sduo
+}
+
+// SetNillableIsBound sets the "is_bound" field if the given value is not nil.
+func (sduo *SyncthingDeviceUpdateOne) SetNillableIsBound(b *bool) *SyncthingDeviceUpdateOne {
+	if b != nil {
+		sduo.SetIsBound(*b)
+	}
+	return sduo
+}
+
+// SetCloudSyncEnabled sets the "cloud_sync_enabled" field.
+func (sduo *SyncthingDeviceUpdateOne) SetCloudSyncEnabled(b bool) *SyncthingDeviceUpdateOne {
+	sduo.mutation.SetCloudSyncEnabled(b)
+	return sduo
+}
+
+// SetNillableCloudSyncEnabled sets the "cloud_sync_enabled" field if the given value is not nil.
+func (sduo *SyncthingDeviceUpdateOne) SetNillableCloudSyncEnabled(b *bool) *SyncthingDeviceUpdateOne {
+	if b != nil {
+		sduo.SetCloudSyncEnabled(*b)
+	}
+	return sduo
+}
+
+// SetManagementAction sets the "management_action" field.
+func (sduo *SyncthingDeviceUpdateOne) SetManagementAction(s string) *SyncthingDeviceUpdateOne {
+	sduo.mutation.SetManagementAction(s)
+	return sduo
+}
+
+// SetNillableManagementAction sets the "management_action" field if the given value is not nil.
+func (sduo *SyncthingDeviceUpdateOne) SetNillableManagementAction(s *string) *SyncthingDeviceUpdateOne {
+	if s != nil {
+		sduo.SetManagementAction(*s)
+	}
+	return sduo
+}
+
+// ClearManagementAction clears the value of the "management_action" field.
+func (sduo *SyncthingDeviceUpdateOne) ClearManagementAction() *SyncthingDeviceUpdateOne {
+	sduo.mutation.ClearManagementAction()
+	return sduo
+}
+
+// SetManagementActionID sets the "management_action_id" field.
+func (sduo *SyncthingDeviceUpdateOne) SetManagementActionID(s string) *SyncthingDeviceUpdateOne {
+	sduo.mutation.SetManagementActionID(s)
+	return sduo
+}
+
+// SetNillableManagementActionID sets the "management_action_id" field if the given value is not nil.
+func (sduo *SyncthingDeviceUpdateOne) SetNillableManagementActionID(s *string) *SyncthingDeviceUpdateOne {
+	if s != nil {
+		sduo.SetManagementActionID(*s)
+	}
+	return sduo
+}
+
+// ClearManagementActionID clears the value of the "management_action_id" field.
+func (sduo *SyncthingDeviceUpdateOne) ClearManagementActionID() *SyncthingDeviceUpdateOne {
+	sduo.mutation.ClearManagementActionID()
+	return sduo
+}
+
+// SetManagementActionPayload sets the "management_action_payload" field.
+func (sduo *SyncthingDeviceUpdateOne) SetManagementActionPayload(m map[string]interface{}) *SyncthingDeviceUpdateOne {
+	sduo.mutation.SetManagementActionPayload(m)
+	return sduo
+}
+
+// ClearManagementActionPayload clears the value of the "management_action_payload" field.
+func (sduo *SyncthingDeviceUpdateOne) ClearManagementActionPayload() *SyncthingDeviceUpdateOne {
+	sduo.mutation.ClearManagementActionPayload()
+	return sduo
+}
+
+// SetManagementActionUpdatedAt sets the "management_action_updated_at" field.
+func (sduo *SyncthingDeviceUpdateOne) SetManagementActionUpdatedAt(t time.Time) *SyncthingDeviceUpdateOne {
+	sduo.mutation.SetManagementActionUpdatedAt(t)
+	return sduo
+}
+
+// SetNillableManagementActionUpdatedAt sets the "management_action_updated_at" field if the given value is not nil.
+func (sduo *SyncthingDeviceUpdateOne) SetNillableManagementActionUpdatedAt(t *time.Time) *SyncthingDeviceUpdateOne {
+	if t != nil {
+		sduo.SetManagementActionUpdatedAt(*t)
+	}
+	return sduo
+}
+
+// ClearManagementActionUpdatedAt clears the value of the "management_action_updated_at" field.
+func (sduo *SyncthingDeviceUpdateOne) ClearManagementActionUpdatedAt() *SyncthingDeviceUpdateOne {
+	sduo.mutation.ClearManagementActionUpdatedAt()
+	return sduo
+}
+
 // SetOwner sets the "owner" edge to the User entity.
 func (sduo *SyncthingDeviceUpdateOne) SetOwner(u *User) *SyncthingDeviceUpdateOne {
 	return sduo.SetOwnerID(u.ID)
@@ -848,6 +1088,16 @@ func (sduo *SyncthingDeviceUpdateOne) check() error {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.platform": %w`, err)}
 		}
 	}
+	if v, ok := sduo.mutation.ManagementAction(); ok {
+		if err := syncthingdevice.ManagementActionValidator(v); err != nil {
+			return &ValidationError{Name: "management_action", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.management_action": %w`, err)}
+		}
+	}
+	if v, ok := sduo.mutation.ManagementActionID(); ok {
+		if err := syncthingdevice.ManagementActionIDValidator(v); err != nil {
+			return &ValidationError{Name: "management_action_id", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.management_action_id": %w`, err)}
+		}
+	}
 	if _, ok := sduo.mutation.OwnerID(); sduo.mutation.OwnerCleared() && !ok {
 		return errors.New(`ent: clearing a required unique edge "SyncthingDevice.owner"`)
 	}
@@ -951,6 +1201,36 @@ func (sduo *SyncthingDeviceUpdateOne) sqlSave(ctx context.Context) (_node *Synct
 	}
 	if value, ok := sduo.mutation.Online(); ok {
 		_spec.SetField(syncthingdevice.FieldOnline, field.TypeBool, value)
+	}
+	if value, ok := sduo.mutation.IsBound(); ok {
+		_spec.SetField(syncthingdevice.FieldIsBound, field.TypeBool, value)
+	}
+	if value, ok := sduo.mutation.CloudSyncEnabled(); ok {
+		_spec.SetField(syncthingdevice.FieldCloudSyncEnabled, field.TypeBool, value)
+	}
+	if value, ok := sduo.mutation.ManagementAction(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementAction, field.TypeString, value)
+	}
+	if sduo.mutation.ManagementActionCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementAction, field.TypeString)
+	}
+	if value, ok := sduo.mutation.ManagementActionID(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionID, field.TypeString, value)
+	}
+	if sduo.mutation.ManagementActionIDCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementActionID, field.TypeString)
+	}
+	if value, ok := sduo.mutation.ManagementActionPayload(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionPayload, field.TypeJSON, value)
+	}
+	if sduo.mutation.ManagementActionPayloadCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementActionPayload, field.TypeJSON)
+	}
+	if value, ok := sduo.mutation.ManagementActionUpdatedAt(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionUpdatedAt, field.TypeTime, value)
+	}
+	if sduo.mutation.ManagementActionUpdatedAtCleared() {
+		_spec.ClearField(syncthingdevice.FieldManagementActionUpdatedAt, field.TypeTime)
 	}
 	if sduo.mutation.OwnerCleared() {
 		edge := &sqlgraph.EdgeSpec{

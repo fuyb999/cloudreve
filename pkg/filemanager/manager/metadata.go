@@ -280,6 +280,7 @@ var (
 )
 
 func (m *manager) PatchMedata(ctx context.Context, path []*fs.URI, data ...fs.MetadataPatch) error {
+	ctx = withPublicBypass(ctx, path...)
 	data, err := m.validateMetadata(ctx, data...)
 	if err != nil {
 		return err

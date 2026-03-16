@@ -57,8 +57,8 @@ type (
 		CreateViewerSession(ctx context.Context, uri *fs.URI, version string, viewer *types.Viewer) (*ViewerSession, error)
 		// TraverseFile traverses a file to its root file, return the file with linked root.
 		TraverseFile(ctx context.Context, fileID int) (fs.File, error)
-		// SearchFullText searches full text for given query and offset
-		SearchFullText(ctx context.Context, query string, offset int) (*FullTextSearchResults, error)
+		// SearchFullText searches full text for given query and offset.
+		SearchFullText(ctx context.Context, query string, offset int, base *fs.URI) (*FullTextSearchResults, error)
 	}
 
 	FsManagement interface {
@@ -159,7 +159,7 @@ func NewFileManager(dep dependency.Dep, u *ent.User) FileManager {
 		user:     u,
 		settings: dep.SettingProvider(),
 		fs: dbfs.NewDatabaseFS(u, dep.FileClient(), dep.ShareClient(), dep.Logger(), dep.LockSystem(),
-			dep.SettingProvider(), dep.StoragePolicyClient(), dep.HashIDEncoder(), dep.UserClient(), dep.KV(), dep.NavigatorStateKV(),
+			dep.SettingProvider(), dep.SettingClient(), dep.StoragePolicyClient(), dep.HashIDEncoder(), dep.UserClient(), dep.KV(), dep.NavigatorStateKV(),
 			dep.DirectLinkClient(), dep.EncryptorFactory(context.TODO()), dep.EventHub()),
 		kv:           dep.KV(),
 		config:       config,

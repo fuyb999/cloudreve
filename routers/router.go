@@ -20,6 +20,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/service/explorer"
 	"github.com/cloudreve/Cloudreve/v4/service/node"
 	"github.com/cloudreve/Cloudreve/v4/service/oauth"
+	publicsvc "github.com/cloudreve/Cloudreve/v4/service/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/service/setting"
 	sharesvc "github.com/cloudreve/Cloudreve/v4/service/share"
 	usersvc "github.com/cloudreve/Cloudreve/v4/service/user"
@@ -869,6 +870,25 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 			//)
 		}
 
+		public := v4.Group("public")
+		public.Use(
+			middleware.LoginRequired(),
+			middleware.RequiredScopes(types.ScopeFilesRead),
+		)
+		{
+			remote := public.Group("remote")
+			{
+				remote.GET("visibility",
+					controllers.FromQuery[publicsvc.RemoteVisibilityService](publicsvc.RemoteVisibilityParamCtx{}),
+					controllers.PublicRemoteVisibility,
+				)
+				remote.POST("check",
+					controllers.FromJSON[publicsvc.RemoteCheckService](publicsvc.RemoteCheckParamCtx{}),
+					controllers.PublicRemoteCheck,
+				)
+			}
+		}
+
 		// 需要登录保护的
 		auth := v4.Group("")
 		auth.Use(middleware.LoginRequired())
@@ -1240,6 +1260,44 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 						middleware.RequiredScopes(types.ScopeAdminWrite),
 						controllers.FromJSON[adminsvc.BatchShareService](adminsvc.BatchShareParamCtx{}),
 						controllers.AdminBatchDeleteShare,
+					)
+				}
+
+				public := admin.Group("public")
+				{
+					public.GET("root",
+						controllers.FromQuery[publicsvc.AdminPublicRootService](publicsvc.AdminPublicRootParamCtx{}),
+						controllers.AdminGetPublicRoot,
+					)
+					public.PUT("root",
+						middleware.RequiredScopes(types.ScopeAdminWrite),
+						controllers.FromQuery[publicsvc.AdminPublicRootService](publicsvc.AdminPublicRootParamCtx{}),
+						controllers.AdminEnsurePublicRoot,
+					)
+					public.GET("folder", controllers.AdminListPublicFolders)
+					public.PUT("folder",
+						middleware.RequiredScopes(types.ScopeAdminWrite),
+						controllers.FromJSON[publicsvc.AdminPublicFolderCreateService](publicsvc.AdminPublicFolderCreateParamCtx{}),
+						controllers.AdminCreatePublicFolder,
+					)
+					public.PATCH("folder/rule",
+						middleware.RequiredScopes(types.ScopeAdminWrite),
+						controllers.FromJSON[publicsvc.AdminPublicFolderRuleService](publicsvc.AdminPublicFolderRuleParamCtx{}),
+						controllers.AdminUpdatePublicFolderRule,
+					)
+					public.GET("mockState",
+						controllers.FromQuery[publicsvc.AdminPublicMockStateService](publicsvc.AdminPublicMockStateParamCtx{}),
+						controllers.AdminGetPublicMockState,
+					)
+					public.PUT("mockState",
+						middleware.RequiredScopes(types.ScopeAdminWrite),
+						controllers.FromJSON[publicsvc.AdminPublicMockStateService](publicsvc.AdminPublicMockStateParamCtx{}),
+						controllers.AdminUpdatePublicMockState,
+					)
+					public.PUT("profile",
+						middleware.RequiredScopes(types.ScopeAdminWrite),
+						controllers.FromJSON[publicsvc.AdminPublicProfileService](publicsvc.AdminPublicProfileParamCtx{}),
+						controllers.AdminUpsertPublicProfile,
 					)
 				}
 			}

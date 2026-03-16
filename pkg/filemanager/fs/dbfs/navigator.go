@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
@@ -65,6 +66,7 @@ type (
 		Page           *inventory.PaginationArgs
 		Search         *inventory.SearchFileParameters
 		SharedWithMe   bool
+		ExtraPredicate predicate.File
 		StreamCallback func([]*File)
 	}
 	// ListResult is the result of a list operation.
@@ -266,6 +268,7 @@ func (b *baseNavigator) children(ctx context.Context, parent *File, args *ListAr
 	children, err := b.fileClient.GetChildFiles(ctx, &inventory.ListFileParameters{
 		PaginationArgs: args.Page,
 		SharedWithMe:   args.SharedWithMe,
+		ExtraPredicate: args.ExtraPredicate,
 	}, b.user.ID, model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get children: %w", err)
@@ -476,6 +479,7 @@ func (b *baseNavigator) search(ctx context.Context, parent *File, args *ListArgs
 			MixedType:      true,
 			Search:         args.Search,
 			SharedWithMe:   args.SharedWithMe,
+			ExtraPredicate: args.ExtraPredicate,
 		}, b.user.ID, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get children: %w", err)
@@ -521,7 +525,8 @@ func (b *baseNavigator) search(ctx context.Context, parent *File, args *ListArgs
 						UseCursorPagination: true,
 						PageToken:           token,
 					},
-					FolderOnly: true,
+					FolderOnly:     true,
+					ExtraPredicate: args.ExtraPredicate,
 				},
 				parent.Model.OwnerID,
 				lo.MapToSlice(parents[level], func(k int, f *File) *ent.File {
@@ -583,6 +588,7 @@ func (b *baseNavigator) search(ctx context.Context, parent *File, args *ListArgs
 				PaginationArgs: args.Page,
 				MixedType:      true,
 				Search:         args.Search,
+				ExtraPredicate: args.ExtraPredicate,
 			},
 			parent.Model.OwnerID,
 			lo.MapToSlice(parents[startLevel], func(k int, f *File) *ent.File {
@@ -652,6 +658,7 @@ func (b *baseNavigator) searchWithTreePath(ctx context.Context, parent *File, ar
 		PaginationArgs: args.Page,
 		MixedType:      true,
 		Search:         args.Search,
+		ExtraPredicate: args.ExtraPredicate,
 	}, b.config.MaxRecursiveSearchedFolder)
 	if err != nil {
 		return nil, err

@@ -21,7 +21,7 @@ func (n *NoopIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int) error 
 	return nil
 }
 
-func (n *NoopIndexer) Search(ctx context.Context, ownerID int, query string, offset int) ([]searcher.SearchResult, int64, error) {
+func (n *NoopIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
 	return nil, 0, nil
 }
 

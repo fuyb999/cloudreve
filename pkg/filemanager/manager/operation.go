@@ -101,6 +101,7 @@ func (m *manager) SharedAddressTranslation(ctx context.Context, path *fs.URI, op
 }
 
 func (m *manager) Create(ctx context.Context, path *fs.URI, fileType types.FileType, opts ...fs.Option) (fs.File, error) {
+	ctx = withPublicBypass(ctx, path)
 	o := newOption()
 	for _, opt := range opts {
 		opt.Apply(o)
@@ -148,6 +149,7 @@ func (m *manager) Create(ctx context.Context, path *fs.URI, fileType types.FileT
 }
 
 func (m *manager) Rename(ctx context.Context, path *fs.URI, newName string) (fs.File, error) {
+	ctx = withPublicBypass(ctx, path)
 	originalName := path.Name()
 	file, indexDiff, err := m.fs.Rename(ctx, path, newName)
 	m.processIndexDiff(ctx, indexDiff)
@@ -162,6 +164,7 @@ func (m *manager) Rename(ctx context.Context, path *fs.URI, newName string) (fs.
 }
 
 func (m *manager) MoveOrCopy(ctx context.Context, src []*fs.URI, dst *fs.URI, isCopy bool) error {
+	ctx = withPublicBypass(ctx, append(src, dst)...)
 	type auditTarget struct {
 		uri  *fs.URI
 		file fs.File
@@ -203,6 +206,7 @@ func (m *manager) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 }
 
 func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option) error {
+	ctx = withPublicBypass(ctx, path...)
 	o := newOption()
 	for _, opt := range opts {
 		opt.Apply(o)

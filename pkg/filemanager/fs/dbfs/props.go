@@ -71,6 +71,11 @@ func (f *DBFS) PatchMetadata(ctx context.Context, path []*fs.URI, metas ...fs.Me
 			continue
 		}
 
+		if err := ensureCapability(target, NavigatorCapabilityUpdateMetadata); err != nil {
+			ae.Add(p.String(), err)
+			continue
+		}
+
 		// Require Update permission
 		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.OwnerID() != f.user.ID {
 			return fs.ErrOwnerOnly.WithError(fmt.Errorf("permission denied"))

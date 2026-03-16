@@ -20,6 +20,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/lock"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -44,6 +45,7 @@ type (
 
 func NewDatabaseFS(u *ent.User, fileClient inventory.FileClient, shareClient inventory.ShareClient,
 	l logging.Logger, ls lock.LockSystem, settingClient setting.Provider,
+	settingStore inventory.SettingClient,
 	storagePolicyClient inventory.StoragePolicyClient, hasher hashid.Encoder, userClient inventory.UserClient,
 	cache, stateKv cache.Driver, directLinkClient inventory.DirectLinkClient, encryptorFactory encrypt.CryptorFactory, eventHub eventhub.EventHub) fs.FileSystem {
 	return &DBFS{
@@ -62,6 +64,7 @@ func NewDatabaseFS(u *ent.User, fileClient inventory.FileClient, shareClient inv
 		directLinkClient:    directLinkClient,
 		encryptorFactory:    encryptorFactory,
 		eventHub:            eventHub,
+		publicService:       publicshare.NewService(l, fileClient, settingStore, hasher),
 	}
 }
 
@@ -82,6 +85,7 @@ type DBFS struct {
 	mu                  sync.Mutex
 	encryptorFactory    encrypt.CryptorFactory
 	eventHub            eventhub.EventHub
+	publicService       *publicshare.Service
 }
 
 func (f *DBFS) Recycle() {
@@ -151,6 +155,11 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 
 	// Validate pagination args
 	props := navigator.Capabilities(isSearching)
+	if parent != nil && parent.Capabilities() != nil {
+		propsCopy := *props
+		propsCopy.Capability = parent.Capabilities()
+		props = &propsCopy
+	}
 	if pageSize > props.MaxPageSize {
 		pageSize = props.MaxPageSize
 	} else if pageSize == 0 {
@@ -743,6 +752,8 @@ func (f *DBFS) getNavigator(ctx context.Context, path *fs.URI, requiredCapabilit
 		switch pathFs {
 		case constants.FileSystemMy:
 			n = NewMyNavigator(f.user, f.fileClient, f.userClient, f.l, config, f.hasher)
+		case constants.FileSystemPublic:
+			n = NewPublicNavigator(f.user, f.fileClient, f.l, config, f.hasher, f.publicService)
 		case constants.FileSystemShare:
 			n = NewShareNavigator(f.user, f.fileClient, f.shareClient, f.l, config, f.hasher)
 		case constants.FileSystemTrash:
@@ -816,7 +827,7 @@ func generateSavePath(policy *ent.StoragePolicy, req *fs.UploadRequest, user *en
 
 func canMoveOrCopyTo(src, dst *fs.URI, isCopy bool) bool {
 	if isCopy {
-		return src.FileSystem() == dst.FileSystem() && src.FileSystem() == constants.FileSystemMy
+		return src.FileSystem() == dst.FileSystem() && (src.FileSystem() == constants.FileSystemMy)
 	} else {
 		switch src.FileSystem() {
 		case constants.FileSystemMy:

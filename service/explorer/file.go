@@ -763,6 +763,7 @@ type (
 	FulltextSearchService  struct {
 		Query  string `form:"query" binding:"required"`
 		Offset int    `form:"offset"`
+		Uri    string `form:"uri"`
 	}
 )
 
@@ -772,7 +773,16 @@ func (s *FulltextSearchService) Search(c *gin.Context) (*FullTextSearchResults, 
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
 
-	results, err := m.SearchFullText(c, s.Query, s.Offset)
+	var base *fs.URI
+	if s.Uri != "" {
+		uri, err := fs.NewUriFromString(s.Uri)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+		}
+		base = uri
+	}
+
+	results, err := m.SearchFullText(c, s.Query, s.Offset, base)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "failed to search full text", err)
 	}

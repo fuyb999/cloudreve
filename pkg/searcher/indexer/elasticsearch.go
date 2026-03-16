@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	elasticsearch "github.com/elastic/go-elasticsearch/v8"
@@ -278,7 +279,28 @@ func (e *ElasticsearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...in
 	return nil
 }
 
-func (e *ElasticsearchIndexer) Search(ctx context.Context, ownerID int, query string, offset int) ([]searcher.SearchResult, int64, error) {
+func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
+	filters := make([]any, 0, 2)
+	if req != nil && req.OwnerID != nil {
+		filters = append(filters, map[string]any{
+			"term": map[string]any{
+				"owner_id": *req.OwnerID,
+			},
+		})
+	}
+	if req != nil && req.VisibilityFilter != nil {
+		if filter := publicshare.ToElasticsearchFilter(req.VisibilityFilter); filter != nil {
+			filters = append(filters, filter)
+		}
+	}
+
+	queryString := ""
+	offset := 0
+	if req != nil {
+		queryString = req.Query
+		offset = req.Offset
+	}
+
 	body, err := json.Marshal(map[string]any{
 		"from":             offset,
 		"size":             e.pageSize,
@@ -292,17 +314,11 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, ownerID int, query st
 		},
 		"query": map[string]any{
 			"bool": map[string]any{
-				"filter": []any{
-					map[string]any{
-						"term": map[string]any{
-							"owner_id": ownerID,
-						},
-					},
-				},
+				"filter": filters,
 				"must": []any{
 					map[string]any{
 						"simple_query_string": map[string]any{
-							"query":            query,
+							"query":            queryString,
 							"default_operator": "and",
 							"fields": []string{
 								"file_name^5",

@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"time"
+
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 )
 
 type SearchPathDocument struct {
@@ -94,11 +96,18 @@ type SearchResult struct {
 	Text     string `json:"text"`
 }
 
+type SearchRequest struct {
+	Query            string                      `json:"query"`
+	Offset           int                         `json:"offset"`
+	OwnerID          *int                        `json:"owner_id,omitempty"`
+	VisibilityFilter *publicshare.FileFilterExpr `json:"visibility_filter,omitempty"`
+}
+
 type SearchIndexer interface {
 	UpsertFile(ctx context.Context, doc *SearchFileDocument) error
 	BulkUpsertFiles(ctx context.Context, docs []*SearchFileDocument) error
 	DeleteByFileIDs(ctx context.Context, fileID ...int) error
-	Search(ctx context.Context, ownerID int, query string, offset int) ([]SearchResult, int64, error)
+	Search(ctx context.Context, req *SearchRequest) ([]SearchResult, int64, error)
 	// IndexReady reports whether the search index exists and has the required
 	// configuration (filterable/searchable attributes, etc.).
 	IndexReady(ctx context.Context) (bool, error)

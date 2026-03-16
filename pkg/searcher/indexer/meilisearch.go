@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/meilisearch/meilisearch-go"
@@ -24,6 +25,7 @@ type meilisearchDocument struct {
 	FileID   int                      `json:"file_id"`
 	OwnerID  int                      `json:"owner_id"`
 	EntityID int                      `json:"entity_id"`
+	TreePath string                   `json:"tree_path,omitempty"`
 	ChunkIdx int                      `json:"chunk_idx"`
 	FileName string                   `json:"file_name"`
 	Text     string                   `json:"text"`
@@ -56,7 +58,7 @@ func NewMeilisearchIndexer(msCfg *setting.FTSIndexMeilisearchSetting, chunkSize 
 }
 
 var (
-	requiredFilterable = []string{"owner_id", "file_id", "entity_id"}
+	requiredFilterable = []string{"owner_id", "file_id", "entity_id", "tree_path"}
 	requiredSearchable = []string{"text", "file_name"}
 	requiredDistinct   = "file_id"
 )
@@ -108,7 +110,7 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 
 	index := m.client.Index(indexName)
 
-	filterableAttrs := []any{"owner_id", "file_id", "entity_id"}
+	filterableAttrs := []any{"owner_id", "file_id", "entity_id", "tree_path"}
 	if _, err := index.UpdateFilterableAttributesWithContext(ctx, &filterableAttrs); err != nil {
 		return fmt.Errorf("failed to set filterable attributes: %w", err)
 	}
@@ -219,11 +221,28 @@ func (m *MeilisearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int)
 	return nil
 }
 
-func (m *MeilisearchIndexer) Search(ctx context.Context, ownerID int, query string, offset int) ([]searcher.SearchResult, int64, error) {
+func (m *MeilisearchIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
 	index := m.client.Index(indexName)
 
+	filters := make([]string, 0, 2)
+	if req != nil && req.OwnerID != nil {
+		filters = append(filters, fmt.Sprintf("owner_id = %d", *req.OwnerID))
+	}
+	if req != nil && req.VisibilityFilter != nil {
+		if filter := publicshare.ToMeilisearchFilter(req.VisibilityFilter); filter != "" {
+			filters = append(filters, filter)
+		}
+	}
+
+	offset := 0
+	query := ""
+	if req != nil {
+		offset = req.Offset
+		query = req.Query
+	}
+
 	searchReq := &meilisearch.SearchRequest{
-		Filter:                fmt.Sprintf("owner_id = %d", ownerID),
+		Filter:                strings.Join(filters, " AND "),
 		Limit:                 int64(m.pageSize),
 		Offset:                int64(offset),
 		AttributesToHighlight: []string{"text"},
@@ -296,6 +315,7 @@ func (m *MeilisearchIndexer) buildDocuments(doc *searcher.SearchFileDocument) []
 			FileID:   doc.FileID,
 			OwnerID:  doc.OwnerID,
 			EntityID: doc.EntityID,
+			TreePath: doc.TreePath,
 			ChunkIdx: i,
 			FileName: doc.FileName,
 			Text:     chunk,

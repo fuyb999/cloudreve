@@ -45,10 +45,12 @@ type (
 )
 
 func (m *manager) PreValidateUpload(ctx context.Context, dst *fs.URI, files ...fs.PreValidateFile) error {
+	ctx = withPublicBypass(ctx, dst)
 	return m.fs.PreValidateUpload(ctx, dst, files...)
 }
 
 func (m *manager) CreateUploadSession(ctx context.Context, req *fs.UploadRequest, opts ...fs.Option) (*fs.UploadCredential, error) {
+	ctx = withPublicBypass(ctx, req.Props.Uri)
 	o := newOption()
 	for _, opt := range opts {
 		opt.Apply(o)
@@ -183,6 +185,7 @@ func (m *manager) ConfirmUploadSession(ctx context.Context, session *fs.UploadSe
 }
 
 func (m *manager) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ...fs.Option) (*fs.UploadSession, error) {
+	ctx = withPublicBypass(ctx, req.Props.Uri)
 	return m.fs.PrepareUpload(ctx, req, opts...)
 }
 
@@ -222,6 +225,7 @@ func (m *manager) Upload(ctx context.Context, req *fs.UploadRequest, policy *ent
 }
 
 func (m *manager) CancelUploadSession(ctx context.Context, path *fs.URI, sessionID string) error {
+	ctx = withPublicBypass(ctx, path)
 	// Get upload session
 	var session *fs.UploadSession
 	sessionRaw, ok := m.kv.Get(UploadSessionCachePrefix + sessionID)
@@ -325,6 +329,7 @@ func (m *manager) CompleteUpload(ctx context.Context, session *fs.UploadSession)
 }
 
 func (m *manager) Update(ctx context.Context, req *fs.UploadRequest, opts ...fs.Option) (fs.File, error) {
+	ctx = withPublicBypass(ctx, req.Props.Uri)
 	o := newOption()
 	for _, opt := range opts {
 		opt.Apply(o)

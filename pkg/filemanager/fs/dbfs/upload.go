@@ -32,9 +32,13 @@ func (f *DBFS) PreValidateUpload(ctx context.Context, dst *fs.URI, files ...fs.P
 		return fmt.Errorf("destination is not a folder")
 	}
 
+	if err := ensureCapability(dstFile, NavigatorCapabilityUploadFile); err != nil {
+		return err
+	}
+
 	// check ownership
-	if f.user.ID != dstFile.OwnerID() {
-		return fmt.Errorf("failed to evaluate permission: %w", err)
+	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && f.user.ID != dstFile.OwnerID() {
+		return fs.ErrOwnerOnly
 	}
 
 	total := int64(0)
@@ -100,6 +104,10 @@ func (f *DBFS) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ..
 	// If file not exist, only empty entity / version entity is allowed
 	if !fileExisted && (req.Props.EntityType != nil && *req.Props.EntityType != types.EntityTypeVersion) {
 		return nil, fs.ErrPathNotExist
+	}
+
+	if err := ensureCapability(ancestor, NavigatorCapabilityUploadFile); err != nil {
+		return nil, err
 	}
 
 	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && ancestor.OwnerID() != f.user.ID {
@@ -394,6 +402,10 @@ func (f *DBFS) CancelUploadSession(ctx context.Context, path *fs.URI, sessionID 
 
 	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && filePrivate.OwnerID() != f.user.ID {
 		return nil, nil, fs.ErrOwnerOnly
+	}
+
+	if err := ensureCapability(filePrivate, NavigatorCapabilityUploadFile); err != nil {
+		return nil, nil, err
 	}
 
 	// Lock file

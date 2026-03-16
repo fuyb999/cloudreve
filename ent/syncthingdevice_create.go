@@ -209,6 +209,82 @@ func (sdc *SyncthingDeviceCreate) SetNillableOnline(b *bool) *SyncthingDeviceCre
 	return sdc
 }
 
+// SetIsBound sets the "is_bound" field.
+func (sdc *SyncthingDeviceCreate) SetIsBound(b bool) *SyncthingDeviceCreate {
+	sdc.mutation.SetIsBound(b)
+	return sdc
+}
+
+// SetNillableIsBound sets the "is_bound" field if the given value is not nil.
+func (sdc *SyncthingDeviceCreate) SetNillableIsBound(b *bool) *SyncthingDeviceCreate {
+	if b != nil {
+		sdc.SetIsBound(*b)
+	}
+	return sdc
+}
+
+// SetCloudSyncEnabled sets the "cloud_sync_enabled" field.
+func (sdc *SyncthingDeviceCreate) SetCloudSyncEnabled(b bool) *SyncthingDeviceCreate {
+	sdc.mutation.SetCloudSyncEnabled(b)
+	return sdc
+}
+
+// SetNillableCloudSyncEnabled sets the "cloud_sync_enabled" field if the given value is not nil.
+func (sdc *SyncthingDeviceCreate) SetNillableCloudSyncEnabled(b *bool) *SyncthingDeviceCreate {
+	if b != nil {
+		sdc.SetCloudSyncEnabled(*b)
+	}
+	return sdc
+}
+
+// SetManagementAction sets the "management_action" field.
+func (sdc *SyncthingDeviceCreate) SetManagementAction(s string) *SyncthingDeviceCreate {
+	sdc.mutation.SetManagementAction(s)
+	return sdc
+}
+
+// SetNillableManagementAction sets the "management_action" field if the given value is not nil.
+func (sdc *SyncthingDeviceCreate) SetNillableManagementAction(s *string) *SyncthingDeviceCreate {
+	if s != nil {
+		sdc.SetManagementAction(*s)
+	}
+	return sdc
+}
+
+// SetManagementActionID sets the "management_action_id" field.
+func (sdc *SyncthingDeviceCreate) SetManagementActionID(s string) *SyncthingDeviceCreate {
+	sdc.mutation.SetManagementActionID(s)
+	return sdc
+}
+
+// SetNillableManagementActionID sets the "management_action_id" field if the given value is not nil.
+func (sdc *SyncthingDeviceCreate) SetNillableManagementActionID(s *string) *SyncthingDeviceCreate {
+	if s != nil {
+		sdc.SetManagementActionID(*s)
+	}
+	return sdc
+}
+
+// SetManagementActionPayload sets the "management_action_payload" field.
+func (sdc *SyncthingDeviceCreate) SetManagementActionPayload(m map[string]interface{}) *SyncthingDeviceCreate {
+	sdc.mutation.SetManagementActionPayload(m)
+	return sdc
+}
+
+// SetManagementActionUpdatedAt sets the "management_action_updated_at" field.
+func (sdc *SyncthingDeviceCreate) SetManagementActionUpdatedAt(t time.Time) *SyncthingDeviceCreate {
+	sdc.mutation.SetManagementActionUpdatedAt(t)
+	return sdc
+}
+
+// SetNillableManagementActionUpdatedAt sets the "management_action_updated_at" field if the given value is not nil.
+func (sdc *SyncthingDeviceCreate) SetNillableManagementActionUpdatedAt(t *time.Time) *SyncthingDeviceCreate {
+	if t != nil {
+		sdc.SetManagementActionUpdatedAt(*t)
+	}
+	return sdc
+}
+
 // SetOwner sets the "owner" edge to the User entity.
 func (sdc *SyncthingDeviceCreate) SetOwner(u *User) *SyncthingDeviceCreate {
 	return sdc.SetOwnerID(u.ID)
@@ -273,6 +349,18 @@ func (sdc *SyncthingDeviceCreate) defaults() error {
 		v := syncthingdevice.DefaultOnline
 		sdc.mutation.SetOnline(v)
 	}
+	if _, ok := sdc.mutation.IsBound(); !ok {
+		v := syncthingdevice.DefaultIsBound
+		sdc.mutation.SetIsBound(v)
+	}
+	if _, ok := sdc.mutation.CloudSyncEnabled(); !ok {
+		v := syncthingdevice.DefaultCloudSyncEnabled
+		sdc.mutation.SetCloudSyncEnabled(v)
+	}
+	if _, ok := sdc.mutation.ManagementActionPayload(); !ok {
+		v := syncthingdevice.DefaultManagementActionPayload
+		sdc.mutation.SetManagementActionPayload(v)
+	}
 	return nil
 }
 
@@ -327,6 +415,22 @@ func (sdc *SyncthingDeviceCreate) check() error {
 	}
 	if _, ok := sdc.mutation.Online(); !ok {
 		return &ValidationError{Name: "online", err: errors.New(`ent: missing required field "SyncthingDevice.online"`)}
+	}
+	if _, ok := sdc.mutation.IsBound(); !ok {
+		return &ValidationError{Name: "is_bound", err: errors.New(`ent: missing required field "SyncthingDevice.is_bound"`)}
+	}
+	if _, ok := sdc.mutation.CloudSyncEnabled(); !ok {
+		return &ValidationError{Name: "cloud_sync_enabled", err: errors.New(`ent: missing required field "SyncthingDevice.cloud_sync_enabled"`)}
+	}
+	if v, ok := sdc.mutation.ManagementAction(); ok {
+		if err := syncthingdevice.ManagementActionValidator(v); err != nil {
+			return &ValidationError{Name: "management_action", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.management_action": %w`, err)}
+		}
+	}
+	if v, ok := sdc.mutation.ManagementActionID(); ok {
+		if err := syncthingdevice.ManagementActionIDValidator(v); err != nil {
+			return &ValidationError{Name: "management_action_id", err: fmt.Errorf(`ent: validator failed for field "SyncthingDevice.management_action_id": %w`, err)}
+		}
 	}
 	if _, ok := sdc.mutation.OwnerID(); !ok {
 		return &ValidationError{Name: "owner", err: errors.New(`ent: missing required edge "SyncthingDevice.owner"`)}
@@ -420,6 +524,30 @@ func (sdc *SyncthingDeviceCreate) createSpec() (*SyncthingDevice, *sqlgraph.Crea
 	if value, ok := sdc.mutation.Online(); ok {
 		_spec.SetField(syncthingdevice.FieldOnline, field.TypeBool, value)
 		_node.Online = value
+	}
+	if value, ok := sdc.mutation.IsBound(); ok {
+		_spec.SetField(syncthingdevice.FieldIsBound, field.TypeBool, value)
+		_node.IsBound = value
+	}
+	if value, ok := sdc.mutation.CloudSyncEnabled(); ok {
+		_spec.SetField(syncthingdevice.FieldCloudSyncEnabled, field.TypeBool, value)
+		_node.CloudSyncEnabled = value
+	}
+	if value, ok := sdc.mutation.ManagementAction(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementAction, field.TypeString, value)
+		_node.ManagementAction = value
+	}
+	if value, ok := sdc.mutation.ManagementActionID(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionID, field.TypeString, value)
+		_node.ManagementActionID = value
+	}
+	if value, ok := sdc.mutation.ManagementActionPayload(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionPayload, field.TypeJSON, value)
+		_node.ManagementActionPayload = value
+	}
+	if value, ok := sdc.mutation.ManagementActionUpdatedAt(); ok {
+		_spec.SetField(syncthingdevice.FieldManagementActionUpdatedAt, field.TypeTime, value)
+		_node.ManagementActionUpdatedAt = &value
 	}
 	if nodes := sdc.mutation.OwnerIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -715,6 +843,102 @@ func (u *SyncthingDeviceUpsert) SetOnline(v bool) *SyncthingDeviceUpsert {
 // UpdateOnline sets the "online" field to the value that was provided on create.
 func (u *SyncthingDeviceUpsert) UpdateOnline() *SyncthingDeviceUpsert {
 	u.SetExcluded(syncthingdevice.FieldOnline)
+	return u
+}
+
+// SetIsBound sets the "is_bound" field.
+func (u *SyncthingDeviceUpsert) SetIsBound(v bool) *SyncthingDeviceUpsert {
+	u.Set(syncthingdevice.FieldIsBound, v)
+	return u
+}
+
+// UpdateIsBound sets the "is_bound" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsert) UpdateIsBound() *SyncthingDeviceUpsert {
+	u.SetExcluded(syncthingdevice.FieldIsBound)
+	return u
+}
+
+// SetCloudSyncEnabled sets the "cloud_sync_enabled" field.
+func (u *SyncthingDeviceUpsert) SetCloudSyncEnabled(v bool) *SyncthingDeviceUpsert {
+	u.Set(syncthingdevice.FieldCloudSyncEnabled, v)
+	return u
+}
+
+// UpdateCloudSyncEnabled sets the "cloud_sync_enabled" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsert) UpdateCloudSyncEnabled() *SyncthingDeviceUpsert {
+	u.SetExcluded(syncthingdevice.FieldCloudSyncEnabled)
+	return u
+}
+
+// SetManagementAction sets the "management_action" field.
+func (u *SyncthingDeviceUpsert) SetManagementAction(v string) *SyncthingDeviceUpsert {
+	u.Set(syncthingdevice.FieldManagementAction, v)
+	return u
+}
+
+// UpdateManagementAction sets the "management_action" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsert) UpdateManagementAction() *SyncthingDeviceUpsert {
+	u.SetExcluded(syncthingdevice.FieldManagementAction)
+	return u
+}
+
+// ClearManagementAction clears the value of the "management_action" field.
+func (u *SyncthingDeviceUpsert) ClearManagementAction() *SyncthingDeviceUpsert {
+	u.SetNull(syncthingdevice.FieldManagementAction)
+	return u
+}
+
+// SetManagementActionID sets the "management_action_id" field.
+func (u *SyncthingDeviceUpsert) SetManagementActionID(v string) *SyncthingDeviceUpsert {
+	u.Set(syncthingdevice.FieldManagementActionID, v)
+	return u
+}
+
+// UpdateManagementActionID sets the "management_action_id" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsert) UpdateManagementActionID() *SyncthingDeviceUpsert {
+	u.SetExcluded(syncthingdevice.FieldManagementActionID)
+	return u
+}
+
+// ClearManagementActionID clears the value of the "management_action_id" field.
+func (u *SyncthingDeviceUpsert) ClearManagementActionID() *SyncthingDeviceUpsert {
+	u.SetNull(syncthingdevice.FieldManagementActionID)
+	return u
+}
+
+// SetManagementActionPayload sets the "management_action_payload" field.
+func (u *SyncthingDeviceUpsert) SetManagementActionPayload(v map[string]interface{}) *SyncthingDeviceUpsert {
+	u.Set(syncthingdevice.FieldManagementActionPayload, v)
+	return u
+}
+
+// UpdateManagementActionPayload sets the "management_action_payload" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsert) UpdateManagementActionPayload() *SyncthingDeviceUpsert {
+	u.SetExcluded(syncthingdevice.FieldManagementActionPayload)
+	return u
+}
+
+// ClearManagementActionPayload clears the value of the "management_action_payload" field.
+func (u *SyncthingDeviceUpsert) ClearManagementActionPayload() *SyncthingDeviceUpsert {
+	u.SetNull(syncthingdevice.FieldManagementActionPayload)
+	return u
+}
+
+// SetManagementActionUpdatedAt sets the "management_action_updated_at" field.
+func (u *SyncthingDeviceUpsert) SetManagementActionUpdatedAt(v time.Time) *SyncthingDeviceUpsert {
+	u.Set(syncthingdevice.FieldManagementActionUpdatedAt, v)
+	return u
+}
+
+// UpdateManagementActionUpdatedAt sets the "management_action_updated_at" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsert) UpdateManagementActionUpdatedAt() *SyncthingDeviceUpsert {
+	u.SetExcluded(syncthingdevice.FieldManagementActionUpdatedAt)
+	return u
+}
+
+// ClearManagementActionUpdatedAt clears the value of the "management_action_updated_at" field.
+func (u *SyncthingDeviceUpsert) ClearManagementActionUpdatedAt() *SyncthingDeviceUpsert {
+	u.SetNull(syncthingdevice.FieldManagementActionUpdatedAt)
 	return u
 }
 
@@ -1026,6 +1250,118 @@ func (u *SyncthingDeviceUpsertOne) SetOnline(v bool) *SyncthingDeviceUpsertOne {
 func (u *SyncthingDeviceUpsertOne) UpdateOnline() *SyncthingDeviceUpsertOne {
 	return u.Update(func(s *SyncthingDeviceUpsert) {
 		s.UpdateOnline()
+	})
+}
+
+// SetIsBound sets the "is_bound" field.
+func (u *SyncthingDeviceUpsertOne) SetIsBound(v bool) *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetIsBound(v)
+	})
+}
+
+// UpdateIsBound sets the "is_bound" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertOne) UpdateIsBound() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateIsBound()
+	})
+}
+
+// SetCloudSyncEnabled sets the "cloud_sync_enabled" field.
+func (u *SyncthingDeviceUpsertOne) SetCloudSyncEnabled(v bool) *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetCloudSyncEnabled(v)
+	})
+}
+
+// UpdateCloudSyncEnabled sets the "cloud_sync_enabled" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertOne) UpdateCloudSyncEnabled() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateCloudSyncEnabled()
+	})
+}
+
+// SetManagementAction sets the "management_action" field.
+func (u *SyncthingDeviceUpsertOne) SetManagementAction(v string) *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementAction(v)
+	})
+}
+
+// UpdateManagementAction sets the "management_action" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertOne) UpdateManagementAction() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementAction()
+	})
+}
+
+// ClearManagementAction clears the value of the "management_action" field.
+func (u *SyncthingDeviceUpsertOne) ClearManagementAction() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementAction()
+	})
+}
+
+// SetManagementActionID sets the "management_action_id" field.
+func (u *SyncthingDeviceUpsertOne) SetManagementActionID(v string) *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementActionID(v)
+	})
+}
+
+// UpdateManagementActionID sets the "management_action_id" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertOne) UpdateManagementActionID() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementActionID()
+	})
+}
+
+// ClearManagementActionID clears the value of the "management_action_id" field.
+func (u *SyncthingDeviceUpsertOne) ClearManagementActionID() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementActionID()
+	})
+}
+
+// SetManagementActionPayload sets the "management_action_payload" field.
+func (u *SyncthingDeviceUpsertOne) SetManagementActionPayload(v map[string]interface{}) *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementActionPayload(v)
+	})
+}
+
+// UpdateManagementActionPayload sets the "management_action_payload" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertOne) UpdateManagementActionPayload() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementActionPayload()
+	})
+}
+
+// ClearManagementActionPayload clears the value of the "management_action_payload" field.
+func (u *SyncthingDeviceUpsertOne) ClearManagementActionPayload() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementActionPayload()
+	})
+}
+
+// SetManagementActionUpdatedAt sets the "management_action_updated_at" field.
+func (u *SyncthingDeviceUpsertOne) SetManagementActionUpdatedAt(v time.Time) *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementActionUpdatedAt(v)
+	})
+}
+
+// UpdateManagementActionUpdatedAt sets the "management_action_updated_at" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertOne) UpdateManagementActionUpdatedAt() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementActionUpdatedAt()
+	})
+}
+
+// ClearManagementActionUpdatedAt clears the value of the "management_action_updated_at" field.
+func (u *SyncthingDeviceUpsertOne) ClearManagementActionUpdatedAt() *SyncthingDeviceUpsertOne {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementActionUpdatedAt()
 	})
 }
 
@@ -1508,6 +1844,118 @@ func (u *SyncthingDeviceUpsertBulk) SetOnline(v bool) *SyncthingDeviceUpsertBulk
 func (u *SyncthingDeviceUpsertBulk) UpdateOnline() *SyncthingDeviceUpsertBulk {
 	return u.Update(func(s *SyncthingDeviceUpsert) {
 		s.UpdateOnline()
+	})
+}
+
+// SetIsBound sets the "is_bound" field.
+func (u *SyncthingDeviceUpsertBulk) SetIsBound(v bool) *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetIsBound(v)
+	})
+}
+
+// UpdateIsBound sets the "is_bound" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertBulk) UpdateIsBound() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateIsBound()
+	})
+}
+
+// SetCloudSyncEnabled sets the "cloud_sync_enabled" field.
+func (u *SyncthingDeviceUpsertBulk) SetCloudSyncEnabled(v bool) *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetCloudSyncEnabled(v)
+	})
+}
+
+// UpdateCloudSyncEnabled sets the "cloud_sync_enabled" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertBulk) UpdateCloudSyncEnabled() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateCloudSyncEnabled()
+	})
+}
+
+// SetManagementAction sets the "management_action" field.
+func (u *SyncthingDeviceUpsertBulk) SetManagementAction(v string) *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementAction(v)
+	})
+}
+
+// UpdateManagementAction sets the "management_action" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertBulk) UpdateManagementAction() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementAction()
+	})
+}
+
+// ClearManagementAction clears the value of the "management_action" field.
+func (u *SyncthingDeviceUpsertBulk) ClearManagementAction() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementAction()
+	})
+}
+
+// SetManagementActionID sets the "management_action_id" field.
+func (u *SyncthingDeviceUpsertBulk) SetManagementActionID(v string) *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementActionID(v)
+	})
+}
+
+// UpdateManagementActionID sets the "management_action_id" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertBulk) UpdateManagementActionID() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementActionID()
+	})
+}
+
+// ClearManagementActionID clears the value of the "management_action_id" field.
+func (u *SyncthingDeviceUpsertBulk) ClearManagementActionID() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementActionID()
+	})
+}
+
+// SetManagementActionPayload sets the "management_action_payload" field.
+func (u *SyncthingDeviceUpsertBulk) SetManagementActionPayload(v map[string]interface{}) *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementActionPayload(v)
+	})
+}
+
+// UpdateManagementActionPayload sets the "management_action_payload" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertBulk) UpdateManagementActionPayload() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementActionPayload()
+	})
+}
+
+// ClearManagementActionPayload clears the value of the "management_action_payload" field.
+func (u *SyncthingDeviceUpsertBulk) ClearManagementActionPayload() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementActionPayload()
+	})
+}
+
+// SetManagementActionUpdatedAt sets the "management_action_updated_at" field.
+func (u *SyncthingDeviceUpsertBulk) SetManagementActionUpdatedAt(v time.Time) *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.SetManagementActionUpdatedAt(v)
+	})
+}
+
+// UpdateManagementActionUpdatedAt sets the "management_action_updated_at" field to the value that was provided on create.
+func (u *SyncthingDeviceUpsertBulk) UpdateManagementActionUpdatedAt() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.UpdateManagementActionUpdatedAt()
+	})
+}
+
+// ClearManagementActionUpdatedAt clears the value of the "management_action_updated_at" field.
+func (u *SyncthingDeviceUpsertBulk) ClearManagementActionUpdatedAt() *SyncthingDeviceUpsertBulk {
+	return u.Update(func(s *SyncthingDeviceUpsert) {
+		s.ClearManagementActionUpdatedAt()
 	})
 }
 

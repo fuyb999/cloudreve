@@ -125,6 +125,31 @@ func Online(v bool) predicate.SyncthingDevice {
 	return predicate.SyncthingDevice(sql.FieldEQ(FieldOnline, v))
 }
 
+// IsBound applies equality check predicate on the "is_bound" field. It's identical to IsBoundEQ.
+func IsBound(v bool) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldIsBound, v))
+}
+
+// CloudSyncEnabled applies equality check predicate on the "cloud_sync_enabled" field. It's identical to CloudSyncEnabledEQ.
+func CloudSyncEnabled(v bool) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldCloudSyncEnabled, v))
+}
+
+// ManagementAction applies equality check predicate on the "management_action" field. It's identical to ManagementActionEQ.
+func ManagementAction(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldManagementAction, v))
+}
+
+// ManagementActionID applies equality check predicate on the "management_action_id" field. It's identical to ManagementActionIDEQ.
+func ManagementActionID(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldManagementActionID, v))
+}
+
+// ManagementActionUpdatedAt applies equality check predicate on the "management_action_updated_at" field. It's identical to ManagementActionUpdatedAtEQ.
+func ManagementActionUpdatedAt(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldManagementActionUpdatedAt, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.SyncthingDevice {
 	return predicate.SyncthingDevice(sql.FieldEQ(FieldCreatedAt, v))
@@ -908,6 +933,236 @@ func OnlineEQ(v bool) predicate.SyncthingDevice {
 // OnlineNEQ applies the NEQ predicate on the "online" field.
 func OnlineNEQ(v bool) predicate.SyncthingDevice {
 	return predicate.SyncthingDevice(sql.FieldNEQ(FieldOnline, v))
+}
+
+// IsBoundEQ applies the EQ predicate on the "is_bound" field.
+func IsBoundEQ(v bool) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldIsBound, v))
+}
+
+// IsBoundNEQ applies the NEQ predicate on the "is_bound" field.
+func IsBoundNEQ(v bool) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNEQ(FieldIsBound, v))
+}
+
+// CloudSyncEnabledEQ applies the EQ predicate on the "cloud_sync_enabled" field.
+func CloudSyncEnabledEQ(v bool) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldCloudSyncEnabled, v))
+}
+
+// CloudSyncEnabledNEQ applies the NEQ predicate on the "cloud_sync_enabled" field.
+func CloudSyncEnabledNEQ(v bool) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNEQ(FieldCloudSyncEnabled, v))
+}
+
+// ManagementActionEQ applies the EQ predicate on the "management_action" field.
+func ManagementActionEQ(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldManagementAction, v))
+}
+
+// ManagementActionNEQ applies the NEQ predicate on the "management_action" field.
+func ManagementActionNEQ(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNEQ(FieldManagementAction, v))
+}
+
+// ManagementActionIn applies the In predicate on the "management_action" field.
+func ManagementActionIn(vs ...string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIn(FieldManagementAction, vs...))
+}
+
+// ManagementActionNotIn applies the NotIn predicate on the "management_action" field.
+func ManagementActionNotIn(vs ...string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotIn(FieldManagementAction, vs...))
+}
+
+// ManagementActionGT applies the GT predicate on the "management_action" field.
+func ManagementActionGT(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldGT(FieldManagementAction, v))
+}
+
+// ManagementActionGTE applies the GTE predicate on the "management_action" field.
+func ManagementActionGTE(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldGTE(FieldManagementAction, v))
+}
+
+// ManagementActionLT applies the LT predicate on the "management_action" field.
+func ManagementActionLT(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldLT(FieldManagementAction, v))
+}
+
+// ManagementActionLTE applies the LTE predicate on the "management_action" field.
+func ManagementActionLTE(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldLTE(FieldManagementAction, v))
+}
+
+// ManagementActionContains applies the Contains predicate on the "management_action" field.
+func ManagementActionContains(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldContains(FieldManagementAction, v))
+}
+
+// ManagementActionHasPrefix applies the HasPrefix predicate on the "management_action" field.
+func ManagementActionHasPrefix(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldHasPrefix(FieldManagementAction, v))
+}
+
+// ManagementActionHasSuffix applies the HasSuffix predicate on the "management_action" field.
+func ManagementActionHasSuffix(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldHasSuffix(FieldManagementAction, v))
+}
+
+// ManagementActionIsNil applies the IsNil predicate on the "management_action" field.
+func ManagementActionIsNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIsNull(FieldManagementAction))
+}
+
+// ManagementActionNotNil applies the NotNil predicate on the "management_action" field.
+func ManagementActionNotNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotNull(FieldManagementAction))
+}
+
+// ManagementActionEqualFold applies the EqualFold predicate on the "management_action" field.
+func ManagementActionEqualFold(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEqualFold(FieldManagementAction, v))
+}
+
+// ManagementActionContainsFold applies the ContainsFold predicate on the "management_action" field.
+func ManagementActionContainsFold(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldContainsFold(FieldManagementAction, v))
+}
+
+// ManagementActionIDEQ applies the EQ predicate on the "management_action_id" field.
+func ManagementActionIDEQ(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldManagementActionID, v))
+}
+
+// ManagementActionIDNEQ applies the NEQ predicate on the "management_action_id" field.
+func ManagementActionIDNEQ(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNEQ(FieldManagementActionID, v))
+}
+
+// ManagementActionIDIn applies the In predicate on the "management_action_id" field.
+func ManagementActionIDIn(vs ...string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIn(FieldManagementActionID, vs...))
+}
+
+// ManagementActionIDNotIn applies the NotIn predicate on the "management_action_id" field.
+func ManagementActionIDNotIn(vs ...string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotIn(FieldManagementActionID, vs...))
+}
+
+// ManagementActionIDGT applies the GT predicate on the "management_action_id" field.
+func ManagementActionIDGT(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldGT(FieldManagementActionID, v))
+}
+
+// ManagementActionIDGTE applies the GTE predicate on the "management_action_id" field.
+func ManagementActionIDGTE(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldGTE(FieldManagementActionID, v))
+}
+
+// ManagementActionIDLT applies the LT predicate on the "management_action_id" field.
+func ManagementActionIDLT(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldLT(FieldManagementActionID, v))
+}
+
+// ManagementActionIDLTE applies the LTE predicate on the "management_action_id" field.
+func ManagementActionIDLTE(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldLTE(FieldManagementActionID, v))
+}
+
+// ManagementActionIDContains applies the Contains predicate on the "management_action_id" field.
+func ManagementActionIDContains(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldContains(FieldManagementActionID, v))
+}
+
+// ManagementActionIDHasPrefix applies the HasPrefix predicate on the "management_action_id" field.
+func ManagementActionIDHasPrefix(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldHasPrefix(FieldManagementActionID, v))
+}
+
+// ManagementActionIDHasSuffix applies the HasSuffix predicate on the "management_action_id" field.
+func ManagementActionIDHasSuffix(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldHasSuffix(FieldManagementActionID, v))
+}
+
+// ManagementActionIDIsNil applies the IsNil predicate on the "management_action_id" field.
+func ManagementActionIDIsNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIsNull(FieldManagementActionID))
+}
+
+// ManagementActionIDNotNil applies the NotNil predicate on the "management_action_id" field.
+func ManagementActionIDNotNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotNull(FieldManagementActionID))
+}
+
+// ManagementActionIDEqualFold applies the EqualFold predicate on the "management_action_id" field.
+func ManagementActionIDEqualFold(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEqualFold(FieldManagementActionID, v))
+}
+
+// ManagementActionIDContainsFold applies the ContainsFold predicate on the "management_action_id" field.
+func ManagementActionIDContainsFold(v string) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldContainsFold(FieldManagementActionID, v))
+}
+
+// ManagementActionPayloadIsNil applies the IsNil predicate on the "management_action_payload" field.
+func ManagementActionPayloadIsNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIsNull(FieldManagementActionPayload))
+}
+
+// ManagementActionPayloadNotNil applies the NotNil predicate on the "management_action_payload" field.
+func ManagementActionPayloadNotNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotNull(FieldManagementActionPayload))
+}
+
+// ManagementActionUpdatedAtEQ applies the EQ predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtEQ(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldEQ(FieldManagementActionUpdatedAt, v))
+}
+
+// ManagementActionUpdatedAtNEQ applies the NEQ predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtNEQ(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNEQ(FieldManagementActionUpdatedAt, v))
+}
+
+// ManagementActionUpdatedAtIn applies the In predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtIn(vs ...time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIn(FieldManagementActionUpdatedAt, vs...))
+}
+
+// ManagementActionUpdatedAtNotIn applies the NotIn predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtNotIn(vs ...time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotIn(FieldManagementActionUpdatedAt, vs...))
+}
+
+// ManagementActionUpdatedAtGT applies the GT predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtGT(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldGT(FieldManagementActionUpdatedAt, v))
+}
+
+// ManagementActionUpdatedAtGTE applies the GTE predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtGTE(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldGTE(FieldManagementActionUpdatedAt, v))
+}
+
+// ManagementActionUpdatedAtLT applies the LT predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtLT(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldLT(FieldManagementActionUpdatedAt, v))
+}
+
+// ManagementActionUpdatedAtLTE applies the LTE predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtLTE(v time.Time) predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldLTE(FieldManagementActionUpdatedAt, v))
+}
+
+// ManagementActionUpdatedAtIsNil applies the IsNil predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtIsNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldIsNull(FieldManagementActionUpdatedAt))
+}
+
+// ManagementActionUpdatedAtNotNil applies the NotNil predicate on the "management_action_updated_at" field.
+func ManagementActionUpdatedAtNotNil() predicate.SyncthingDevice {
+	return predicate.SyncthingDevice(sql.FieldNotNull(FieldManagementActionUpdatedAt))
 }
 
 // HasOwner applies the HasEdge predicate on the "owner" edge.
