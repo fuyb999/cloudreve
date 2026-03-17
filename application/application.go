@@ -131,6 +131,11 @@ func (s *server) Start() error {
 	}
 	s.dep.ThumbQueue(context.Background()).Start()
 
+	// Kafka 在 HTTP 对外服务前启动，这样 consumer 收到消息时，数据库、队列、节点池等依赖已经就绪。
+	if err := s.dep.KafkaClient().Start(context.Background()); err != nil {
+		return fmt.Errorf("failed to start kafka client: %w", err)
+	}
+
 	api := routers.InitRouter(s.dep)
 	api.TrustedPlatform = s.config.System().ProxyHeader
 	s.server = &http.Server{Handler: api}

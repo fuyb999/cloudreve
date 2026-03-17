@@ -1,94 +1,79 @@
 package conf
 
 import (
-	"github.com/cloudreve/Cloudreve/v4/pkg/util"
-	"github.com/stretchr/testify/assert"
-	"io/ioutil"
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/util"
+	"github.com/go-ini/ini"
+	"github.com/stretchr/testify/require"
 )
 
-// 测试Init日志路径错误
-func TestInitPanic(t *testing.T) {
-	asserts := assert.New(t)
+func TestNewIniConfigProviderCreateDefaultConfig(t *testing.T) {
+	confPath := filepath.Join(t.TempDir(), "missing", "conf.ini")
 
-	// 日志路径不存在时
-	asserts.NotPanics(func() {
-		Init("not/exist/path")
-	})
-
-	asserts.True(util.Exists("conf.ini"))
-
+	provider, err := NewIniConfigProvider(confPath, logging.NewConsoleLogger(logging.LevelError))
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+	require.True(t, util.Exists(confPath))
 }
 
-// TestInitDelimiterNotFound 日志路径存在但 Key 格式错误时
-func TestInitDelimiterNotFound(t *testing.T) {
-	asserts := assert.New(t)
-	testCase := `[Database]
+func TestNewIniConfigProviderInvalidConfig(t *testing.T) {
+	confPath := filepath.Join(t.TempDir(), "conf.ini")
+	require.NoError(t, os.WriteFile(confPath, []byte(`[Database]
 Type = mysql
 User = root
 Password233root
 Host = 127.0.0.1:3306
 Name = v3
-TablePrefix = v3_`
-	err := ioutil.WriteFile("testConf.ini", []byte(testCase), 0644)
-	defer func() { err = os.Remove("testConf.ini") }()
-	if err != nil {
-		panic(err)
-	}
-	asserts.Panics(func() {
-		Init("testConf.ini")
-	})
+TablePrefix = v3_
+`), 0o644))
+
+	_, err := NewIniConfigProvider(confPath, logging.NewConsoleLogger(logging.LevelError))
+	require.Error(t, err)
 }
 
-// TestInitNoPanic 日志路径存在且合法时
-func TestInitNoPanic(t *testing.T) {
-	asserts := assert.New(t)
-	testCase := `
+func TestNewIniConfigProviderValidConfig(t *testing.T) {
+	confPath := filepath.Join(t.TempDir(), "conf.ini")
+	require.NoError(t, os.WriteFile(confPath, []byte(`
 [System]
-Listen = 3000
-HashIDSalt = 1
+Listen = :3000
+SessionSecret = test-secret
 
 [Database]
 Type = mysql
 User = root
 Password = root
-Host = 127.0.0.1:3306
+Host = 127.0.0.1
+Port = 3306
 Name = v3
-TablePrefix = v3_`
-	err := ioutil.WriteFile("testConf.ini", []byte(testCase), 0644)
-	defer func() { err = os.Remove("testConf.ini") }()
-	if err != nil {
-		panic(err)
-	}
-	asserts.NotPanics(func() {
-		Init("testConf.ini")
-	})
+TablePrefix = v3_
+`), 0o644))
+
+	provider, err := NewIniConfigProvider(confPath, logging.NewConsoleLogger(logging.LevelError))
+	require.NoError(t, err)
+	require.Equal(t, ":3000", provider.System().Listen)
+	require.Equal(t, MySqlDB, provider.Database().Type)
 }
 
 func TestMapSection(t *testing.T) {
-	asserts := assert.New(t)
-
-	//正常情况
-	testCase := `
-[System]
-Listen = 3000
-HashIDSalt = 1
-
+	cfg, err := ini.Load([]byte(`
 [Database]
 Type = mysql
 User = root
-Password:root
-Host = 127.0.0.1:3306
+Password = root
+Host = 127.0.0.1
+Port = 3306
 Name = v3
-TablePrefix = v3_`
-	err := ioutil.WriteFile("testConf.ini", []byte(testCase), 0644)
-	defer func() { err = os.Remove("testConf.ini") }()
-	if err != nil {
-		panic(err)
-	}
-	Init("testConf.ini")
-	err = mapSection("Database", DatabaseConfig)
-	asserts.NoError(err)
+TablePrefix = v3_
+`))
+	require.NoError(t, err)
 
+	db := *DatabaseConfig
+	err = mapSection(cfg, "Database", &db)
+	require.NoError(t, err)
+	require.Equal(t, MySqlDB, db.Type)
+	require.Equal(t, "root", db.User)
 }

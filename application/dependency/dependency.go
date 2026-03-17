@@ -22,6 +22,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/mime"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/lock"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/kafka"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/mediameta"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
@@ -106,6 +107,8 @@ type Dep interface {
 	StoragePolicyClient() inventory.StoragePolicyClient
 	// RequestClient Creates a new request.Client instance for HTTP requests.
 	RequestClient(opts ...request.Option) request.Client
+	// KafkaClient Get a singleton Kafka client for message production and consumer-group based consumption.
+	KafkaClient() kafka.Client
 	// ShareClient Creates a new inventory.ShareClient instance for access DB share store.
 	ShareClient() inventory.ShareClient
 	// TaskClient Creates a new inventory.TaskClient instance for access DB task store.
@@ -182,6 +185,7 @@ type dependency struct {
 	tokenAuth             auth.TokenAuth
 	lockSystem            lock.LockSystem
 	requestClient         request.Client
+	kafkaClient           kafka.Client
 	ioIntenseQueue        queue.Queue
 	thumbQueue            queue.Queue
 	mediaMetaQueue        queue.Queue
@@ -232,6 +236,23 @@ func (d *dependency) RequestClient(opts ...request.Option) request.Client {
 	}
 
 	return request.NewClient(d.ConfigProvider(), opts...)
+}
+
+func (d *dependency) KafkaClient() kafka.Client {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.kafkaClient != nil {
+		return d.kafkaClient
+	}
+
+	client, err := kafka.New(d.ConfigProvider().Kafka(), d.Logger())
+	if err != nil {
+		d.panicError(err)
+	}
+
+	d.kafkaClient = client
+	return d.kafkaClient
 }
 
 func (d *dependency) MasterEncryptKeyVault(ctx context.Context) encrypt.MasterEncryptKeyVault {
@@ -1010,6 +1031,16 @@ func (d *dependency) Shutdown(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			d.remoteDownloadQueue.Shutdown()
+			defer wg.Done()
+		}()
+	}
+
+	if d.kafkaClient != nil {
+		wg.Add(1)
+		go func() {
+			if err := d.kafkaClient.Close(); err != nil {
+				d.Logger().Warning("Failed to close kafka client: %s", err)
+			}
 			defer wg.Done()
 		}()
 	}

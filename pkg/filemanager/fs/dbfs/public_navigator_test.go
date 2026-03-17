@@ -4,11 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 )
 
@@ -141,6 +143,55 @@ func TestCapabilitySetFromGrantProtectsRootDeleteOnly(t *testing.T) {
 
 	childCapabilities := capabilitySetFromGrant(projectedTestFile(11, "child", types.FileTypeFile, 0, time.Unix(10, 0), time.Unix(10, 0)), grant)
 	assertCapabilityEnabled(t, childCapabilities, NavigatorCapabilityDeleteFile)
+}
+
+func TestShouldDeferPublicCapabilityCheck(t *testing.T) {
+	t.Run("public-root", func(t *testing.T) {
+		uri, err := fs.NewUriFromString("cloudreve://public")
+		if err != nil {
+			t.Fatalf("failed to parse public root uri: %v", err)
+		}
+
+		if shouldDeferPublicCapabilityCheck(uri) {
+			t.Fatalf("public root should still use navigator capability pre-check")
+		}
+	})
+
+	t.Run("public-projected-root", func(t *testing.T) {
+		uri, err := fs.NewUriFromString("cloudreve://public/34")
+		if err != nil {
+			t.Fatalf("failed to parse projected public root uri: %v", err)
+		}
+
+		if !shouldDeferPublicCapabilityCheck(uri) {
+			t.Fatalf("projected public root should defer capability pre-check")
+		}
+	})
+
+	t.Run("public-subtree", func(t *testing.T) {
+		uri, err := fs.NewUriFromString("cloudreve://public/34/child")
+		if err != nil {
+			t.Fatalf("failed to parse public subtree uri: %v", err)
+		}
+
+		if !shouldDeferPublicCapabilityCheck(uri) {
+			t.Fatalf("public subtree should defer capability pre-check")
+		}
+	})
+
+	t.Run("non-public", func(t *testing.T) {
+		uri, err := fs.NewUriFromString("cloudreve://my/docs")
+		if err != nil {
+			t.Fatalf("failed to parse personal uri: %v", err)
+		}
+
+		if uri.FileSystem() != constants.FileSystemMy {
+			t.Fatalf("unexpected filesystem: %s", uri.FileSystem())
+		}
+		if shouldDeferPublicCapabilityCheck(uri) {
+			t.Fatalf("non-public uri should not defer capability pre-check")
+		}
+	})
 }
 
 func assertCapabilityEnabled(t *testing.T, capabilities *boolset.BooleanSet, capability NavigatorCapability) {

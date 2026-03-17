@@ -22,6 +22,7 @@ type ConfigProvider interface {
 	Unix() *Unix
 	Slave() *Slave
 	Redis() *Redis
+	Kafka() *Kafka
 	Cors() *Cors
 	OptionOverwrite() map[string]any
 }
@@ -61,6 +62,7 @@ func NewIniConfigProvider(configPath string, l logging.Logger) (ConfigProvider, 
 		unix:            *UnixConfig,
 		slave:           *SlaveConfig,
 		redis:           *RedisConfig,
+		kafka:           *KafkaConfig,
 		cors:            *CORSConfig,
 		optionOverwrite: make(map[string]interface{}),
 	}
@@ -71,6 +73,7 @@ func NewIniConfigProvider(configPath string, l logging.Logger) (ConfigProvider, 
 		"SSL":        &provider.ssl,
 		"UnixSocket": &provider.unix,
 		"Redis":      &provider.redis,
+		"Kafka":      &provider.kafka,
 		"CORS":       &provider.cors,
 		"Slave":      &provider.slave,
 	}
@@ -79,6 +82,14 @@ func NewIniConfigProvider(configPath string, l logging.Logger) (ConfigProvider, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse config section %q: %w", sectionName, err)
 		}
+	}
+
+	// Kafka 生产者/消费者配置是嵌套结构，需要显式映射子 section。
+	if err := mapSection(cfg, "Kafka.Producer", &provider.kafka.Producer); err != nil {
+		return nil, fmt.Errorf("failed to parse config section %q: %w", "Kafka.Producer", err)
+	}
+	if err := mapSection(cfg, "Kafka.Consumer", &provider.kafka.Consumer); err != nil {
+		return nil, fmt.Errorf("failed to parse config section %q: %w", "Kafka.Consumer", err)
 	}
 
 	// 映射数据库配置覆盖
@@ -96,6 +107,7 @@ type iniConfigProvider struct {
 	unix            Unix
 	slave           Slave
 	redis           Redis
+	kafka           Kafka
 	cors            Cors
 	optionOverwrite map[string]any
 }
@@ -124,6 +136,10 @@ func (i *iniConfigProvider) Redis() *Redis {
 	return &i.redis
 }
 
+func (i *iniConfigProvider) Kafka() *Kafka {
+	return &i.kafka
+}
+
 func (i *iniConfigProvider) Cors() *Cors {
 	return &i.cors
 }
@@ -138,6 +154,59 @@ Mode = master
 Listen = :5212
 SessionSecret = {SessionSecret}
 HashIDSalt = {HashIDSalt}
+
+[Kafka]
+; 是否启用 Kafka。关闭时 Cloudreve 会退化为 no-op 客户端，不影响原有功能。
+Enabled = false
+; 多 broker 使用英文逗号分隔，例如：127.0.0.1:9092,127.0.0.1:9093
+Brokers =
+; Kafka broker 版本，用于 Sarama 协议协商。
+Version = 3.7.0
+; 客户端 ID，建议区分实例或环境。
+ClientID = cloudreve
+; 连接协议：PLAINTEXT / SSL / SASL_PLAINTEXT / SASL_SSL
+SecurityProtocol = PLAINTEXT
+; 连接与读写超时，单位秒。
+DialTimeout = 10
+ReadTimeout = 30
+WriteTimeout = 30
+KeepAlive = 30
+; TLS 相关配置。使用 SASL_SSL / SSL 时可按需设置。
+TLSSkipVerify = false
+TLSServerName =
+TLSCAPath =
+TLSCertPath =
+TLSKeyPath =
+; SASL 相关配置。使用 SASL_PLAINTEXT / SASL_SSL 时生效。
+SASLMechanism = PLAIN
+SASLUsername =
+SASLPassword =
+SASLHandshake = true
+
+[Kafka.Producer]
+; all/local/none，对高可用场景建议保持 all。
+RequiredAcks = all
+; none/gzip/snappy/lz4/zstd
+Compression = snappy
+RetryMax = 5
+RetryBackoff = 2
+; 高可用生产建议开启幂等。
+Idempotent = true
+MaxMessageBytes = 0
+ReturnSuccesses = true
+
+[Kafka.Consumer]
+; oldest/newest
+InitialOffset = newest
+; range/roundrobin/sticky
+RebalanceStrategy = sticky
+SessionTimeout = 30
+HeartbeatInterval = 3
+RetryBackoff = 2
+MaxProcessingTime = 5
+FetchDefault = 1048576
+FetchMax = 0
+ReturnErrors = true
 `
 
 // mapSection 将配置文件的 Section 映射到结构体上
@@ -168,12 +237,16 @@ func getOverrideConfFromEnv(l logging.Logger) string {
 		kv := strings.SplitN(env, "=", 2)
 		configKey := strings.TrimPrefix(kv[0], envConfOverrideKey)
 		configValue := kv[1]
-		sectionKey := strings.SplitN(configKey, ".", 2)
-		if confMaps[sectionKey[0]] == nil {
-			confMaps[sectionKey[0]] = make(map[string]string)
+		sectionName, fieldName, ok := splitOverrideKey(configKey)
+		if !ok {
+			l.Warning("Skip invalid override config key %q", configKey)
+			continue
+		}
+		if confMaps[sectionName] == nil {
+			confMaps[sectionName] = make(map[string]string)
 		}
 
-		confMaps[sectionKey[0]][sectionKey[1]] = configValue
+		confMaps[sectionName][fieldName] = configValue
 		l.Info("Override config %q = %q", configKey, configValue)
 	}
 
@@ -187,4 +260,13 @@ func getOverrideConfFromEnv(l logging.Logger) string {
 	}
 
 	return sb.String()
+}
+
+func splitOverrideKey(key string) (string, string, bool) {
+	idx := strings.LastIndex(key, ".")
+	if idx <= 0 || idx >= len(key)-1 {
+		return "", "", false
+	}
+
+	return key[:idx], key[idx+1:], true
 }

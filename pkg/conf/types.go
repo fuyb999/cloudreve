@@ -80,6 +80,64 @@ type Redis struct {
 	TLSSkipVerify bool
 }
 
+// Kafka 配置。
+// 当前版本覆盖 Cloudreve 接 Kafka 的常用能力：
+// 1. 多 broker 集群连接；
+// 2. 生产者幂等、ACK 策略、压缩；
+// 3. consumer group 高可用消费；
+// 4. PLAINTEXT / SSL / SASL_PLAINTEXT / SASL_SSL；
+// 5. TLS CA / 客户端证书；
+// 6. SASL-PLAIN 接入。
+type Kafka struct {
+	Enabled          bool
+	Brokers          string
+	Version          string
+	ClientID         string
+	DialTimeout      int    `validate:"gte=1"`
+	ReadTimeout      int    `validate:"gte=1"`
+	WriteTimeout     int    `validate:"gte=1"`
+	KeepAlive        int    `validate:"gte=1"`
+	SecurityProtocol string `validate:"omitempty,oneof=PLAINTEXT SSL SASL_PLAINTEXT SASL_SSL plaintext ssl sasl_plaintext sasl_ssl"`
+	// TLSEnabled / SASLEnabled 保留给旧配置兼容。
+	TLSEnabled    bool
+	TLSSkipVerify bool
+	TLSServerName string
+	TLSCAPath     string
+	TLSCertPath   string
+	TLSKeyPath    string
+	SASLEnabled   bool
+	SASLMechanism string `validate:"omitempty,oneof=PLAIN plain"`
+	SASLUsername  string
+	SASLPassword  string
+	SASLHandshake bool
+	Producer      KafkaProducer
+	Consumer      KafkaConsumer
+}
+
+// KafkaProducer 生产者配置。
+type KafkaProducer struct {
+	RequiredAcks    string `validate:"oneof=all local none"`
+	Compression     string `validate:"oneof=none gzip snappy lz4 zstd"`
+	RetryMax        int    `validate:"gte=0"`
+	RetryBackoff    int    `validate:"gte=0"`
+	Idempotent      bool
+	MaxMessageBytes int `validate:"gte=0"`
+	ReturnSuccesses bool
+}
+
+// KafkaConsumer 消费者配置。
+type KafkaConsumer struct {
+	InitialOffset     string `validate:"oneof=oldest newest"`
+	RebalanceStrategy string `validate:"oneof=range roundrobin sticky"`
+	SessionTimeout    int    `validate:"gte=1"`
+	HeartbeatInterval int    `validate:"gte=1"`
+	RetryBackoff      int    `validate:"gte=0"`
+	MaxProcessingTime int    `validate:"gte=1"`
+	FetchDefault      int32  `validate:"gte=0"`
+	FetchMax          int32  `validate:"gte=0"`
+	ReturnErrors      bool
+}
+
 // 跨域配置
 type Cors struct {
 	AllowOrigins     []string
@@ -99,6 +157,44 @@ var RedisConfig = &Redis{
 	DB:            "0",
 	UseTLS:        false,
 	TLSSkipVerify: true,
+}
+
+// KafkaConfig Kafka 默认配置。
+var KafkaConfig = &Kafka{
+	Enabled:          false,
+	Brokers:          "",
+	Version:          "3.7.0",
+	ClientID:         "cloudreve",
+	DialTimeout:      10,
+	ReadTimeout:      30,
+	WriteTimeout:     30,
+	KeepAlive:        30,
+	SecurityProtocol: "",
+	TLSEnabled:       false,
+	TLSSkipVerify:    false,
+	SASLEnabled:      false,
+	SASLMechanism:    "PLAIN",
+	SASLHandshake:    true,
+	Producer: KafkaProducer{
+		RequiredAcks:    "all",
+		Compression:     "snappy",
+		RetryMax:        5,
+		RetryBackoff:    2,
+		Idempotent:      true,
+		MaxMessageBytes: 0,
+		ReturnSuccesses: true,
+	},
+	Consumer: KafkaConsumer{
+		InitialOffset:     "newest",
+		RebalanceStrategy: "sticky",
+		SessionTimeout:    30,
+		HeartbeatInterval: 3,
+		RetryBackoff:      2,
+		MaxProcessingTime: 5,
+		FetchDefault:      1024 * 1024,
+		FetchMax:          0,
+		ReturnErrors:      true,
+	},
 }
 
 // DatabaseConfig 数据库配置

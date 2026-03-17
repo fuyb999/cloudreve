@@ -863,6 +863,14 @@ func (f *DBFS) getNavigator(ctx context.Context, path *fs.URI, requiredCapabilit
 		res = n
 	}
 
+	// 公共文件的一级/子级目录很多是基于授权结果投影出来的虚拟节点。
+	// 如果在真正解析到目标文件前，就用公共根导航器做能力预检查，
+	// `cloudreve://public/<root>` 这类路径会被误判成“当前 fs 不支持该动作”。
+	// 这里先放行到目标解析阶段，后续仍会通过 ensureCapability(target, ...) 做精确校验。
+	if shouldDeferPublicCapabilityCheck(path) {
+		return res, nil
+	}
+
 	// Check fs capabilities
 	capabilities := res.Capabilities(false).Capability
 	for _, capability := range requiredCapabilities {
@@ -872,6 +880,14 @@ func (f *DBFS) getNavigator(ctx context.Context, path *fs.URI, requiredCapabilit
 	}
 
 	return res, nil
+}
+
+func shouldDeferPublicCapabilityCheck(path *fs.URI) bool {
+	if path == nil || path.FileSystem() != constants.FileSystemPublic {
+		return false
+	}
+
+	return len(path.Elements()) > 0
 }
 
 func (f *DBFS) navigatorId(path *fs.URI) string {

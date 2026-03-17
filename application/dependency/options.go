@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/email"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/kafka"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
@@ -143,6 +144,13 @@ func WithHashIDEncoder(s hashid.Encoder) Option {
 func WithTokenAuth(s auth.TokenAuth) Option {
 	return optionFunc(func(o *dependency) {
 		o.tokenAuth = s
+	})
+}
+
+// WithKafkaClient Set the default kafka client
+func WithKafkaClient(s kafka.Client) Option {
+	return optionFunc(func(o *dependency) {
+		o.kafkaClient = s
 	})
 }
 
