@@ -1,7 +1,10 @@
 package publicsvc
 
 import (
+	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
@@ -29,6 +32,17 @@ type (
 
 	AdminPublicRootParamCtx struct{}
 	AdminPublicRootService  struct{}
+
+	AdminPublicResourceParamCtx struct{}
+	AdminPublicResourceService  struct {
+		Uri string `form:"uri"`
+	}
+
+	AdminPublicChildrenParamCtx struct{}
+	AdminPublicChildrenService  struct {
+		Uri      string `form:"uri"`
+		PageSize int    `form:"page_size"`
+	}
 
 	AdminPublicFolderCreateParamCtx struct{}
 	AdminPublicFolderCreateService  struct {
@@ -92,6 +106,20 @@ type RemoteCheckResponse struct {
 type PublicRootResponse struct {
 	Initialized bool                  `json:"initialized"`
 	Root        *PublicFolderResponse `json:"root,omitempty"`
+}
+
+type ResourceSnapshotResponse struct {
+	ID           string `json:"id"`
+	FileID       int    `json:"file_id"`
+	ParentFileID int    `json:"parent_file_id,omitempty"`
+	Name         string `json:"name"`
+	Owner        string `json:"owner"`
+	OwnerID      int    `json:"owner_id"`
+	TreePath     string `json:"tree_path,omitempty"`
+	PublicURI    string `json:"public_uri"`
+	OwnerURI     string `json:"owner_uri"`
+	Type         int    `json:"type"`
+	HasChildren  bool   `json:"has_children"`
 }
 
 func newService(c *gin.Context) *acl.Service {
@@ -216,6 +244,111 @@ func resolveTopLevelFolder(c *gin.Context, raw string) (*dbfs.File, error) {
 	return file, nil
 }
 
+func defaultPublicURI(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return acl.BuildPublicURI().String()
+	}
+	return raw
+}
+
+func parentFileIDFromTreePath(treePath string) int {
+	segments := strings.Split(strings.TrimSpace(treePath), ".")
+	if len(segments) <= 1 {
+		return 0
+	}
+
+	parentID, err := strconv.Atoi(segments[len(segments)-2])
+	if err != nil {
+		return 0
+	}
+	return parentID
+}
+
+func buildResourceSnapshot(c *gin.Context, file *ent.File, uri *fs.URI, ownerBase *fs.URI) *ResourceSnapshotResponse {
+	if file == nil {
+		return nil
+	}
+
+	dep := dependency.FromContext(c)
+	publicURI := ""
+	if uri != nil {
+		publicURI = uri.String()
+	}
+	ownerURI := ""
+	if ownerBase != nil {
+		if uri != nil && len(uri.Elements()) > 0 {
+			ownerURI = ownerBase.Join(uri.Elements()...).String()
+		} else {
+			ownerURI = ownerBase.String()
+		}
+	}
+
+	return &ResourceSnapshotResponse{
+		ID:           hashid.EncodeFileID(dep.HashIDEncoder(), file.ID),
+		FileID:       file.ID,
+		ParentFileID: parentFileIDFromTreePath(file.TreePath),
+		Name:         file.Name,
+		Owner:        encodedOwner(dep.HashIDEncoder(), file.OwnerID),
+		OwnerID:      file.OwnerID,
+		TreePath:     file.TreePath,
+		PublicURI:    publicURI,
+		OwnerURI:     ownerURI,
+		Type:         file.Type,
+		HasChildren:  file.Type == int(types.FileTypeFolder) && file.FileChildren > 0,
+	}
+}
+
+func resolveManagedPublicFile(c *gin.Context, raw string) (*ent.File, *fs.URI, *fs.URI, error) {
+	uri, err := parsePublicURI(defaultPublicURI(raw))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	service := newService(c)
+	root, err := service.Root(c)
+	if err != nil {
+		return nil, nil, nil, serializer.NewError(serializer.CodeNotFound, "public root not found", err)
+	}
+	ownerBase, ownerErr := service.RootOwnerURI(c, root)
+	if ownerErr != nil {
+		ownerBase = acl.BuildPublicURI()
+	}
+
+	current := root
+	dep := dependency.FromContext(c)
+	ctx := context.WithValue(c, inventory.LoadFileMetadata{}, true)
+	for _, element := range uri.Elements() {
+		children, childErr := dep.FileClient().GetChildFiles(ctx, &inventory.ListFileParameters{
+			PaginationArgs: &inventory.PaginationArgs{
+				PageSize:            1000,
+				UseCursorPagination: true,
+			},
+		}, 0, current)
+		if childErr != nil {
+			return nil, nil, nil, serializer.NewError(serializer.CodeDBError, "failed to list public children", childErr)
+		}
+
+		var next *ent.File
+		for _, item := range children.Files {
+			if item.Name == element {
+				next = item
+				break
+			}
+		}
+		if next == nil {
+			return nil, nil, nil, serializer.NewError(serializer.CodeNotFound, "public file not found", nil)
+		}
+
+		current = next
+	}
+
+	return current, uri, ownerBase, nil
+}
+
+func legacyLocalAuthzDisabledErr() error {
+	return serializer.NewError(serializer.CodeFeatureNotEnabled, "public authorization is managed by Yudao when OIDC is enabled", nil)
+}
+
 func (s *RemoteVisibilityService) Get(c *gin.Context) (*RemoteVisibilityResponse, error) {
 	service := newService(c)
 	user := inventory.UserFromContext(c)
@@ -311,6 +444,51 @@ func (s *AdminPublicRootService) Ensure(c *gin.Context) (*PublicRootResponse, er
 	}, nil
 }
 
+func (s *AdminPublicResourceService) Get(c *gin.Context) (*ResourceSnapshotResponse, error) {
+	file, uri, ownerBase, err := resolveManagedPublicFile(c, s.Uri)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildResourceSnapshot(c, file, uri, ownerBase), nil
+}
+
+func (s *AdminPublicChildrenService) List(c *gin.Context) ([]ResourceSnapshotResponse, error) {
+	parent, uri, ownerBase, err := resolveManagedPublicFile(c, s.Uri)
+	if err != nil {
+		return nil, err
+	}
+	if parent.Type != int(types.FileTypeFolder) {
+		return nil, serializer.NewError(serializer.CodeParamErr, "target must be a folder", nil)
+	}
+
+	dep := dependency.FromContext(c)
+	ctx := context.WithValue(c, inventory.LoadFileMetadata{}, true)
+	pageSize := s.PageSize
+	if pageSize <= 0 {
+		pageSize = 200
+	}
+	result, err := dep.FileClient().GetChildFiles(ctx, &inventory.ListFileParameters{
+		PaginationArgs: &inventory.PaginationArgs{
+			PageSize:            pageSize,
+			UseCursorPagination: true,
+		},
+	}, 0, parent)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeDBError, "failed to list public children", err)
+	}
+
+	res := make([]ResourceSnapshotResponse, 0, len(result.Files))
+	for _, item := range result.Files {
+		childURI := uri
+		if childURI == nil {
+			childURI = acl.BuildPublicURI()
+		}
+		res = append(res, *buildResourceSnapshot(c, item, childURI.Join(item.Name), ownerBase))
+	}
+	return res, nil
+}
+
 func ListPublicFolders(c *gin.Context) ([]PublicFolderResponse, error) {
 	service := newService(c)
 	bindings, err := service.ListRoots(c)
@@ -363,6 +541,10 @@ func (s *AdminPublicFolderCreateService) Create(c *gin.Context) (*PublicFolderRe
 
 func (s *AdminPublicFolderRuleService) Update(c *gin.Context) (*PublicFolderResponse, error) {
 	service := newService(c)
+	if service.UnifiedAuthzEnabled(c) {
+		return nil, legacyLocalAuthzDisabledErr()
+	}
+
 	target, err := resolveTopLevelFolder(c, s.Uri)
 	if err != nil {
 		return nil, err
@@ -386,6 +568,10 @@ func (s *AdminPublicFolderRuleService) Update(c *gin.Context) (*PublicFolderResp
 }
 
 func (s *AdminPublicMockStateService) Get(c *gin.Context) (*acl.MockState, error) {
+	if newService(c).UnifiedAuthzEnabled(c) {
+		return nil, legacyLocalAuthzDisabledErr()
+	}
+
 	state, err := newService(c).MockState(c)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "failed to load public mock state", err)
@@ -396,6 +582,10 @@ func (s *AdminPublicMockStateService) Get(c *gin.Context) (*acl.MockState, error
 
 func (s *AdminPublicMockStateService) Update(c *gin.Context) (*acl.MockState, error) {
 	service := newService(c)
+	if service.UnifiedAuthzEnabled(c) {
+		return nil, legacyLocalAuthzDisabledErr()
+	}
+
 	if err := service.SaveMockState(c, &s.State); err != nil {
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "failed to save public mock state", err)
 	}
@@ -409,6 +599,10 @@ func (s *AdminPublicMockStateService) Update(c *gin.Context) (*acl.MockState, er
 }
 
 func (s *AdminPublicProfileService) Upsert(c *gin.Context) (*acl.MockState, error) {
+	if newService(c).UnifiedAuthzEnabled(c) {
+		return nil, legacyLocalAuthzDisabledErr()
+	}
+
 	state, err := newService(c).UpsertProfile(c, s.Profile)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "failed to upsert public profile", err)

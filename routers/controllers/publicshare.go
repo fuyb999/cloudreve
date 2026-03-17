@@ -54,6 +54,30 @@ func AdminEnsurePublicRoot(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
+func AdminGetPublicResource(c *gin.Context) {
+	service := ParametersFromContext[*publicsvc.AdminPublicResourceService](c, publicsvc.AdminPublicResourceParamCtx{})
+	res, err := service.Get(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
+func AdminListPublicResourceChildren(c *gin.Context) {
+	service := ParametersFromContext[*publicsvc.AdminPublicChildrenService](c, publicsvc.AdminPublicChildrenParamCtx{})
+	res, err := service.List(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
 func AdminListPublicFolders(c *gin.Context) {
 	res, err := publicsvc.ListPublicFolders(c)
 	if err != nil {

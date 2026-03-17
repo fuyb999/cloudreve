@@ -1276,6 +1276,14 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 						controllers.FromQuery[publicsvc.AdminPublicRootService](publicsvc.AdminPublicRootParamCtx{}),
 						controllers.AdminEnsurePublicRoot,
 					)
+					public.GET("resource",
+						controllers.FromQuery[publicsvc.AdminPublicResourceService](publicsvc.AdminPublicResourceParamCtx{}),
+						controllers.AdminGetPublicResource,
+					)
+					public.GET("resource/children",
+						controllers.FromQuery[publicsvc.AdminPublicChildrenService](publicsvc.AdminPublicChildrenParamCtx{}),
+						controllers.AdminListPublicResourceChildren,
+					)
 					public.GET("folder", controllers.AdminListPublicFolders)
 					public.PUT("folder",
 						middleware.RequiredScopes(types.ScopeAdminWrite),

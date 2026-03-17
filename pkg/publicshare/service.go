@@ -284,6 +284,22 @@ func isAdminUser(user *ent.User) bool {
 }
 
 func (s *Service) ResolveVisibility(ctx context.Context, user *ent.User) (*VisibilityResult, error) {
+	if s.UnifiedAuthzEnabled(ctx) {
+		accessToken := oidcAccessTokenFromContext(ctx)
+		if accessToken == "" {
+			return &VisibilityResult{
+				Filter:     FalseFilter(),
+				RootGrants: nil,
+			}, nil
+		}
+
+		return s.resolveVisibilityRemote(ctx, accessToken)
+	}
+
+	return s.resolveVisibilityLocal(ctx, user)
+}
+
+func (s *Service) resolveVisibilityLocal(ctx context.Context, user *ent.User) (*VisibilityResult, error) {
 	bindings, err := s.ListRoots(ctx)
 	if err != nil {
 		return nil, err
@@ -360,6 +376,23 @@ func (s *Service) ResolveVisibility(ctx context.Context, user *ent.User) (*Visib
 }
 
 func (s *Service) CheckActionByFile(ctx context.Context, user *ent.User, target *ent.File, action Action) (*ActionDecision, error) {
+	if s.UnifiedAuthzEnabled(ctx) {
+		accessToken := oidcAccessTokenFromContext(ctx)
+		if accessToken == "" {
+			return &ActionDecision{
+				Allowed: false,
+				Action:  action,
+				Reason:  "oidc_access_token_missing",
+			}, nil
+		}
+
+		return s.checkActionRemote(ctx, accessToken, target, action)
+	}
+
+	return s.checkActionByFileLocal(ctx, user, target, action)
+}
+
+func (s *Service) checkActionByFileLocal(ctx context.Context, user *ent.User, target *ent.File, action Action) (*ActionDecision, error) {
 	if target == nil {
 		return &ActionDecision{Allowed: false, Action: action, Reason: "target_not_found"}, nil
 	}

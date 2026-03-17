@@ -109,6 +109,8 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 	if token == "" {
 		return false, nil
 	}
+	// 统一认证模式下，后续公共文件授权会复用这枚 access token 访问 Yudao 运行时接口。
+	util.WithValue(c, inventory.OIDCAccessTokenCtx{}, token)
 
 	if isOIDCAccessTokenRevoked(c, dep, token) {
 		return false, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token has been revoked", nil)

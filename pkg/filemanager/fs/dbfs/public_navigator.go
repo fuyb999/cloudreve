@@ -3,6 +3,9 @@ package dbfs
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -61,6 +64,7 @@ type publicNavigator struct {
 	root           *File
 	current        *File
 	visibility     *publicshare.VisibilityResult
+	projectedRoots []*File
 	disableRecycle bool
 	persist        func()
 }
@@ -74,6 +78,12 @@ func (n *publicNavigator) Recycle() {
 		n.persist()
 		n.persist = nil
 	}
+	for _, projected := range n.projectedRoots {
+		if projected != nil {
+			projected.Recycle()
+		}
+	}
+	n.projectedRoots = nil
 	if n.root != nil && !n.disableRecycle {
 		n.root.Recycle()
 	}
@@ -165,18 +175,39 @@ func (n *publicNavigator) grantForFile(file *File) (publicshare.RootGrant, bool)
 		return publicshare.RootGrant{}, true
 	}
 
-	current := file
-	for current.Parent != nil && current.Parent != n.root {
-		current = current.Parent
-	}
+	targetID := file.ID()
+	targetOwnerID := file.OwnerID()
+	targetPath := strings.TrimSpace(file.Model.TreePath)
 
+	var (
+		matched      publicshare.RootGrant
+		matchedDepth = -1
+	)
 	for _, grant := range n.visibility.RootGrants {
-		if grant.RootFileID == current.ID() {
+		if grant.RootOwnerID != 0 && grant.RootOwnerID != targetOwnerID {
+			continue
+		}
+
+		if grant.RootFileID == targetID {
 			return grant, true
+		}
+
+		grantPath := strings.TrimSpace(grant.RootTreePath)
+		if grantPath == "" || targetPath == "" {
+			continue
+		}
+		if targetPath != grantPath && !strings.HasPrefix(targetPath, grantPath+".") {
+			continue
+		}
+
+		depth := len(strings.Split(grantPath, "."))
+		if depth > matchedDepth {
+			matched = grant
+			matchedDepth = depth
 		}
 	}
 
-	return publicshare.RootGrant{}, false
+	return matched, matchedDepth >= 0
 }
 
 func (n *publicNavigator) filter(ctx context.Context, file *File) (*File, bool) {
@@ -264,10 +295,250 @@ func (n *publicNavigator) Children(ctx context.Context, parent *File, args *List
 		return nil, err
 	}
 
-	argsCopy := *args
+	if parent == n.root && (args == nil || args.Search == nil) {
+		n.current = parent
+		return n.projectRootChildren(ctx, args, visibility)
+	}
+
+	argsCopy := ListArgs{}
+	if args != nil {
+		argsCopy = *args
+	}
 	argsCopy.ExtraPredicate = publicshare.ToEntPredicate(visibility.Filter)
 	n.current = parent
 	return n.baseNavigator.children(ctx, parent, &argsCopy)
+}
+
+func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArgs, visibility *publicshare.VisibilityResult) (*ListResult, error) {
+	for _, projected := range n.projectedRoots {
+		if projected != nil {
+			projected.Recycle()
+		}
+	}
+	n.projectedRoots = nil
+
+	if visibility == nil || len(visibility.RootGrants) == 0 {
+		return &ListResult{
+			Files:      nil,
+			MixedType:  false,
+			Pagination: buildProjectedPagination(args, 0, 0),
+		}, nil
+	}
+
+	projected := make([]*File, 0, len(visibility.RootGrants))
+	seen := make(map[int]struct{}, len(visibility.RootGrants))
+	for _, grant := range visibility.RootGrants {
+		if grant.RootFileID <= 0 {
+			continue
+		}
+		if _, ok := seen[grant.RootFileID]; ok {
+			continue
+		}
+		seen[grant.RootFileID] = struct{}{}
+
+		file, err := n.projectRootGrant(ctx, grant)
+		if err != nil {
+			n.l.Warning("Failed to project public root grant %d: %v", grant.RootFileID, err)
+			continue
+		}
+
+		filtered, ok := n.filter(ctx, file)
+		if !ok {
+			file.Recycle()
+			continue
+		}
+
+		projected = append(projected, filtered)
+		n.projectedRoots = append(n.projectedRoots, filtered)
+	}
+
+	sort.Slice(projected, func(i, j int) bool {
+		left, right := projected[i], projected[j]
+		if left.Type() != right.Type() {
+			return left.Type() == types.FileTypeFolder
+		}
+
+		leftPath, rightPath := "", ""
+		if left.Path[pathIndexUser] != nil {
+			leftPath = left.Path[pathIndexUser].PathTrimmed()
+		}
+		if right.Path[pathIndexUser] != nil {
+			rightPath = right.Path[pathIndexUser].PathTrimmed()
+		}
+		if !strings.EqualFold(left.Name(), right.Name()) {
+			return strings.ToLower(left.Name()) < strings.ToLower(right.Name())
+		}
+		return leftPath < rightPath
+	})
+
+	offset, limit := projectedPageWindow(args, n.config.MaxPageSize, len(projected))
+	end := offset + limit
+	if end > len(projected) {
+		end = len(projected)
+	}
+
+	paged := projected
+	if offset < len(projected) {
+		paged = projected[offset:end]
+	} else {
+		paged = nil
+	}
+
+	return &ListResult{
+		Files:      paged,
+		MixedType:  hasMixedProjectedTypes(projected),
+		Pagination: buildProjectedPagination(args, len(projected), end),
+	}, nil
+}
+
+func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshare.RootGrant) (*File, error) {
+	target, err := n.fileClient.GetByID(context.WithValue(ctx, inventory.LoadFileMetadata{}, true), grant.RootFileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load file %d: %w", grant.RootFileID, err)
+	}
+
+	relativeElements, err := n.relativeElementsFromPublicRoot(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+
+	projected := newFile(nil, target)
+	projected.Parent = n.root
+	projected.mu = n.root.mu
+	projected.CapabilitiesBs = n.root.CapabilitiesBs
+
+	if n.root.Path[pathIndexRoot] != nil {
+		projected.Path[pathIndexRoot] = n.root.Path[pathIndexRoot].Join(relativeElements...)
+	}
+
+	projected.Path[pathIndexUser] = newPublicUri().Join(relativeElements...)
+	return projected, nil
+}
+
+func (n *publicNavigator) relativeElementsFromPublicRoot(ctx context.Context, target *ent.File) ([]string, error) {
+	if target == nil {
+		return nil, fmt.Errorf("public target is nil")
+	}
+	if n.root == nil || n.root.Model == nil {
+		return nil, fmt.Errorf("public root is not initialized")
+	}
+
+	ancestors, err := n.fileClient.GetAncestorFiles(ctx, target)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load ancestors for %d: %w", target.ID, err)
+	}
+
+	rootIndex := -1
+	for i, ancestor := range ancestors {
+		if ancestor != nil && ancestor.ID == n.root.Model.ID {
+			rootIndex = i
+			break
+		}
+	}
+	if rootIndex < 0 {
+		return nil, fmt.Errorf("target %d is not under public root %d", target.ID, n.root.Model.ID)
+	}
+
+	elements := make([]string, 0, len(ancestors)-rootIndex-1)
+	for _, ancestor := range ancestors[rootIndex+1:] {
+		if ancestor == nil || strings.TrimSpace(ancestor.Name) == "" {
+			continue
+		}
+		elements = append(elements, ancestor.Name)
+	}
+	if len(elements) == 0 {
+		return nil, fmt.Errorf("target %d does not have a projected relative path", target.ID)
+	}
+
+	return elements, nil
+}
+
+func projectedPageWindow(args *ListArgs, defaultPageSize, total int) (int, int) {
+	if total == 0 {
+		return 0, 0
+	}
+
+	pageSize := defaultPageSize
+	if pageSize <= 0 || pageSize > total {
+		pageSize = total
+	}
+
+	if args == nil || args.Page == nil {
+		return 0, pageSize
+	}
+
+	if args.Page.PageSize > 0 {
+		pageSize = args.Page.PageSize
+	}
+
+	if args.Page.UseCursorPagination {
+		offset, err := strconv.Atoi(strings.TrimSpace(args.Page.PageToken))
+		if err != nil || offset < 0 {
+			offset = 0
+		}
+		return offset, pageSize
+	}
+
+	page := args.Page.Page
+	if page < 0 {
+		page = 0
+	}
+	return page * pageSize, pageSize
+}
+
+func buildProjectedPagination(args *ListArgs, total, end int) *inventory.PaginationResults {
+	pageSize := total
+	if pageSize <= 0 {
+		pageSize = 0
+	}
+	page := 0
+	isCursor := false
+	nextToken := ""
+	if args != nil && args.Page != nil {
+		if args.Page.PageSize > 0 {
+			pageSize = args.Page.PageSize
+		}
+		page = args.Page.Page
+		if page < 0 {
+			page = 0
+		}
+		isCursor = args.Page.UseCursorPagination
+		if isCursor && end < total {
+			nextToken = strconv.Itoa(end)
+		}
+	}
+
+	return &inventory.PaginationResults{
+		Page:          page,
+		PageSize:      pageSize,
+		TotalItems:    total,
+		NextPageToken: nextToken,
+		IsCursor:      isCursor,
+	}
+}
+
+func hasMixedProjectedTypes(files []*File) bool {
+	if len(files) <= 1 {
+		return false
+	}
+
+	hasFolder := false
+	hasFile := false
+	for _, item := range files {
+		if item == nil {
+			continue
+		}
+		if item.Type() == types.FileTypeFolder {
+			hasFolder = true
+		} else {
+			hasFile = true
+		}
+		if hasFolder && hasFile {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (n *publicNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {

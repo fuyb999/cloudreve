@@ -1,0 +1,293 @@
+package publicshare
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory"
+)
+
+const (
+	oidcEnabledSettingKey   = "oidc_enabled"
+	oidcWellKnownSettingKey = "oidc_wellknown_url"
+
+	remoteVisibilityPath  = "/system-api/cloudreve/authz/visibility"
+	remoteActionCheckPath = "/system-api/cloudreve/authz/action-check"
+
+	remoteAuthzTimeout = 5 * time.Second
+)
+
+type remoteEnvelope[T any] struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data T      `json:"data"`
+}
+
+type remoteVisibilityResult struct {
+	RootGrants    []remoteRootGrant     `json:"rootGrants"`
+	FileFilterAST *remoteFileFilterExpr `json:"fileFilterAst"`
+}
+
+type remoteRootGrant struct {
+	FileID   int64           `json:"fileId"`
+	OwnerID  int64           `json:"ownerId"`
+	TreePath string          `json:"treePath"`
+	Name     string          `json:"name"`
+	Actions  map[string]bool `json:"actions"`
+}
+
+type remoteFileFilterExpr struct {
+	Operator string                  `json:"operator"`
+	Children []*remoteFileFilterExpr `json:"children"`
+	Match    *remoteFileFilterMatch  `json:"match"`
+}
+
+type remoteFileFilterMatch struct {
+	Kind         string   `json:"kind"`
+	IntValues    []int64  `json:"intValues"`
+	StringValues []string `json:"stringValues"`
+}
+
+type remoteActionCheckRequest struct {
+	Action string               `json:"action"`
+	Target remoteTargetResource `json:"target"`
+}
+
+type remoteTargetResource struct {
+	FileID   int64  `json:"fileId"`
+	OwnerID  int64  `json:"ownerId"`
+	TreePath string `json:"treePath"`
+	Type     int    `json:"type"`
+	Name     string `json:"name"`
+}
+
+type remoteActionDecision struct {
+	Allowed        bool            `json:"allowed"`
+	Action         string          `json:"action"`
+	ResourceFileID int64           `json:"resourceFileId"`
+	Reason         string          `json:"reason"`
+	Actions        map[string]bool `json:"actions"`
+}
+
+// UnifiedAuthzEnabled 返回当前是否处于 “OIDC 打开即由 Yudao 接管公共文件授权” 模式。
+func (s *Service) UnifiedAuthzEnabled(ctx context.Context) bool {
+	raw, err := s.settingClient.Get(ctx, oidcEnabledSettingKey)
+	if err != nil {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) resolveVisibilityRemote(ctx context.Context, accessToken string) (*VisibilityResult, error) {
+	baseURL, err := s.remoteAuthzBaseURL(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	payload, err := remoteRequest[remoteVisibilityResult](ctx, http.MethodGet, baseURL+remoteVisibilityPath, accessToken, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return toLocalVisibilityResult(payload), nil
+}
+
+func (s *Service) checkActionRemote(ctx context.Context, accessToken string, target *ent.File, action Action) (*ActionDecision, error) {
+	if target == nil {
+		return &ActionDecision{Allowed: false, Action: action, Reason: "target_not_found"}, nil
+	}
+
+	baseURL, err := s.remoteAuthzBaseURL(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	payload, err := remoteRequest[remoteActionDecision](ctx, http.MethodPost, baseURL+remoteActionCheckPath, accessToken, &remoteActionCheckRequest{
+		Action: string(action),
+		Target: remoteTargetResource{
+			FileID:   int64(target.ID),
+			OwnerID:  int64(target.OwnerID),
+			TreePath: target.TreePath,
+			Type:     target.Type,
+			Name:     target.Name,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return toLocalActionDecision(payload, target, action), nil
+}
+
+func (s *Service) remoteAuthzBaseURL(ctx context.Context) (string, error) {
+	raw, err := s.settingClient.Get(ctx, oidcWellKnownSettingKey)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("oidc well-known url is not configured")
+	}
+
+	wellKnown := strings.TrimSpace(raw)
+	baseURL := strings.TrimSuffix(wellKnown, "/.well-known/openid-configuration")
+	baseURL = strings.TrimRight(baseURL, "/")
+	if baseURL == "" || baseURL == wellKnown {
+		return "", fmt.Errorf("failed to derive yudao authz base url from oidc well-known url")
+	}
+
+	return baseURL, nil
+}
+
+func remoteRequest[T any](ctx context.Context, method string, target string, accessToken string, requestBody any) (*T, error) {
+	var bodyReader io.Reader
+	if requestBody != nil {
+		body, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal remote authz request: %w", err)
+		}
+		bodyReader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, target, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create remote authz request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	if requestBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	client := &http.Client{Timeout: remoteAuthzTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call remote authz endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read remote authz response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("remote authz endpoint returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	envelope := &remoteEnvelope[T]{}
+	if err := json.Unmarshal(body, envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse remote authz response: %w", err)
+	}
+	if envelope.Code != 0 {
+		return nil, fmt.Errorf("remote authz rejected request: %s", strings.TrimSpace(envelope.Msg))
+	}
+
+	return &envelope.Data, nil
+}
+
+func toLocalVisibilityResult(payload *remoteVisibilityResult) *VisibilityResult {
+	if payload == nil {
+		return &VisibilityResult{
+			Filter: FalseFilter(),
+		}
+	}
+
+	result := &VisibilityResult{
+		Filter:     toLocalFilterExpr(payload.FileFilterAST),
+		RootGrants: make([]RootGrant, 0, len(payload.RootGrants)),
+	}
+	if result.Filter == nil {
+		result.Filter = FalseFilter()
+	}
+
+	for _, grant := range payload.RootGrants {
+		result.RootGrants = append(result.RootGrants, RootGrant{
+			RootFileID:   int(grant.FileID),
+			RootOwnerID:  int(grant.OwnerID),
+			RootName:     grant.Name,
+			RootTreePath: grant.TreePath,
+			Actions:      toLocalActions(grant.Actions),
+		})
+	}
+
+	return result
+}
+
+func toLocalFilterExpr(expr *remoteFileFilterExpr) *FileFilterExpr {
+	if expr == nil {
+		return nil
+	}
+
+	res := &FileFilterExpr{
+		Operator: FileFilterOperator(expr.Operator),
+	}
+	if expr.Match != nil {
+		res.Match = &FileFilterMatch{
+			Kind:         FileFilterMatchKind(expr.Match.Kind),
+			StringValues: append([]string(nil), expr.Match.StringValues...),
+		}
+		if len(expr.Match.IntValues) > 0 {
+			res.Match.IntValues = make([]int, 0, len(expr.Match.IntValues))
+			for _, value := range expr.Match.IntValues {
+				res.Match.IntValues = append(res.Match.IntValues, int(value))
+			}
+		}
+	}
+
+	if len(expr.Children) > 0 {
+		res.Children = make([]*FileFilterExpr, 0, len(expr.Children))
+		for _, child := range expr.Children {
+			res.Children = append(res.Children, toLocalFilterExpr(child))
+		}
+	}
+
+	return res
+}
+
+func toLocalActionDecision(payload *remoteActionDecision, target *ent.File, action Action) *ActionDecision {
+	if payload == nil {
+		return &ActionDecision{
+			Allowed: false,
+			Action:  action,
+			Reason:  "empty_remote_decision",
+		}
+	}
+
+	rootFileID := int(payload.ResourceFileID)
+	if rootFileID == 0 && target != nil {
+		rootFileID = target.ID
+	}
+
+	return &ActionDecision{
+		Allowed:    payload.Allowed,
+		Action:     Action(payload.Action),
+		RootFileID: rootFileID,
+		Actions:    toLocalActions(payload.Actions),
+		Reason:     payload.Reason,
+	}
+}
+
+func toLocalActions(actions map[string]bool) map[Action]bool {
+	if len(actions) == 0 {
+		return map[Action]bool{}
+	}
+
+	res := make(map[Action]bool, len(actions))
+	for key, value := range actions {
+		res[Action(key)] = value
+	}
+	return res
+}
+
+func oidcAccessTokenFromContext(ctx context.Context) string {
+	return inventory.OIDCAccessTokenFromContext(ctx)
+}
