@@ -155,7 +155,7 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 
 	// Validate pagination args
 	props := navigator.Capabilities(isSearching)
-	if parent != nil && parent.Capabilities() != nil {
+	if parent != nil && !parent.IsNil() && parent.Capabilities() != nil {
 		propsCopy := *props
 		propsCopy.Capability = parent.Capabilities()
 		props = &propsCopy
@@ -181,7 +181,7 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 	if o.loadFilePublicMetadata {
 		ctx = context.WithValue(ctx, inventory.LoadFilePublicMetadata{}, true)
 	}
-	if o.loadFileShareIfOwned && parent != nil && parent.OwnerID() == f.user.ID {
+	if o.loadFileShareIfOwned && parent != nil && !parent.IsNil() && parent.OwnerID() == f.user.ID {
 		ctx = context.WithValue(ctx, inventory.LoadFileShare{}, true)
 	}
 
@@ -211,7 +211,7 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 	}
 
 	var storagePolicy *ent.StoragePolicy
-	if parent != nil {
+	if parent != nil && !parent.IsNil() {
 		storagePolicy, err = f.getPreferredPolicy(ctx, parent)
 		if err != nil {
 			f.l.Warning("Failed to get preferred policy: %v", err)
@@ -257,6 +257,15 @@ func (f *DBFS) CreateEntity(ctx context.Context, file fs.File, policy *ent.Stora
 		o.apply(opt)
 	}
 
+	filePrivate, ok := file.(*File)
+	if !ok || filePrivate == nil || filePrivate.IsNil() {
+		return nil, fmt.Errorf("create entity: invalid file")
+	}
+	filePrivate, err := f.ensureFileEntitiesLoaded(ctx, filePrivate)
+	if err != nil {
+		return nil, fmt.Errorf("create entity: failed to load entities: %w", err)
+	}
+
 	// If uploader specified previous latest version ID (etag), we should check if it's still valid.
 	if o.previousVersion != "" {
 		entityId, err := f.hasher.Decode(o.previousVersion, hashid.EntityID)
@@ -264,13 +273,13 @@ func (f *DBFS) CreateEntity(ctx context.Context, file fs.File, policy *ent.Stora
 			return nil, serializer.NewError(serializer.CodeParamErr, "Unknown version ID", err)
 		}
 
-		entities, err := file.(*File).Model.Edges.EntitiesOrErr()
+		entities, err := filePrivate.Model.Edges.EntitiesOrErr()
 		if err != nil || entities == nil {
 			return nil, fmt.Errorf("create entity: previous entities not load")
 		}
 
 		// File is stale during edit if the latest entity is not the same as the one specified by uploader.
-		if e := file.PrimaryEntity(); e == nil || e.ID() != entityId {
+		if e := filePrivate.PrimaryEntity(); e == nil || e.ID() != entityId {
 			return nil, fs.ErrStaleVersion
 		}
 	}
@@ -280,7 +289,7 @@ func (f *DBFS) CreateEntity(ctx context.Context, file fs.File, policy *ent.Stora
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to start transaction", err)
 	}
 
-	fileModel := file.(*File).Model
+	fileModel := filePrivate.Model
 	if o.removeStaleEntities {
 		storageDiff, err := fc.RemoveStaleEntities(ctx, fileModel)
 		if err != nil {
@@ -292,7 +301,7 @@ func (f *DBFS) CreateEntity(ctx context.Context, file fs.File, policy *ent.Stora
 	}
 
 	entity, storageDiff, err := fc.CreateEntity(ctx, fileModel, &inventory.EntityParameters{
-		OwnerID:         file.(*File).Owner().ID,
+		OwnerID:         filePrivate.Owner().ID,
 		EntityType:      entityType,
 		StoragePolicyID: policy.ID,
 		Source:          req.Props.SavePath,
@@ -414,6 +423,15 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 	if err != nil {
 		return nil, fmt.Errorf("failed to get target file: %w", err)
 	}
+	if err := ensureCapability(target, o.requiredCapabilities...); err != nil {
+		return nil, err
+	}
+	if o.loadFileEntities || o.extendedInfo || o.loadFolderSummary {
+		target, err = f.ensureFileEntitiesLoaded(ctx, target)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate target entities: %w", err)
+		}
+	}
 
 	if o.notRoot && (target == nil || target.IsRootFolder()) {
 		return nil, fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot operate root file"))
@@ -524,6 +542,24 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 		return nil, fmt.Errorf("cannot get root file with nil root")
 	}
 
+	return target, nil
+}
+
+func (f *DBFS) ensureFileEntitiesLoaded(ctx context.Context, target *File) (*File, error) {
+	if target == nil || target.IsNil() {
+		return target, nil
+	}
+	if _, err := target.Model.Edges.EntitiesOrErr(); err == nil {
+		return target, nil
+	} else if !ent.IsNotLoaded(err) {
+		return nil, err
+	}
+
+	loaded, err := f.fileClient.GetByID(context.WithValue(ctx, inventory.LoadFileEntity{}, true), target.ID())
+	if err != nil {
+		return nil, err
+	}
+	target.Model = loaded
 	return target, nil
 }
 
@@ -686,9 +722,53 @@ func (f *DBFS) generateEncryptMetadata(ctx context.Context, uploadRequest *fs.Up
 	return nil, nil
 }
 
+// ensureOwnerWithGroup 确保文件 owner 已带上 group 边。
+// 公共文件场景下，投影出来的 File 往往只挂了 owner_id，没有完整的 owner/group 关联；
+// 后续像“按 owner 用户组取存储策略”“读回收站保留时间”这类逻辑都依赖 owner.Edges.Group，
+// 因此这里统一做一次懒加载兜底。
+func (f *DBFS) ensureOwnerWithGroup(ctx context.Context, file *File) (*ent.User, error) {
+	if file == nil {
+		return nil, fmt.Errorf("file is nil")
+	}
+
+	if owner := file.Owner(); owner != nil && owner.Edges.Group != nil {
+		return owner, nil
+	}
+
+	// 当前登录用户就是 owner 时，优先复用已加载好的登录态，避免额外查库。
+	if f.user != nil && f.user.Edges.Group != nil && file.OwnerID() == f.user.ID {
+		file.OwnerModel = f.user
+		return f.user, nil
+	}
+
+	ownerID := file.OwnerID()
+	if ownerID == 0 {
+		if owner := file.Owner(); owner != nil {
+			ownerID = owner.ID
+		}
+	}
+	if ownerID == 0 {
+		return nil, fmt.Errorf("file owner is not resolved")
+	}
+
+	loadCtx := context.WithValue(ctx, inventory.LoadUserGroup{}, true)
+	owner, err := f.userClient.GetByID(loadCtx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load file owner %d: %w", ownerID, err)
+	}
+
+	file.OwnerModel = owner
+	return owner, nil
+}
+
 // getPreferredPolicy tries to get the preferred storage policy for the given file.
 func (f *DBFS) getPreferredPolicy(ctx context.Context, file *File) (*ent.StoragePolicy, error) {
-	ownerGroup := file.Owner().Edges.Group
+	owner, err := f.ensureOwnerWithGroup(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+
+	ownerGroup := owner.Edges.Group
 	if ownerGroup == nil {
 		return nil, fmt.Errorf("owner group not loaded")
 	}
@@ -827,15 +907,22 @@ func generateSavePath(policy *ent.StoragePolicy, req *fs.UploadRequest, user *en
 
 func canMoveOrCopyTo(src, dst *fs.URI, isCopy bool) bool {
 	if isCopy {
-		return src.FileSystem() == dst.FileSystem() && (src.FileSystem() == constants.FileSystemMy)
-	} else {
 		switch src.FileSystem() {
-		case constants.FileSystemMy:
-			return dst.FileSystem() == constants.FileSystemMy || dst.FileSystem() == constants.FileSystemTrash
-		case constants.FileSystemTrash:
-			return dst.FileSystem() == constants.FileSystemMy
-
+		case constants.FileSystemMy, constants.FileSystemPublic:
+			return dst.FileSystem() == constants.FileSystemMy || dst.FileSystem() == constants.FileSystemPublic
 		}
+		return false
+	}
+
+	switch src.FileSystem() {
+	case constants.FileSystemMy:
+		return dst.FileSystem() == constants.FileSystemMy ||
+			dst.FileSystem() == constants.FileSystemTrash ||
+			dst.FileSystem() == constants.FileSystemPublic
+	case constants.FileSystemTrash:
+		return dst.FileSystem() == constants.FileSystemMy
+	case constants.FileSystemPublic:
+		return dst.FileSystem() == constants.FileSystemPublic
 	}
 
 	return false

@@ -9,6 +9,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 )
 
 const (
@@ -22,22 +23,34 @@ const (
 type Action string
 
 const (
-	ActionList     Action = "list"
-	ActionDownload Action = "download"
-	ActionUpload   Action = "upload"
-	ActionCreate   Action = "create"
-	ActionRename   Action = "rename"
-	ActionDelete   Action = "delete"
-	ActionMetadata Action = "metadata"
+	ActionList       Action = "list"
+	ActionDownload   Action = "download"
+	ActionDirectLink Action = "direct_link"
+	ActionArchive    Action = "archive"
+	ActionUpload     Action = "upload"
+	ActionCreate     Action = "create"
+	ActionRename     Action = "rename"
+	ActionDelete     Action = "delete"
+	ActionDeleteRoot Action = "delete_root"
+	ActionShare      Action = "share"
+	ActionCopy       Action = "copy"
+	ActionMove       Action = "move"
+	ActionMetadata   Action = "metadata"
 )
 
 var ActionOrder = []Action{
 	ActionList,
 	ActionDownload,
+	ActionDirectLink,
+	ActionArchive,
 	ActionUpload,
 	ActionCreate,
 	ActionRename,
 	ActionDelete,
+	ActionDeleteRoot,
+	ActionShare,
+	ActionCopy,
+	ActionMove,
 	ActionMetadata,
 }
 
@@ -191,9 +204,32 @@ func (r *Rule) ExprFor(action Action) *PrincipalExpr {
 	switch action {
 	case ActionList, ActionDownload:
 		return r.Visibility
+	case ActionDirectLink, ActionArchive:
+		// 直链和打包在第一版里默认继承下载语义，避免历史规则升级后全部失效。
+		return r.ExprFor(ActionDownload)
+	case ActionDeleteRoot:
+		// delete_root 仅用于保护授权根本身，未单独配置时退回 delete，保证旧策略兼容。
+		return r.ExprFor(ActionDelete)
 	default:
 		return nil
 	}
+}
+
+// RootGrantActionAllowed 会把“一级目录删除”解释成 delete_root。
+// 当目标刚好是授权根目录且策略显式声明了 delete_root 时，优先使用该动作；
+// 否则继续沿用普通 delete 语义，避免历史授权全部失效。
+func RootGrantActionAllowed(targetFileID int, grant RootGrant, action Action) bool {
+	if grant.Actions == nil {
+		return false
+	}
+
+	if action == ActionDelete && targetFileID > 0 && targetFileID == grant.RootFileID {
+		if allowed, ok := grant.Actions[ActionDeleteRoot]; ok {
+			return allowed
+		}
+	}
+
+	return grant.Actions[action]
 }
 
 func FalseFilter() *FileFilterExpr {
@@ -262,6 +298,32 @@ func BuildVisibilityFilter(grants []RootGrant) *FileFilterExpr {
 		Operator: FileFilterOpOr,
 		Children: branches,
 	}
+}
+
+func RootGrantWithinTree(rootTreePath string, grant RootGrant) bool {
+	rootPath := strings.TrimSpace(rootTreePath)
+	grantPath := strings.TrimSpace(grant.RootTreePath)
+	if rootPath == "" || grantPath == "" {
+		return false
+	}
+
+	return grantPath == rootPath || strings.HasPrefix(grantPath, rootPath+".")
+}
+
+func ProjectedRootAlias(hasher hashid.Encoder, grant RootGrant) string {
+	name := strings.TrimSpace(grant.RootName)
+	if name == "" {
+		name = fmt.Sprintf("public-%d", grant.RootFileID)
+	}
+
+	suffix := strconv.Itoa(grant.RootFileID)
+	if hasher != nil && grant.RootFileID > 0 {
+		if encoded := strings.TrimSpace(hashid.EncodeFileID(hasher, grant.RootFileID)); encoded != "" {
+			suffix = encoded
+		}
+	}
+
+	return fmt.Sprintf("%s__%s", name, suffix)
 }
 
 func uniqueSortedStrings(values []string) []string {

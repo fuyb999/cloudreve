@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
@@ -59,6 +60,7 @@ type (
 )
 
 func (m *manager) GetDirectLink(ctx context.Context, urls ...*fs.URI) ([]DirectLink, error) {
+	ctx = withPublicBypass(ctx, urls...)
 	ae := serializer.NewAggregateError()
 	res := make([]DirectLink, 0, len(urls))
 	useRedirect := m.user.Edges.Group.Settings.RedirectedSource
@@ -69,14 +71,16 @@ func (m *manager) GetDirectLink(ctx context.Context, urls ...*fs.URI) ([]DirectL
 		file, err := m.fs.Get(
 			ctx, url,
 			dbfs.WithFileEntities(),
-			dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityDownloadFile),
+			dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityDirectLink, dbfs.NavigatorCapabilityDownloadFile),
 		)
 		if err != nil {
 			ae.Add(url.String(), err)
 			continue
 		}
 
-		if file.OwnerID() != m.user.ID && !m.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+		if url.FileSystem() != constants.FileSystemPublic &&
+			file.OwnerID() != m.user.ID &&
+			!m.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
 			ae.Add(url.String(), fs.ErrOwnerOnly)
 			continue
 		}

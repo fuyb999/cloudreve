@@ -71,7 +71,7 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 	}
 
 	// Lock ancestor
-	lockedPath := ancestor.RootUri().JoinRaw(path.PathTrimmed())
+	lockedPath := ancestor.ResolveOwnerURI(path)
 	ls, err := f.acquireByPath(ctx, -1, f.user, false, fs.LockApp(fs.ApplicationCreate),
 		&LockByPath{lockedPath, ancestor, fileType, ""})
 	defer func() { _ = f.Release(ctx, ls) }()
@@ -189,13 +189,13 @@ func (f *DBFS) Rename(ctx context.Context, path *fs.URI, newName string) (fs.Fil
 		return nil, nil, fs.ErrIllegalObjectName.WithError(err)
 	}
 
-	// If target is a file, validate file extension
-	policy, err := f.getPreferredPolicy(ctx, target)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	if target.Type() == types.FileTypeFile {
+		// 仅普通文件需要按存储策略校验扩展名；文件夹改名不应因为 owner group 懒加载缺失而失败。
+		policy, err := f.getPreferredPolicy(ctx, target)
+		if err != nil {
+			return nil, nil, err
+		}
+
 		if err := validateExtension(newName, policy); err != nil {
 			return nil, nil, fs.ErrIllegalObjectName.WithError(err)
 		}
@@ -325,10 +325,16 @@ func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 		}
 
 		// Save restore uri into metadata
+		owner, ownerErr := f.ensureOwnerWithGroup(ctx, target)
+		if ownerErr != nil {
+			_ = inventory.Rollback(tx)
+			return serializer.NewError(serializer.CodeInternalSetting, "failed to load file owner group", ownerErr)
+		}
+
 		if err := fc.UpsertMetadata(ctx, target.Model, map[string]string{
 			MetadataRestoreUri: target.Uri(true).String(),
 			MetadataExpectedCollectTime: strconv.FormatInt(
-				time.Now().Add(time.Duration(target.Owner().Edges.Group.Settings.TrashRetention)*time.Second).Unix(),
+				time.Now().Add(time.Duration(owner.Edges.Group.Settings.TrashRetention)*time.Second).Unix(),
 				10),
 		}, nil); err != nil {
 			_ = inventory.Rollback(tx)
@@ -566,7 +572,12 @@ func (f *DBFS) Restore(ctx context.Context, path ...*fs.URI) error {
 
 func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCopy bool) (*fs.IndexDiff, error) {
 	targetEntries := make([]navigatorFileTarget, 0, len(path))
-	dstNavigator, err := f.getNavigator(ctx, dst, NavigatorCapabilityLockFile)
+	sourceCapability := NavigatorCapabilityMoveFile
+	if isCopy {
+		sourceCapability = NavigatorCapabilityCopyFile
+	}
+
+	dstNavigator, err := f.getNavigator(ctx, dst, NavigatorCapabilityLockFile, NavigatorCapabilityCreateFile)
 	if err != nil {
 		return nil, err
 	}
@@ -575,6 +586,9 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 	destination, err := f.getFileByPath(ctx, dstNavigator, dst)
 	if err != nil {
 		return nil, fmt.Errorf("faield to get destination folder: %w", err)
+	}
+	if err := ensureCapability(destination, NavigatorCapabilityCreateFile); err != nil {
+		return nil, err
 	}
 
 	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && destination.Owner().ID != f.user.ID {
@@ -593,7 +607,7 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 
 	for _, p := range path {
 		// Get navigator
-		navigator, err := f.getNavigator(ctx, p, NavigatorCapabilityLockFile)
+		navigator, err := f.getNavigator(ctx, p, NavigatorCapabilityLockFile, sourceCapability)
 		if err != nil {
 			ae.Add(p.String(), err)
 			continue
@@ -609,6 +623,10 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 		target, err := f.getFileByPath(ctx, navigator, p)
 		if err != nil {
 			ae.Add(p.String(), fmt.Errorf("failed to get file: %w", err))
+			continue
+		}
+		if err := ensureCapability(target, sourceCapability); err != nil {
+			ae.Add(p.String(), err)
 			continue
 		}
 
@@ -627,6 +645,11 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 		if target.Type() == types.FileTypeFolder &&
 			dstRootPath.EqualOrIsDescendantOf(target.Uri(true), hashid.EncodeUserID(f.hasher, f.user.ID)) {
 			ae.Add(p.String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot move or copy folder to itself or its descendant")))
+			continue
+		}
+		if !isCopy && target.OwnerID() != destination.OwnerID() {
+			// move 只允许在同 owner 树内调整位置，避免 public/my 混合场景下 parent 与 owner 语义错乱。
+			ae.Add(p.String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot move file across different owners")))
 			continue
 		}
 

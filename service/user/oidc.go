@@ -270,14 +270,14 @@ func fetchOIDCDiscovery(c *gin.Context, dep dependency.Dep, cfg *setting.OIDCSet
 }
 
 // buildOIDCRedirectURL 生成跳到统一认证前端入口的地址。
-// 优先支持标准 authorization_endpoint；如果手动配置了 SSOURL，则仍允许使用第三方前端入口页。
+// 兼容策略：
+// 1. 管理员显式配置 oidc_sso_url 时优先使用；
+// 2. 如果发现文档是 Yudao 风格的后端 authorize 端点，则改走前端 /sso 页面，避免未登录时直接返回 401；
+// 3. 其它标准 OIDC 提供方继续走 authorization_endpoint。
 func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, state string, codeVerifier string, callbackURL string) (string, error) {
-	redirectURL := strings.TrimSpace(cfg.SSOURL)
+	redirectURL := resolveOIDCLoginEntryURL(cfg, discovery)
 	if redirectURL == "" {
-		redirectURL = discovery.AuthorizationEndpoint
-	}
-	if redirectURL == "" {
-		redirectURL = strings.TrimRight(discovery.Issuer, "/") + "/sso"
+		return "", serializer.NewError(serializer.CodeInternalSetting, "OIDC authorization URL is empty", nil)
 	}
 
 	parsed, err := url.Parse(redirectURL)
@@ -303,6 +303,97 @@ func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, st
 	parsed.RawQuery = query.Encode()
 
 	return parsed.String(), nil
+}
+
+func resolveOIDCLoginEntryURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery) string {
+	redirectURL := ""
+	if cfg != nil {
+		redirectURL = strings.TrimSpace(cfg.SSOURL)
+		if redirectURL != "" {
+			return normalizeOIDCLoginEntryURL(redirectURL, discovery)
+		}
+	}
+
+	if inferred := inferYudaoSSOURL(discovery); inferred != "" {
+		return inferred
+	}
+
+	redirectURL = strings.TrimSpace(discovery.AuthorizationEndpoint)
+	if redirectURL != "" {
+		return redirectURL
+	}
+
+	return normalizeOIDCLoginEntryURL(strings.TrimRight(discovery.Issuer, "/")+"/sso", discovery)
+}
+
+func normalizeOIDCLoginEntryURL(raw string, discovery *oidcDiscovery) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+
+	// 如果管理员把 Yudao 的后端 authorize 端点填到了 SSO 地址中，
+	// 这里统一改回前端 /sso 页面，避免浏览器直接看到 401 JSON。
+	if isYudaoAuthorizePath(parsed.Path) {
+		parsed.Path = "/sso"
+		parsed.RawPath = ""
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		return parsed.String()
+	}
+
+	// 如果管理员误填了统一认证站点根地址，这里自动补成 /sso，避免直接命中后端根路径。
+	if parsed.Path == "" || parsed.Path == "/" {
+		if inferred := inferYudaoSSOURL(discovery); inferred != "" {
+			return inferred
+		}
+		parsed.Path = "/sso"
+		parsed.RawPath = ""
+		return parsed.String()
+	}
+
+	return raw
+}
+
+func inferYudaoSSOURL(discovery *oidcDiscovery) string {
+	authEndpoint := strings.TrimSpace(discovery.AuthorizationEndpoint)
+	if authEndpoint == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(authEndpoint)
+	if err != nil {
+		return ""
+	}
+
+	if !isYudaoAuthorizePath(parsed.Path) {
+		return ""
+	}
+
+	if issuerURL := strings.TrimSpace(discovery.Issuer); issuerURL != "" {
+		if issuerParsed, err := url.Parse(issuerURL); err == nil && issuerParsed.Scheme != "" && issuerParsed.Host != "" {
+			issuerParsed.Path = strings.TrimRight(issuerParsed.Path, "/") + "/sso"
+			issuerParsed.RawPath = ""
+			issuerParsed.RawQuery = ""
+			issuerParsed.Fragment = ""
+			return issuerParsed.String()
+		}
+	}
+
+	parsed.Path = "/sso"
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func isYudaoAuthorizePath(path string) bool {
+	return strings.HasSuffix(strings.TrimSpace(path), "/admin-api/system/oauth2/authorize")
 }
 
 // exchangeOIDCCode 使用授权码换取 access token。兼容标准 OIDC 响应和 Yudao 的 CommonResult 包装。

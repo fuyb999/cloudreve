@@ -319,13 +319,17 @@ func (l *manager) Restore(ctx context.Context, path ...*fs.URI) error {
 }
 
 func (l *manager) CreateOrUpdateShare(ctx context.Context, path *fs.URI, args *CreateShareArgs) (*ent.Share, error) {
+	ctx = withPublicBypass(ctx, path)
 	file, err := l.fs.Get(ctx, path, dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityShare), dbfs.WithNotRoot())
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeNotFound, "src file not found", err)
 	}
 
-	// Only file owner can share file
-	if file.OwnerID() != l.user.ID {
+	shareOwnerID := l.user.ID
+	isPublicShare := path != nil && path.FileSystem() == constants.FileSystemPublic
+
+	// 私有文件仍保持 owner-only；公共文件改为“当前登录用户在具备 capability 时可单独创建自己的分享”。
+	if !isPublicShare && file.OwnerID() != l.user.ID {
 		return nil, serializer.NewError(serializer.CodeNoPermissionErr, "permission denied", nil)
 	}
 
@@ -337,7 +341,7 @@ func (l *manager) CreateOrUpdateShare(ctx context.Context, path *fs.URI, args *C
 	shareClient := l.dep.ShareClient()
 	if args.ExistedShareID != 0 {
 		loadShareCtx := context.WithValue(ctx, inventory.LoadShareFile{}, true)
-		existed, err = shareClient.GetByID(loadShareCtx, args.ExistedShareID)
+		existed, err = shareClient.GetByIDUser(loadShareCtx, args.ExistedShareID, shareOwnerID)
 		if err != nil {
 			return nil, serializer.NewError(serializer.CodeNotFound, "failed to get existed share", err)
 		}
@@ -361,7 +365,7 @@ func (l *manager) CreateOrUpdateShare(ctx context.Context, path *fs.URI, args *C
 	}
 
 	share, err := shareClient.Upsert(ctx, &inventory.CreateShareParams{
-		OwnerID:         file.OwnerID(),
+		OwnerID:         shareOwnerID,
 		FileID:          file.ID(),
 		Password:        password,
 		Expires:         args.Expire,

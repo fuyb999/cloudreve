@@ -3,6 +3,7 @@ package dbfs
 import (
 	"encoding/gob"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,16 +22,6 @@ func init() {
 	gob.Register(map[string]*File{})
 	gob.Register(map[int]*File{})
 }
-
-var (
-	filePool = &sync.Pool{
-		New: func() any {
-			return &File{
-				Children: make(map[string]*File),
-			}
-		},
-	}
-)
 
 func getDefaultView() *types.ExplorerView {
 	return &types.ExplorerView{
@@ -76,11 +67,14 @@ const (
 )
 
 func (f *File) Name() string {
+	if f == nil || f.Model == nil {
+		return ""
+	}
 	return f.Model.Name
 }
 
 func (f *File) IsNil() bool {
-	return f == nil
+	return f == nil || f.Model == nil
 }
 
 func (f *File) DisplayName() string {
@@ -105,18 +99,30 @@ func (f *File) Ext() string {
 }
 
 func (f *File) ID() int {
+	if f == nil || f.Model == nil {
+		return 0
+	}
 	return f.Model.ID
 }
 
 func (f *File) IsSymbolic() bool {
+	if f == nil || f.Model == nil {
+		return false
+	}
 	return f.Model.IsSymbolic
 }
 
 func (f *File) Type() types.FileType {
+	if f == nil || f.Model == nil {
+		return 0
+	}
 	return types.FileType(f.Model.Type)
 }
 
 func (f *File) Size() int64 {
+	if f == nil || f.Model == nil {
+		return 0
+	}
 	return f.Model.Size
 }
 
@@ -127,10 +133,16 @@ func (f *File) SizeUsed() int64 {
 }
 
 func (f *File) UpdatedAt() time.Time {
+	if f == nil || f.Model == nil {
+		return time.Time{}
+	}
 	return f.Model.UpdatedAt
 }
 
 func (f *File) CreatedAt() time.Time {
+	if f == nil || f.Model == nil {
+		return time.Time{}
+	}
 	return f.Model.CreatedAt
 }
 
@@ -151,14 +163,23 @@ func (f *File) Owner() *ent.User {
 }
 
 func (f *File) OwnerID() int {
+	if f == nil || f.Model == nil {
+		return 0
+	}
 	return f.Model.OwnerID
 }
 
 func (f *File) Shared() bool {
+	if f == nil || f.Model == nil {
+		return false
+	}
 	return len(f.Model.Edges.Shares) > 0
 }
 
 func (f *File) Metadata() map[string]string {
+	if f == nil || f.Model == nil {
+		return nil
+	}
 	if f.Model.Edges.Metadata == nil {
 		return nil
 	}
@@ -244,6 +265,30 @@ func (f *File) RootUri() *fs.URI {
 	return f.UserRoot().Uri(true)
 }
 
+// ResolveOwnerURI 将当前视图下的用户路径重写成 owner 视图下的真实路径。
+// 对普通目录它等价于 RootUri + 相对路径；对公共文件的虚拟投影目录，则可以正确绕过别名段。
+func (f *File) ResolveOwnerURI(target *fs.URI) *fs.URI {
+	if f == nil {
+		return nil
+	}
+
+	baseOwner := f.Uri(true)
+	if baseOwner == nil {
+		return nil
+	}
+	if target == nil {
+		return baseOwner
+	}
+
+	baseUser := f.Uri(false)
+	if baseUser == nil {
+		return f.RootUri().JoinRaw(target.PathTrimmed())
+	}
+
+	relative := strings.TrimPrefix(target.Path(), baseUser.Path())
+	return baseOwner.JoinRaw(relative)
+}
+
 func (f *File) Replace(model *ent.File) *File {
 	f.mu.Lock()
 	delete(f.Parent.Children, f.Model.Name)
@@ -322,9 +367,31 @@ func (f *File) Capabilities() *boolset.BooleanSet {
 	return f.CapabilitiesBs
 }
 
-func newFile(parent *File, model *ent.File) *File {
-	f := filePool.Get().(*File)
+func resetFileState(f *File, model *ent.File) *File {
+	if f.Children == nil {
+		f.Children = make(map[string]*File)
+	} else {
+		clear(f.Children)
+	}
+
 	f.Model = model
+	f.Parent = nil
+	f.Path = [2]*fs.URI{}
+	f.OwnerModel = nil
+	f.IsUserRoot = false
+	f.CapabilitiesBs = nil
+	f.FileExtendedInfo = nil
+	f.FileFolderSummary = nil
+	f.disableView = false
+	f.mu = nil
+	return f
+}
+
+func newFile(parent *File, model *ent.File) *File {
+	// 公共文件投影会频繁跨层拼装 File 树。之前这里为了省分配使用 sync.Pool，
+	// 但一旦出现重复回收，同一指针就可能在不同请求里被复用，最终导致 nil model / 自引用 / 随机 panic。
+	// 当前优先保证稳定性，直接按需分配新对象。
+	f := resetFileState(&File{}, model)
 
 	if parent != nil {
 		f.Parent = parent
@@ -357,18 +424,32 @@ func newParentFile(parent *ent.File, child *File) *File {
 }
 
 func (f *File) Recycle() {
-	for _, child := range f.Children {
-		child.Recycle()
+	if f == nil {
+		return
 	}
 
-	f.Model = nil
-	f.Children = make(map[string]*File)
-	f.Path[0] = nil
-	f.Path[1] = nil
-	f.Parent = nil
-	f.OwnerModel = nil
-	f.IsUserRoot = false
-	f.mu = nil
+	// 公共文件投影场景里如果误形成了环引用，递归回收会直接 stack overflow。
+	// 改成显式栈 + visited 后，即使图结构被污染，也能安全回收并避免重复 Put 同一对象。
+	stack := []*File{f}
+	visited := make(map[*File]struct{}, 8)
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		current := stack[last]
+		stack = stack[:last]
+		if current == nil {
+			continue
+		}
+		if _, ok := visited[current]; ok {
+			continue
+		}
+		visited[current] = struct{}{}
 
-	filePool.Put(f)
+		for _, child := range current.Children {
+			if child != nil {
+				stack = append(stack, child)
+			}
+		}
+
+		resetFileState(current, nil)
+	}
 }

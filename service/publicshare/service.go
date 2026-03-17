@@ -27,7 +27,7 @@ type (
 	RemoteCheckParamCtx struct{}
 	RemoteCheckService  struct {
 		Uri    string     `json:"uri" binding:"required"`
-		Action acl.Action `json:"action" binding:"required,oneof=list download upload create rename delete metadata"`
+		Action acl.Action `json:"action" binding:"required,oneof=list download direct_link archive upload create rename delete delete_root share copy move metadata"`
 	}
 
 	AdminPublicRootParamCtx struct{}

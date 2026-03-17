@@ -33,11 +33,16 @@ type FullTextSearchResults struct {
 
 func BuildFullTextSearchResults(ctx context.Context, user *ent.User, hasher hashid.Encoder, results *manager.FullTextSearchResults) *FullTextSearchResults {
 	return &FullTextSearchResults{
-		Hits: lo.Map(results.Hits, func(result manager.FullTextSearchResult, index int) FullTextSearchResult {
-			return FullTextSearchResult{
-				File:    *BuildFileResponse(ctx, user, result.File, hasher, nil),
-				Content: result.Content,
+		Hits: lo.FilterMap(results.Hits, func(result manager.FullTextSearchResult, index int) (FullTextSearchResult, bool) {
+			file := BuildFileResponse(ctx, user, result.File, hasher, nil)
+			if file == nil {
+				return FullTextSearchResult{}, false
 			}
+
+			return FullTextSearchResult{
+				File:    *file,
+				Content: result.Content,
+			}, true
 		}),
 		Total: results.Total,
 	}
@@ -383,10 +388,20 @@ func BuildShare(s *ent.Share, base *url.URL, hasher hashid.Encoder, requester *e
 }
 
 func BuildListResponse(ctx context.Context, u *ent.User, parent fs.File, res *fs.ListFileResult, hasher hashid.Encoder) *ListResponse {
+	files := lo.FilterMap(res.Files, func(f fs.File, index int) (FileResponse, bool) {
+		if f == nil || f.IsNil() {
+			return FileResponse{}, false
+		}
+
+		response := BuildFileResponse(ctx, u, f, hasher, nil)
+		if response == nil {
+			return FileResponse{}, false
+		}
+		return *response, true
+	})
+
 	r := &ListResponse{
-		Files: lo.Map(res.Files, func(f fs.File, index int) FileResponse {
-			return *BuildFileResponse(ctx, u, f, hasher, nil)
-		}),
+		Files:                 files,
 		Pagination:            res.Pagination,
 		Props:                 res.Props,
 		ContextHint:           res.ContextHint,
@@ -397,14 +412,20 @@ func BuildListResponse(ctx context.Context, u *ent.User, parent fs.File, res *fs
 		View:                  res.View,
 	}
 
-	if !res.Parent.IsNil() {
-		r.Parent = *BuildFileResponse(ctx, u, res.Parent, hasher, nil)
+	if res.Parent != nil && !res.Parent.IsNil() {
+		if parentResponse := BuildFileResponse(ctx, u, res.Parent, hasher, nil); parentResponse != nil {
+			r.Parent = *parentResponse
+		}
 	}
 
 	return r
 }
 
 func BuildFileResponse(ctx context.Context, u *ent.User, f fs.File, hasher hashid.Encoder, cap *boolset.BooleanSet) *FileResponse {
+	if f == nil || f.IsNil() {
+		return nil
+	}
+
 	var owner *ent.User
 	if f != nil {
 		owner = f.Owner()

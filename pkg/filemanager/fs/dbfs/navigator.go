@@ -19,6 +19,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/samber/lo"
+	"golang.org/x/tools/container/intsets"
 )
 
 var (
@@ -83,10 +84,10 @@ type (
 const (
 	NavigatorCapabilityCreateFile NavigatorCapability = iota
 	NavigatorCapabilityRenameFile
-	NavigatorCapability_CommunityPlacehodler1
-	NavigatorCapability_CommunityPlacehodler2
-	NavigatorCapability_CommunityPlacehodler3
-	NavigatorCapability_CommunityPlacehodler4
+	NavigatorCapabilityCopyFile
+	NavigatorCapabilityMoveFile
+	NavigatorCapabilityDirectLink
+	NavigatorCapabilityCreateArchive
 	NavigatorCapabilityUploadFile
 	NavigatorCapabilityDownloadFile
 	NavigatorCapabilityUpdateMetadata
@@ -114,6 +115,10 @@ func init() {
 	boolset.Sets(map[NavigatorCapability]bool{
 		NavigatorCapabilityCreateFile:     true,
 		NavigatorCapabilityRenameFile:     true,
+		NavigatorCapabilityCopyFile:       true,
+		NavigatorCapabilityMoveFile:       true,
+		NavigatorCapabilityDirectLink:     true,
+		NavigatorCapabilityCreateArchive:  true,
 		NavigatorCapabilityUploadFile:     true,
 		NavigatorCapabilityDownloadFile:   true,
 		NavigatorCapabilityUpdateMetadata: true,
@@ -130,6 +135,7 @@ func init() {
 	}, myNavigatorCapability)
 	boolset.Sets(map[NavigatorCapability]bool{
 		NavigatorCapabilityDownloadFile:   true,
+		NavigatorCapabilityCreateArchive:  true,
 		NavigatorCapabilityListChildren:   true,
 		NavigatorCapabilityGenerateThumb:  true,
 		NavigatorCapabilityLockFile:       true,
@@ -146,9 +152,10 @@ func init() {
 		NavigatorCapabilityInfo:         true,
 	}, trashNavigatorCapability)
 	boolset.Sets(map[NavigatorCapability]bool{
-		NavigatorCapabilityListChildren: true,
-		NavigatorCapabilityDownloadFile: true,
-		NavigatorCapabilityEnterFolder:  true,
+		NavigatorCapabilityListChildren:  true,
+		NavigatorCapabilityDownloadFile:  true,
+		NavigatorCapabilityCreateArchive: true,
+		NavigatorCapabilityEnterFolder:   true,
 	}, sharedWithMeNavigatorCapability)
 }
 
@@ -329,7 +336,13 @@ func (b *baseNavigator) walkWithTreePath(ctx context.Context, levelFiles []*File
 			return true, ErrFileCountLimitedReached
 		}
 
-		models, err := b.fileClient.GetSubtreeFiles(ctx, root.Model, depth-1, remaining+1)
+		queryLimit := remaining + 1
+		if remaining >= intsets.MaxInt {
+			// “无限数量”场景不再向 SQL 追加 LIMIT+1，避免 remaining+1 溢出为负数。
+			queryLimit = 0
+		}
+
+		models, err := b.fileClient.GetSubtreeFiles(ctx, root.Model, depth-1, queryLimit)
 		if err != nil {
 			if errors.Is(err, inventory.ErrTreePathQueryUnavailable) {
 				return false, nil
@@ -338,7 +351,7 @@ func (b *baseNavigator) walkWithTreePath(ctx context.Context, levelFiles []*File
 			return true, serializer.NewError(serializer.CodeDBError, "Failed to list subtree", err)
 		}
 
-		limited := len(models) > remaining
+		limited := queryLimit > 0 && len(models) > remaining
 		if limited {
 			models = models[:remaining]
 		}

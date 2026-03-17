@@ -34,7 +34,7 @@ type (
 
 func (f *DBFS) ConfirmLock(ctx context.Context, ancestor fs.File, uri *fs.URI, token ...string) (func(), fs.LockSession, error) {
 	session := LockSessionFromCtx(ctx)
-	lockUri := ancestor.RootUri().JoinRaw(uri.PathTrimmed())
+	lockUri := resolveLockURI(ancestor, uri)
 	ns, root, lKey := lockTupleFromUri(lockUri, f.user, f.hasher)
 	lc := lock.LockInfo{
 		Ns:    ns,
@@ -85,7 +85,7 @@ func (f *DBFS) Lock(ctx context.Context, d time.Duration, requester *ent.User, z
 		t = ancestor.Type()
 	}
 	lr := &LockByPath{
-		Uri:             ancestor.RootUri().JoinRaw(uri.PathTrimmed()),
+		Uri:             ancestor.ResolveOwnerURI(uri),
 		ClosestAncestor: ancestor,
 		Type:            t,
 		Token:           token,
@@ -96,6 +96,16 @@ func (f *DBFS) Lock(ctx context.Context, d time.Duration, requester *ent.User, z
 	}
 
 	return ls, nil
+}
+
+func resolveLockURI(ancestor fs.File, uri *fs.URI) *fs.URI {
+	if file, ok := ancestor.(*File); ok {
+		if resolved := file.ResolveOwnerURI(uri); resolved != nil {
+			return resolved
+		}
+	}
+
+	return ancestor.RootUri().JoinRaw(uri.PathTrimmed())
 }
 
 func (f *DBFS) Unlock(ctx context.Context, tokens ...string) error {

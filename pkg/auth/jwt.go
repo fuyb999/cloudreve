@@ -208,14 +208,19 @@ func (t *tokenAuth) VerifyAndRetrieveUser(c *gin.Context) (bool, error) {
 	if tokenString == "" {
 		return true, nil
 	}
+	if strings.Count(tokenString, ".") != 2 {
+		// 统一认证场景下，上游 access token 可能是 opaque token，而不是 Cloudreve 本地 JWT。
+		// 这里直接交给后续 OIDC 校验链处理，避免刷无意义的 malformed warning。
+		return true, nil
+	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return t.secret, nil
 	})
 
 	if err != nil {
-		t.l.Warning("Failed to parse jwt token: %s", err)
-		return false, nil
+		// 解析失败说明它不是当前实例签发的本地 token，继续尝试其他认证方式即可。
+		return true, nil
 	}
 
 	claims, ok := token.Claims.(*Claims)

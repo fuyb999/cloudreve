@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"golang.org/x/tools/container/intsets"
 )
 
 func TestJoinFileTreePath(t *testing.T) {
@@ -63,5 +64,20 @@ func TestTreePathVisibleSubtreeArgs(t *testing.T) {
 	expected = []any{"f1", "f1"}
 	if !reflect.DeepEqual(args, expected) {
 		t.Fatalf("unexpected args for includeSelf: %#v", args)
+	}
+}
+
+func TestTreePathVisibleSubtreeArgsIgnoresOverflowDepth(t *testing.T) {
+	args := treePathVisibleSubtreeArgs("f1.f2", false, intsets.MaxInt)
+	expected := []any{"f1.f2", "f1.f2", "f1.f2"}
+	if !reflect.DeepEqual(args, expected) {
+		t.Fatalf("unexpected args for overflow depth: %#v", args)
+	}
+}
+
+func TestTreePathVisibleSubtreeConditionIgnoresOverflowDepth(t *testing.T) {
+	condition := treePathVisibleSubtreeCondition("f.tree_path", "text2ltree($1)", false, intsets.MaxInt)
+	if strings.Contains(condition, "nlevel(f.tree_path) <= ?") {
+		t.Fatalf("overflow depth should not append nlevel condition: %q", condition)
 	}
 }

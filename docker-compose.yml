@@ -45,3 +45,43 @@ services:
       - "6379:6379"
     volumes:
       - /data/cloudreve_redis_data:/data
+
+  minio:
+    image: bitnami/minio:2024
+    container_name: minio
+    restart: unless-stopped
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=minio123456
+      - MINIO_DISTRIBUTED_MODE_ENABLED=no
+      - MINIO_SKIP_CLIENT=yes
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/bitnami/minio/data
+
+  elasticsearch:
+    image: elasticsearch:8.12.2
+    container_name: elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+  tika:
+    image: apache/tika:3.2.3.0-full
+    container_name: tika
+    restart: unless-stopped
+    ports:
+      - "9998:9998"
+
+volumes:
+  minio_data:
+  elasticsearch_data:

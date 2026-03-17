@@ -152,6 +152,7 @@ func (m *manager) ListArchiveFiles(ctx context.Context, uri *fs.URI, entity, zip
 }
 
 func (m *manager) CreateArchive(ctx context.Context, uris []*fs.URI, writer io.Writer, opts ...fs.Option) (int, error) {
+	ctx = withPublicBypass(ctx, uris...)
 	o := newOption()
 	for _, opt := range opts {
 		opt.Apply(o)
@@ -167,7 +168,13 @@ func (m *manager) CreateArchive(ctx context.Context, uris []*fs.URI, writer io.W
 	// List all top level files
 	files := make([]fs.File, 0, len(uris))
 	for _, uri := range uris {
-		file, err := m.Get(ctx, uri, dbfs.WithFileEntities(), dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityDownloadFile), dbfs.WithNotRoot())
+		file, err := m.Get(
+			ctx,
+			uri,
+			dbfs.WithFileEntities(),
+			dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityCreateArchive, dbfs.NavigatorCapabilityDownloadFile),
+			dbfs.WithNotRoot(),
+		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get file %s: %w", uri, err)
 		}
@@ -197,6 +204,11 @@ func (m *manager) CreateArchive(ctx context.Context, uris []*fs.URI, writer io.W
 
 		} else {
 			if err := m.Walk(ctx, file.Uri(false), intsets.MaxInt, func(f fs.File, level int) error {
+				if cap := f.Capabilities(); cap != nil &&
+					(!cap.Enabled(int(dbfs.NavigatorCapabilityCreateArchive)) ||
+						!cap.Enabled(int(dbfs.NavigatorCapabilityDownloadFile))) {
+					return fs.ErrNotSupportedAction.WithError(fmt.Errorf("file %s does not allow archive", f.Uri(false)))
+				}
 				if f.Type() == types.FileTypeFolder || f.IsSymbolic() {
 					return nil
 				}

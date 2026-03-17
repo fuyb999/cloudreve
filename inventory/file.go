@@ -537,6 +537,12 @@ func (f *fileClient) DeleteByUser(ctx context.Context, uid int) error {
 }
 
 func (f *fileClient) Delete(ctx context.Context, files []*ent.File, options *types.EntityProps) ([]*ent.Entity, StorageDiff, error) {
+	filesWithEntities, err := f.ensureFilesEntitiesLoaded(ctx, files)
+	if err != nil {
+		return nil, nil, err
+	}
+	files = filesWithEntities
+
 	// 1. Decrease reference count for all entities;
 	// entities stores the relation between its reference count in `files` and entity ID.
 	entities := make(map[int]int)
@@ -628,8 +634,66 @@ func (f *fileClient) Delete(ctx context.Context, files []*ent.File, options *typ
 	return toBeRecycled, storageReduced, nil
 }
 
+func (f *fileClient) ensureFilesEntitiesLoaded(ctx context.Context, files []*ent.File) ([]*ent.File, error) {
+	if len(files) == 0 {
+		return files, nil
+	}
+
+	needReload := false
+	for _, fi := range files {
+		if fi == nil {
+			return nil, fmt.Errorf("file is nil")
+		}
+
+		if _, err := fi.Edges.EntitiesOrErr(); err != nil {
+			if !ent.IsNotLoaded(err) {
+				return nil, err
+			}
+			needReload = true
+			break
+		}
+	}
+	if !needReload {
+		return files, nil
+	}
+
+	loadCtx := context.WithValue(ctx, LoadFileEntity{}, true)
+	reloaded := make(map[int]*ent.File, len(files))
+	page := 0
+	ids := lo.Map(files, func(item *ent.File, _ int) int {
+		return item.ID
+	})
+	for {
+		rows, nextPage, err := f.GetByIDs(loadCtx, ids, page)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reload file entities: %w", err)
+		}
+		for _, row := range rows {
+			reloaded[row.ID] = row
+		}
+		if nextPage < 0 {
+			break
+		}
+		page = nextPage
+	}
+
+	res := make([]*ent.File, 0, len(files))
+	for _, fi := range files {
+		row, ok := reloaded[fi.ID]
+		if !ok {
+			return nil, fmt.Errorf("failed to reload file %d before delete", fi.ID)
+		}
+		res = append(res, row)
+	}
+
+	return res, nil
+}
+
 func (f *fileClient) Copy(ctx context.Context, args *CopyParameter) (map[int][]*ent.File, StorageDiff, error) {
-	files := args.Files
+	files, err := f.ensureFilesEntitiesLoaded(ctx, args.Files)
+	if err != nil {
+		return nil, nil, err
+	}
 	dstMap := args.DstMap
 	pageSize := capPageSize(f.maxSQlParam, intsets.MaxInt, 10)
 	// 1. Copy files and metadata
@@ -784,6 +848,11 @@ func (f *fileClient) RemoveMetadata(ctx context.Context, file *ent.File, keys ..
 
 func (f *fileClient) UpgradePlaceholder(ctx context.Context, file *ent.File, modifiedAt *time.Time, entityId int,
 	entityType types.EntityType) error {
+	file, err := f.ensureFileEntitiesLoaded(ctx, file)
+	if err != nil {
+		return err
+	}
+
 	entities, err := file.Edges.EntitiesOrErr()
 	if err != nil {
 		return err
@@ -890,6 +959,11 @@ func (f *fileClient) CreateFile(ctx context.Context, root *ent.File, args *Creat
 }
 
 func (f *fileClient) CapEntities(ctx context.Context, file *ent.File, owner *ent.User, max int, entityType types.EntityType) (StorageDiff, error) {
+	file, err := f.ensureFileEntitiesLoaded(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+
 	entities, err := file.Edges.EntitiesOrErr()
 	if err != nil {
 		return nil, fmt.Errorf("failed to cap file entities: %v", err)
@@ -940,6 +1014,11 @@ func (f *fileClient) IsStoragePolicyUsedByEntities(ctx context.Context, policyID
 }
 
 func (f *fileClient) RemoveStaleEntities(ctx context.Context, file *ent.File) (StorageDiff, error) {
+	file, err := f.ensureFileEntitiesLoaded(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+
 	entities, err := file.Edges.EntitiesOrErr()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stale entities: %v", err)
@@ -1015,6 +1094,26 @@ func (f *fileClient) CreateEntity(ctx context.Context, file *ent.File, args *Ent
 	}
 
 	return created, diff, nil
+}
+
+func (f *fileClient) ensureFileEntitiesLoaded(ctx context.Context, file *ent.File) (*ent.File, error) {
+	if file == nil {
+		return nil, fmt.Errorf("file is nil")
+	}
+
+	if _, err := file.Edges.EntitiesOrErr(); err == nil {
+		return file, nil
+	} else if !ent.IsNotLoaded(err) {
+		return nil, err
+	}
+
+	loadCtx := context.WithValue(ctx, LoadFileEntity{}, true)
+	loaded, err := f.GetByID(loadCtx, file.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload file %d entities: %w", file.ID, err)
+	}
+
+	return loaded, nil
 }
 
 func (f *fileClient) SetParent(ctx context.Context, files []*ent.File, parent *ent.File) error {

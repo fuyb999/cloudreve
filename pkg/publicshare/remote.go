@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 )
 
 const (
@@ -180,7 +182,12 @@ func remoteRequest[T any](ctx context.Context, method string, target string, acc
 		return nil, fmt.Errorf("failed to read remote authz response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("remote authz endpoint returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		if appErr := parseRemoteAppError(body); appErr != nil {
+			return nil, appErr
+		}
+		return nil, serializer.NewError(serializer.CodeInternalSetting,
+			fmt.Sprintf("remote authz endpoint returned status %d", resp.StatusCode),
+			errors.New(strings.TrimSpace(string(body))))
 	}
 
 	envelope := &remoteEnvelope[T]{}
@@ -188,10 +195,30 @@ func remoteRequest[T any](ctx context.Context, method string, target string, acc
 		return nil, fmt.Errorf("failed to parse remote authz response: %w", err)
 	}
 	if envelope.Code != 0 {
-		return nil, fmt.Errorf("remote authz rejected request: %s", strings.TrimSpace(envelope.Msg))
+		// 远端运行时授权已经给出了明确业务码，直接透传为 AppError，
+		// 避免上层再次包装成 “parent not exist” 之类误导性的路径错误。
+		return nil, newRemoteAppError(envelope.Code, envelope.Msg)
 	}
 
 	return &envelope.Data, nil
+}
+
+func parseRemoteAppError(body []byte) error {
+	envelope := &remoteEnvelope[json.RawMessage]{}
+	if err := json.Unmarshal(body, envelope); err != nil || envelope.Code == 0 {
+		return nil
+	}
+
+	return newRemoteAppError(envelope.Code, envelope.Msg)
+}
+
+func newRemoteAppError(code int, msg string) error {
+	normalized := strings.TrimSpace(msg)
+	if normalized == "" {
+		normalized = "remote authz rejected request"
+	}
+
+	return serializer.NewError(code, normalized, nil)
 }
 
 func toLocalVisibilityResult(payload *remoteVisibilityResult) *VisibilityResult {

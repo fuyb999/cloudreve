@@ -197,8 +197,9 @@ func (service *ListFileService) List(c *gin.Context) (*ListResponse, error) {
 				streamed = true
 			}
 
-			WriteEventSource(c, "file", lo.Map(files, func(file fs.File, index int) *FileResponse {
-				return BuildFileResponse(c, user, file, hasher, nil)
+			WriteEventSource(c, "file", lo.FilterMap(files, func(file fs.File, index int) (*FileResponse, bool) {
+				response := BuildFileResponse(c, user, file, hasher, nil)
+				return response, response != nil
 			}))
 		},
 	})

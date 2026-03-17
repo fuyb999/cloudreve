@@ -6,9 +6,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
@@ -26,6 +28,10 @@ func init() {
 	boolset.Sets(map[NavigatorCapability]bool{
 		NavigatorCapabilityCreateFile:     true,
 		NavigatorCapabilityRenameFile:     true,
+		NavigatorCapabilityCopyFile:       true,
+		NavigatorCapabilityMoveFile:       true,
+		NavigatorCapabilityDirectLink:     true,
+		NavigatorCapabilityCreateArchive:  true,
 		NavigatorCapabilityUploadFile:     true,
 		NavigatorCapabilityDownloadFile:   true,
 		NavigatorCapabilityUpdateMetadata: true,
@@ -78,32 +84,61 @@ func (n *publicNavigator) Recycle() {
 		n.persist()
 		n.persist = nil
 	}
-	for _, projected := range n.projectedRoots {
-		if projected != nil {
-			projected.Recycle()
-		}
-	}
-	n.projectedRoots = nil
-	if n.root != nil && !n.disableRecycle {
+	n.recycleProjectedRoots()
+	if n.root != nil {
 		n.root.Recycle()
 	}
 }
 
-func (n *publicNavigator) PersistState(kv cache.Driver, key string) {
-	n.disableRecycle = true
-	n.persist = func() {
-		kv.Set(key, n.root, ContextHintTTL)
+func (n *publicNavigator) recycleProjectedRoots() {
+	for _, projected := range n.projectedRoots {
+		if projected == nil {
+			continue
+		}
+
+		// 根页投影出来的节点里，有一部分会顺手挂进 root.Children 作为路径缓存；
+		// 如果这里直接 Recycle，而 root 还持有该引用，后面 root.Recycle() 会再次回收同一对象，
+		// 进而把同一个 *File 重复放回对象池，最终污染对象图。
+		if parent := projected.Parent; parent != nil && parent.mu != nil {
+			cacheKey := n.projectedCacheKey(projected)
+			parent.mu.Lock()
+			if current, ok := parent.Children[cacheKey]; ok && current == projected {
+				delete(parent.Children, cacheKey)
+			} else if current, ok := parent.Children[projected.Name()]; ok && current == projected {
+				delete(parent.Children, projected.Name())
+			}
+			parent.mu.Unlock()
+		}
+
+		projected.Recycle()
 	}
+	n.projectedRoots = nil
+}
+
+func (n *publicNavigator) projectedCacheKey(projected *File) string {
+	if projected == nil {
+		return ""
+	}
+	if projected.Parent == n.root && projected.Path[pathIndexUser] != nil {
+		if alias := strings.TrimSpace(projected.Path[pathIndexUser].Name()); alias != "" {
+			return alias
+		}
+	}
+	return projected.Name()
+}
+
+func (n *publicNavigator) PersistState(kv cache.Driver, key string) {
+	// 公共文件导航包含大量请求期内的投影节点和 alias 缓存。
+	// 这些对象一旦跨请求共享，就会在高频刷新时相互回收/覆盖，导致 nil model、死等和随机 panic。
+	// 因此公共文件禁用 navigator 状态缓存，每次请求都重新构建 root。
+	n.disableRecycle = false
+	n.persist = nil
 }
 
 func (n *publicNavigator) RestoreState(s State) error {
-	n.disableRecycle = true
-	if state, ok := s.(*File); ok {
-		n.root = state
-		return nil
-	}
-
-	return fmt.Errorf("invalid state type: %T", s)
+	n.disableRecycle = false
+	n.root = nil
+	return nil
 }
 
 func (n *publicNavigator) refreshVisibility(ctx context.Context) (*publicshare.VisibilityResult, error) {
@@ -153,21 +188,60 @@ func capabilitySetFromActions(actions map[publicshare.Action]bool) *boolset.Bool
 		NavigatorCapabilityInfo:           true,
 		NavigatorCapabilityGenerateThumb:  actions[publicshare.ActionDownload],
 		NavigatorCapabilityDownloadFile:   actions[publicshare.ActionDownload],
+		NavigatorCapabilityDirectLink:     actions[publicshare.ActionDirectLink],
+		NavigatorCapabilityCreateArchive:  actions[publicshare.ActionArchive],
 		NavigatorCapabilityUploadFile:     actions[publicshare.ActionUpload],
 		NavigatorCapabilityCreateFile:     actions[publicshare.ActionCreate],
 		NavigatorCapabilityRenameFile:     actions[publicshare.ActionRename],
+		NavigatorCapabilityCopyFile:       actions[publicshare.ActionCopy],
+		NavigatorCapabilityMoveFile:       actions[publicshare.ActionMove],
 		NavigatorCapabilityDeleteFile:     actions[publicshare.ActionDelete],
 		NavigatorCapabilitySoftDelete:     actions[publicshare.ActionDelete],
+		NavigatorCapabilityShare:          actions[publicshare.ActionShare],
 		NavigatorCapabilityUpdateMetadata: actions[publicshare.ActionMetadata],
 		NavigatorCapabilityModifyProps:    actions[publicshare.ActionMetadata],
 		NavigatorCapabilityLockFile: actions[publicshare.ActionUpload] || actions[publicshare.ActionCreate] ||
-			actions[publicshare.ActionRename] || actions[publicshare.ActionDelete] || actions[publicshare.ActionMetadata],
+			actions[publicshare.ActionRename] || actions[publicshare.ActionDelete] || actions[publicshare.ActionMetadata] ||
+			actions[publicshare.ActionCopy] || actions[publicshare.ActionMove] || actions[publicshare.ActionShare],
+	}, res)
+	return res
+}
+
+func capabilitySetFromGrant(file *File, grant publicshare.RootGrant) *boolset.BooleanSet {
+	actions := grant.Actions
+	deleteAllowed := false
+	if file != nil {
+		deleteAllowed = publicshare.RootGrantActionAllowed(file.ID(), grant, publicshare.ActionDelete)
+	}
+
+	res := &boolset.BooleanSet{}
+	boolset.Sets(map[NavigatorCapability]bool{
+		NavigatorCapabilityListChildren:   true,
+		NavigatorCapabilityEnterFolder:    true,
+		NavigatorCapabilityInfo:           true,
+		NavigatorCapabilityGenerateThumb:  actions[publicshare.ActionDownload],
+		NavigatorCapabilityDownloadFile:   actions[publicshare.ActionDownload],
+		NavigatorCapabilityDirectLink:     actions[publicshare.ActionDirectLink],
+		NavigatorCapabilityCreateArchive:  actions[publicshare.ActionArchive],
+		NavigatorCapabilityUploadFile:     actions[publicshare.ActionUpload],
+		NavigatorCapabilityCreateFile:     actions[publicshare.ActionCreate],
+		NavigatorCapabilityRenameFile:     actions[publicshare.ActionRename],
+		NavigatorCapabilityCopyFile:       actions[publicshare.ActionCopy],
+		NavigatorCapabilityMoveFile:       actions[publicshare.ActionMove],
+		NavigatorCapabilityDeleteFile:     deleteAllowed,
+		NavigatorCapabilitySoftDelete:     deleteAllowed,
+		NavigatorCapabilityShare:          actions[publicshare.ActionShare],
+		NavigatorCapabilityUpdateMetadata: actions[publicshare.ActionMetadata],
+		NavigatorCapabilityModifyProps:    actions[publicshare.ActionMetadata],
+		NavigatorCapabilityLockFile: actions[publicshare.ActionUpload] || actions[publicshare.ActionCreate] ||
+			actions[publicshare.ActionRename] || deleteAllowed || actions[publicshare.ActionMetadata] ||
+			actions[publicshare.ActionCopy] || actions[publicshare.ActionMove] || actions[publicshare.ActionShare],
 	}, res)
 	return res
 }
 
 func (n *publicNavigator) grantForFile(file *File) (publicshare.RootGrant, bool) {
-	if file == nil || n.visibility == nil {
+	if file == nil || file.IsNil() || n.visibility == nil {
 		return publicshare.RootGrant{}, false
 	}
 
@@ -211,7 +285,7 @@ func (n *publicNavigator) grantForFile(file *File) (publicshare.RootGrant, bool)
 }
 
 func (n *publicNavigator) filter(ctx context.Context, file *File) (*File, bool) {
-	if file == nil {
+	if file == nil || file.IsNil() {
 		return nil, false
 	}
 
@@ -232,11 +306,14 @@ func (n *publicNavigator) filter(ctx context.Context, file *File) (*File, bool) 
 		return nil, false
 	}
 
-	file.CapabilitiesBs = capabilitySetFromActions(grant.Actions)
+	file.CapabilitiesBs = capabilitySetFromGrant(file, grant)
 	return file, true
 }
 
 func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
+	if n.root != nil && n.root.IsNil() {
+		n.root = nil
+	}
 	if n.root == nil {
 		rootModel, err := n.publicService.Root(ctx)
 		if err != nil {
@@ -272,6 +349,30 @@ func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 	elements := path.Elements()
 	for index, element := range elements {
 		lastAncestor = current
+		if current == n.root {
+			if cached, ok := n.projectedRootFromCache(element); ok {
+				filtered, visible := n.filter(ctx, cached)
+				if !visible {
+					return lastAncestor, fs.ErrPathNotExist.WithError(fmt.Errorf("public file is not visible"))
+				}
+				current = filtered
+				continue
+			}
+
+			projected, ok, projectErr := n.resolveProjectedTopLevel(ctx, element)
+			if projectErr != nil {
+				return lastAncestor, projectErr
+			}
+			if ok {
+				filtered, visible := n.filter(ctx, projected)
+				if !visible {
+					return lastAncestor, fs.ErrPathNotExist.WithError(fmt.Errorf("public file is not visible"))
+				}
+				current = filtered
+				continue
+			}
+		}
+
 		next, err := n.baseNavigator.walkNext(ctx, current, element, index == len(elements)-1)
 		if err != nil {
 			return lastAncestor, fmt.Errorf("failed to walk into %q: %w", element, err)
@@ -287,6 +388,36 @@ func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 
 	n.current = current
 	return current, nil
+}
+
+func (n *publicNavigator) projectedRootFromCache(alias string) (*File, bool) {
+	if n.root == nil || n.root.mu == nil {
+		return nil, false
+	}
+
+	n.root.mu.Lock()
+	defer n.root.mu.Unlock()
+	child, ok := n.root.Children[alias]
+	return child, ok
+}
+
+func (n *publicNavigator) resolveProjectedTopLevel(ctx context.Context, alias string) (*File, bool, error) {
+	for _, grant := range n.visibility.RootGrants {
+		if n.root != nil && n.root.Model != nil && grant.RootFileID == n.root.Model.ID {
+			continue
+		}
+		if publicshare.ProjectedRootAlias(n.hasher, grant) != alias {
+			continue
+		}
+
+		file, err := n.projectRootGrant(ctx, grant)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to resolve projected public root %d: %w", grant.RootFileID, err)
+		}
+		return file, true, nil
+	}
+
+	return nil, false, nil
 }
 
 func (n *publicNavigator) Children(ctx context.Context, parent *File, args *ListArgs) (*ListResult, error) {
@@ -310,12 +441,7 @@ func (n *publicNavigator) Children(ctx context.Context, parent *File, args *List
 }
 
 func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArgs, visibility *publicshare.VisibilityResult) (*ListResult, error) {
-	for _, projected := range n.projectedRoots {
-		if projected != nil {
-			projected.Recycle()
-		}
-	}
-	n.projectedRoots = nil
+	n.recycleProjectedRoots()
 
 	if visibility == nil || len(visibility.RootGrants) == 0 {
 		return &ListResult{
@@ -327,10 +453,42 @@ func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArg
 
 	projected := make([]*File, 0, len(visibility.RootGrants))
 	seen := make(map[int]struct{}, len(visibility.RootGrants))
+	expandedPublicRoot := false
 	for _, grant := range visibility.RootGrants {
 		if grant.RootFileID <= 0 {
 			continue
 		}
+
+		// 当授权根就是“真实公共根目录”时，根页应该展示它当前可见的一级子节点，
+		// 而不是把公共根自身再投影成一个列表项。
+		if n.root != nil && n.root.Model != nil && grant.RootFileID == n.root.Model.ID {
+			if expandedPublicRoot {
+				continue
+			}
+			expandedPublicRoot = true
+
+			children, err := n.projectPublicRootGrantChildren(ctx, visibility)
+			if err != nil {
+				n.l.Warning("Failed to expand public root grant %d: %v", grant.RootFileID, err)
+				continue
+			}
+
+			for _, child := range children {
+				if child == nil || child.IsNil() {
+					continue
+				}
+				if _, ok := seen[child.ID()]; ok {
+					child.Recycle()
+					continue
+				}
+
+				seen[child.ID()] = struct{}{}
+				projected = append(projected, child)
+				n.projectedRoots = append(n.projectedRoots, child)
+			}
+			continue
+		}
+
 		if _, ok := seen[grant.RootFileID]; ok {
 			continue
 		}
@@ -339,6 +497,9 @@ func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArg
 		file, err := n.projectRootGrant(ctx, grant)
 		if err != nil {
 			n.l.Warning("Failed to project public root grant %d: %v", grant.RootFileID, err)
+			continue
+		}
+		if file.IsNil() {
 			continue
 		}
 
@@ -352,24 +513,7 @@ func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArg
 		n.projectedRoots = append(n.projectedRoots, filtered)
 	}
 
-	sort.Slice(projected, func(i, j int) bool {
-		left, right := projected[i], projected[j]
-		if left.Type() != right.Type() {
-			return left.Type() == types.FileTypeFolder
-		}
-
-		leftPath, rightPath := "", ""
-		if left.Path[pathIndexUser] != nil {
-			leftPath = left.Path[pathIndexUser].PathTrimmed()
-		}
-		if right.Path[pathIndexUser] != nil {
-			rightPath = right.Path[pathIndexUser].PathTrimmed()
-		}
-		if !strings.EqualFold(left.Name(), right.Name()) {
-			return strings.ToLower(left.Name()) < strings.ToLower(right.Name())
-		}
-		return leftPath < rightPath
-	})
+	sortProjectedRootChildren(projected, args)
 
 	offset, limit := projectedPageWindow(args, n.config.MaxPageSize, len(projected))
 	end := offset + limit
@@ -385,10 +529,63 @@ func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArg
 	}
 
 	return &ListResult{
-		Files:      paged,
-		MixedType:  hasMixedProjectedTypes(projected),
+		Files: paged,
+		// 公共根目录按普通目录语义返回，前端 grid 视图会继续把文件夹置顶、文件置底分区展示。
+		MixedType:  false,
 		Pagination: buildProjectedPagination(args, len(projected), end),
 	}, nil
+}
+
+func (n *publicNavigator) projectPublicRootGrantChildren(ctx context.Context, visibility *publicshare.VisibilityResult) ([]*File, error) {
+	if n.root == nil || n.root.Model == nil {
+		return nil, fmt.Errorf("public root is not initialized")
+	}
+
+	listCtx := context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
+	pageToken := ""
+	res := make([]*File, 0)
+	filter := publicshare.ToEntPredicate(visibility.Filter)
+	pageSize := n.config.MaxPageSize
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+
+	for {
+		children, err := n.fileClient.GetChildFiles(listCtx, &inventory.ListFileParameters{
+			PaginationArgs: &inventory.PaginationArgs{
+				PageSize:            pageSize,
+				UseCursorPagination: true,
+				PageToken:           pageToken,
+			},
+			ExtraPredicate: filter,
+		}, n.user.ID, n.root.Model)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load public root children: %w", err)
+		}
+
+		for _, model := range children.Files {
+			if model == nil {
+				continue
+			}
+			file := newFile(n.root, model)
+			if file.IsNil() {
+				continue
+			}
+			filtered, ok := n.filter(ctx, file)
+			if !ok {
+				file.Recycle()
+				continue
+			}
+			res = append(res, filtered)
+		}
+
+		if children.NextPageToken == "" {
+			break
+		}
+		pageToken = children.NextPageToken
+	}
+
+	return res, nil
 }
 
 func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshare.RootGrant) (*File, error) {
@@ -396,10 +593,8 @@ func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshar
 	if err != nil {
 		return nil, fmt.Errorf("failed to load file %d: %w", grant.RootFileID, err)
 	}
-
-	relativeElements, err := n.relativeElementsFromPublicRoot(ctx, target)
-	if err != nil {
-		return nil, err
+	if target == nil {
+		return nil, fmt.Errorf("file %d is empty", grant.RootFileID)
 	}
 
 	projected := newFile(nil, target)
@@ -407,12 +602,45 @@ func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshar
 	projected.mu = n.root.mu
 	projected.CapabilitiesBs = n.root.CapabilitiesBs
 
-	if n.root.Path[pathIndexRoot] != nil {
-		projected.Path[pathIndexRoot] = n.root.Path[pathIndexRoot].Join(relativeElements...)
+	ownerURI, err := n.ownerURIForTarget(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	projected.Path[pathIndexRoot] = ownerURI
+
+	alias := publicshare.ProjectedRootAlias(n.hasher, grant)
+	projected.Path[pathIndexUser] = newPublicUri().Join(alias)
+	if n.root != nil && n.root.mu != nil {
+		n.root.mu.Lock()
+		n.root.Children[alias] = projected
+		n.root.mu.Unlock()
+	}
+	return projected, nil
+}
+
+func (n *publicNavigator) ownerURIForTarget(ctx context.Context, target *ent.File) (*fs.URI, error) {
+	if target == nil {
+		return nil, fmt.Errorf("public target is nil")
 	}
 
-	projected.Path[pathIndexUser] = newPublicUri().Join(relativeElements...)
-	return projected, nil
+	ancestors, err := n.fileClient.GetAncestorFiles(ctx, target)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load owner ancestors for %d: %w", target.ID, err)
+	}
+
+	ownerURI := newMyUri()
+	if n.user == nil || target.OwnerID != n.user.ID {
+		ownerURI = newMyIDUri(hashid.EncodeUserID(n.hasher, target.OwnerID))
+	}
+
+	for _, ancestor := range ancestors {
+		if ancestor == nil || ancestor.Name == inventory.RootFolderName {
+			continue
+		}
+		ownerURI = ownerURI.Join(ancestor.Name)
+	}
+
+	return ownerURI, nil
 }
 
 func (n *publicNavigator) relativeElementsFromPublicRoot(ctx context.Context, target *ent.File) ([]string, error) {
@@ -517,28 +745,116 @@ func buildProjectedPagination(args *ListArgs, total, end int) *inventory.Paginat
 	}
 }
 
-func hasMixedProjectedTypes(files []*File) bool {
-	if len(files) <= 1 {
-		return false
+func sortProjectedRootChildren(files []*File, args *ListArgs) {
+	orderBy := file.FieldID
+	orderDirection := inventory.OrderDirectionAsc
+	if args != nil && args.Page != nil {
+		if strings.TrimSpace(args.Page.OrderBy) != "" {
+			orderBy = strings.TrimSpace(args.Page.OrderBy)
+		}
+		if args.Page.Order != "" {
+			orderDirection = args.Page.Order
+		}
 	}
 
-	hasFolder := false
-	hasFile := false
-	for _, item := range files {
-		if item == nil {
-			continue
+	descending := orderDirection == inventory.OrderDirectionDesc
+	sort.SliceStable(files, func(i, j int) bool {
+		left, right := files[i], files[j]
+		if left == nil || left.IsNil() {
+			return false
 		}
-		if item.Type() == types.FileTypeFolder {
-			hasFolder = true
-		} else {
-			hasFile = true
-		}
-		if hasFolder && hasFile {
+		if right == nil || right.IsNil() {
 			return true
 		}
+
+		// 与个人目录一致：目录始终在文件前面，排序字段只作用于同类型项。
+		if left.Type() != right.Type() {
+			return left.Type() == types.FileTypeFolder
+		}
+
+		cmp := compareProjectedRootFile(left, right, orderBy)
+		if cmp == 0 {
+			cmp = compareProjectedRootPath(left, right)
+		}
+		if descending {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func compareProjectedRootFile(left, right *File, orderBy string) int {
+	switch orderBy {
+	case file.FieldName:
+		if cmp := compareCaseFolded(left.Name(), right.Name()); cmp != 0 {
+			return cmp
+		}
+	case file.FieldSize:
+		if cmp := compareInt64(left.Size(), right.Size()); cmp != 0 {
+			return cmp
+		}
+	case file.FieldUpdatedAt:
+		if cmp := compareTime(left.UpdatedAt(), right.UpdatedAt()); cmp != 0 {
+			return cmp
+		}
+	default:
+		// 当前个人目录 created_at/default 最终也落到 ID 排序，这里保持一致，避免公共目录行为分叉。
 	}
 
-	return false
+	return compareInt(left.ID(), right.ID())
+}
+
+func compareProjectedRootPath(left, right *File) int {
+	leftPath, rightPath := "", ""
+	if left.Path[pathIndexUser] != nil {
+		leftPath = left.Path[pathIndexUser].PathTrimmed()
+	}
+	if right.Path[pathIndexUser] != nil {
+		rightPath = right.Path[pathIndexUser].PathTrimmed()
+	}
+	return strings.Compare(leftPath, rightPath)
+}
+
+func compareCaseFolded(left, right string) int {
+	leftFolded := strings.ToLower(strings.TrimSpace(left))
+	rightFolded := strings.ToLower(strings.TrimSpace(right))
+	if leftFolded != rightFolded {
+		return strings.Compare(leftFolded, rightFolded)
+	}
+	return strings.Compare(left, right)
+}
+
+func compareInt(left, right int) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareInt64(left, right int64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareTime(left, right time.Time) int {
+	switch {
+	case left.Before(right):
+		return -1
+	case left.After(right):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (n *publicNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {

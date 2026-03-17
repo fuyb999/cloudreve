@@ -21,6 +21,7 @@ import (
 )
 
 const fileTreePathIndexName = "files_tree_path_gist"
+const maxPostgresInteger = int(^uint32(0) >> 1)
 
 var ErrTreePathQueryUnavailable = errors.New("tree path query is unavailable")
 
@@ -251,7 +252,7 @@ func treePathVisibleSubtreeCondition(pathColumn, rootExpr string, includeSelf bo
 		conditions = append(conditions, fmt.Sprintf("%s != %s", pathColumn, rootExpr))
 	}
 
-	if maxDepth >= 0 {
+	if _, ok := treePathVisibleSubtreeMaxLevel("", maxDepth); ok {
 		conditions = append(conditions, fmt.Sprintf("nlevel(%s) <= ?", pathColumn))
 	}
 
@@ -263,8 +264,8 @@ func treePathVisibleSubtreeArgs(prefix string, includeSelf bool, maxDepth int) [
 	if !includeSelf {
 		args = append(args, prefix)
 	}
-	if maxDepth >= 0 {
-		args = append(args, fileTreePathDepth(prefix)+maxDepth)
+	if maxLevel, ok := treePathVisibleSubtreeMaxLevel(prefix, maxDepth); ok {
+		args = append(args, maxLevel)
 	}
 	return args
 }
@@ -284,11 +285,26 @@ func treePathVisibleSubtreePredicate(prefix string, includeSelf bool, maxDepth i
 			if !includeSelf {
 				b.WriteString(" AND ").WriteString(pathColumn).WriteString(" != text2ltree(").Arg(prefix).WriteByte(')')
 			}
-			if maxDepth >= 0 {
-				b.WriteString(" AND nlevel(").WriteString(pathColumn).WriteString(") <= ").Arg(fileTreePathDepth(prefix) + maxDepth)
+			if maxLevel, ok := treePathVisibleSubtreeMaxLevel(prefix, maxDepth); ok {
+				b.WriteString(" AND nlevel(").WriteString(pathColumn).WriteString(") <= ").Arg(maxLevel)
 			}
 		}))
 	}
+}
+
+func treePathVisibleSubtreeMaxLevel(prefix string, maxDepth int) (int, bool) {
+	if maxDepth < 0 {
+		return 0, false
+	}
+
+	rootDepth := fileTreePathDepth(prefix)
+	// PostgreSQL 的 nlevel() 返回 integer，超出 int32 上限时直接退化为无限深度查询，
+	// 避免“无限遍历”哨兵值在这里发生整型溢出。
+	if maxDepth > maxPostgresInteger-rootDepth {
+		return 0, false
+	}
+
+	return rootDepth + maxDepth, true
 }
 
 func treePathSearchTokenFromString(s string, hasher hashid.Encoder) (*treePathSearchToken, error) {

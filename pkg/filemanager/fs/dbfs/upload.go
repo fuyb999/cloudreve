@@ -115,7 +115,7 @@ func (f *DBFS) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ..
 	}
 
 	// Lock target
-	lockedPath := ancestor.RootUri().JoinRaw(req.Props.Uri.PathTrimmed())
+	lockedPath := ancestor.ResolveOwnerURI(req.Props.Uri)
 	lr := &LockByPath{lockedPath, ancestor, types.FileTypeFile, ""}
 	ls, err := f.acquireByPath(ctx, time.Until(req.Props.ExpireAt), f.user, false, fs.LockApp(fs.ApplicationUpload), lr)
 	defer func() { _ = f.Release(ctx, ls) }()
@@ -294,19 +294,11 @@ func (f *DBFS) CompleteUpload(ctx context.Context, session *fs.UploadSession) (f
 	}
 
 	// Check version retention policy
-	owner := filePrivate.Owner()
-	// Max allowed versions
-	maxVersions := 1
-	if entityType == types.EntityTypeVersion &&
-		owner.Settings.VersionRetention &&
-		(len(owner.Settings.VersionRetentionExt) == 0 || util.IsInExtensionList(owner.Settings.VersionRetentionExt, file.Name())) {
-		// Retention is enabled for this file
-		maxVersions = owner.Settings.VersionRetentionMax
-		if maxVersions == 0 {
-			// Unlimited versions
-			maxVersions = math.MaxInt32
-		}
+	owner, err := f.ensureOwnerWithGroup(ctx, filePrivate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file owner: %w", err)
 	}
+	maxVersions := uploadMaxVersions(owner, entityType, file.Name())
 
 	// Start transaction to update file
 	fc, tx, ctx, err := inventory.WithTx(ctx, f.fileClient)
@@ -371,6 +363,30 @@ func (f *DBFS) CompleteUpload(ctx context.Context, session *fs.UploadSession) (f
 	}
 
 	return file, nil
+}
+
+func uploadMaxVersions(owner *ent.User, entityType types.EntityType, fileName string) int {
+	// 默认只保留当前版本；公共文件投影对象如果 owner/settings 尚未完整加载，
+	// 这里也要安全退化，避免因为策略读取失败导致上传 panic。
+	if entityType != types.EntityTypeVersion || owner == nil || owner.Settings == nil {
+		return 1
+	}
+
+	if !owner.Settings.VersionRetention {
+		return 1
+	}
+
+	if len(owner.Settings.VersionRetentionExt) > 0 &&
+		!util.IsInExtensionList(owner.Settings.VersionRetentionExt, fileName) {
+		return 1
+	}
+
+	if owner.Settings.VersionRetentionMax == 0 {
+		// 0 表示不限制版本数量。
+		return math.MaxInt32
+	}
+
+	return owner.Settings.VersionRetentionMax
 }
 
 // This function will be used:

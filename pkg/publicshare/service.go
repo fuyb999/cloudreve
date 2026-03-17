@@ -422,9 +422,16 @@ func (s *Service) checkActionByFileLocal(ctx context.Context, user *ent.User, ta
 		return &ActionDecision{Allowed: false, Action: action, Reason: "root_not_visible"}, nil
 	}
 
-	allowed := rootGrant.Actions[action]
+	allowed := RootGrantActionAllowed(target.ID, rootGrant, action)
 	if action == ActionList {
 		allowed = true
+	}
+
+	reason := lo.If(allowed, "allowed").Else("action_denied")
+	if action == ActionDelete && target.ID == rootGrant.RootFileID && !allowed {
+		if _, ok := rootGrant.Actions[ActionDeleteRoot]; ok {
+			reason = "root_delete_protected"
+		}
 	}
 
 	return &ActionDecision{
@@ -432,7 +439,7 @@ func (s *Service) checkActionByFileLocal(ctx context.Context, user *ent.User, ta
 		Action:     action,
 		RootFileID: rootGrant.RootFileID,
 		Actions:    rootGrant.Actions,
-		Reason:     lo.If(allowed, "allowed").Else("action_denied"),
+		Reason:     reason,
 	}, nil
 }
 

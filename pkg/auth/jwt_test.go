@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/gin-gonic/gin"
 )
 
 func TestOAuthClientTokenTTLs(t *testing.T) {
@@ -66,5 +68,23 @@ func TestOAuthClientTokenTTLs(t *testing.T) {
 				t.Fatalf("unexpected refresh ttl: got %s, want %s", gotRefreshTTL, tt.wantRefreshTTL)
 			}
 		})
+	}
+}
+
+func TestVerifyAndRetrieveUserSkipsOpaqueBearerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/", nil)
+	c.Request.Header.Set(AuthorizationHeader, TokenHeaderPrefix+"opaque-token")
+
+	auth := &tokenAuth{secret: []byte("local-secret")}
+	shouldContinue, err := auth.VerifyAndRetrieveUser(c)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !shouldContinue {
+		t.Fatalf("expected opaque bearer token to fall through to OIDC verification")
 	}
 }

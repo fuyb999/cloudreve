@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 )
 
 func TestEvaluatePrincipalExprNested(t *testing.T) {
@@ -146,5 +147,103 @@ func TestRootGrantForAncestors(t *testing.T) {
 
 	if grant.RootFileID != 20 {
 		t.Fatalf("unexpected root grant: %#v", grant)
+	}
+}
+
+func TestRootGrantWithinTree(t *testing.T) {
+	grant := RootGrant{RootFileID: 20, RootTreePath: "10.20.30"}
+	if !RootGrantWithinTree("10.20", grant) {
+		t.Fatalf("expected grant to be within root tree")
+	}
+	if RootGrantWithinTree("10.21", grant) {
+		t.Fatalf("unexpected root tree match")
+	}
+}
+
+func TestProjectedRootAlias(t *testing.T) {
+	encoder, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	alias := ProjectedRootAlias(encoder, RootGrant{
+		RootFileID: 42,
+		RootName:   "研发文档",
+	})
+	if alias == "" {
+		t.Fatalf("projected alias should not be empty")
+	}
+	if alias == "研发文档" {
+		t.Fatalf("projected alias should include stable suffix, got %q", alias)
+	}
+}
+
+func TestRuleExprForFallbackActions(t *testing.T) {
+	visibility := &PrincipalExpr{
+		Match: &PrincipalMatch{Kind: PrincipalMatchAnyone},
+	}
+	downloadExpr := &PrincipalExpr{
+		Match: &PrincipalMatch{Kind: PrincipalMatchUser, Values: []string{"alice@example.com"}},
+	}
+
+	rule := &Rule{
+		Visibility: visibility,
+		Actions: map[Action]*PrincipalExpr{
+			ActionDownload: downloadExpr,
+		},
+	}
+
+	if got := rule.ExprFor(ActionDirectLink); got != downloadExpr {
+		t.Fatalf("direct link should fallback to download expr, got %#v", got)
+	}
+	if got := rule.ExprFor(ActionArchive); got != downloadExpr {
+		t.Fatalf("archive should fallback to download expr, got %#v", got)
+	}
+	if got := rule.ExprFor(ActionDeleteRoot); got != nil {
+		t.Fatalf("delete_root should require delete rule before fallback, got %#v", got)
+	}
+
+	deleteExpr := &PrincipalExpr{
+		Match: &PrincipalMatch{Kind: PrincipalMatchUser, Values: []string{"42"}},
+	}
+	rule.Actions = map[Action]*PrincipalExpr{
+		ActionDelete: deleteExpr,
+	}
+	if got := rule.ExprFor(ActionDeleteRoot); got != deleteExpr {
+		t.Fatalf("delete_root should fallback to delete expr, got %#v", got)
+	}
+
+	rule.Actions = map[Action]*PrincipalExpr{}
+	if got := rule.ExprFor(ActionDirectLink); got != visibility {
+		t.Fatalf("direct link should fallback to visibility when download expr missing, got %#v", got)
+	}
+	if got := rule.ExprFor(ActionArchive); got != visibility {
+		t.Fatalf("archive should fallback to visibility when download expr missing, got %#v", got)
+	}
+	if got := rule.ExprFor(ActionCopy); got != nil {
+		t.Fatalf("copy should require explicit grant, got %#v", got)
+	}
+}
+
+func TestRootGrantActionAllowed(t *testing.T) {
+	grant := RootGrant{
+		RootFileID: 100,
+		Actions: map[Action]bool{
+			ActionDelete:     true,
+			ActionDeleteRoot: false,
+		},
+	}
+
+	if RootGrantActionAllowed(100, grant, ActionDelete) {
+		t.Fatalf("root delete should honor delete_root override")
+	}
+
+	if !RootGrantActionAllowed(101, grant, ActionDelete) {
+		t.Fatalf("subtree delete should keep normal delete permission")
+	}
+
+	delete(grant.Actions, ActionDeleteRoot)
+	if !RootGrantActionAllowed(100, grant, ActionDelete) {
+		t.Fatalf("root delete should fallback to delete when delete_root is missing")
 	}
 }
