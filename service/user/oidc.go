@@ -554,14 +554,14 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 	}
 
 	if currentUser == nil {
-		email := profile.Email
-		if email == "" {
-			// 外部身份没有邮箱时，生成一个稳定占位邮箱，避免破坏本地用户唯一键约束。
-			email = oidcPlaceholderEmail(profile.Subject)
-		}
+		/*	email := profile.Email
+			if email == "" {
+				// 外部身份没有邮箱时，生成一个稳定占位邮箱，避免破坏本地用户唯一键约束。
+				email = oidcPlaceholderEmail(profile.Subject)
+			}*/
 
 		currentUser, err = userClient.Create(c, &inventory.NewUserArgs{
-			Email:   email,
+			Email:   profile.Username,
 			Nick:    selectOIDCNickname(profile),
 			Status:  user.StatusActive,
 			GroupID: dep.SettingProvider().DefaultGroup(c),
@@ -596,7 +596,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 			SetExternalUserID(profile.ExternalUserID).
 			SetTenantID(profile.TenantID).
 			SetDepartmentID(profile.DepartmentID).
-			SetEmail(profile.Email).
+			SetEmail(profile.Username).
 			SetUsername(profile.Username).
 			SetNickname(profile.Nickname).
 			SetAvatar(profile.Avatar).
@@ -612,7 +612,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 			SetExternalUserID(profile.ExternalUserID).
 			SetTenantID(profile.TenantID).
 			SetDepartmentID(profile.DepartmentID).
-			SetEmail(profile.Email).
+			//SetEmail(profile.Email).
 			SetUsername(profile.Username).
 			SetNickname(profile.Nickname).
 			SetAvatar(profile.Avatar).
