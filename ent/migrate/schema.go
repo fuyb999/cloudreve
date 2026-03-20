@@ -674,6 +674,7 @@ var (
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"mysql": "datetime"}},
 		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"mysql": "datetime"}},
+		{Name: "username", Type: field.TypeString, Unique: true, Nullable: true, Size: 100},
 		{Name: "email", Type: field.TypeString, Unique: true, Size: 100},
 		{Name: "nick", Type: field.TypeString, Size: 100},
 		{Name: "password", Type: field.TypeString, Nullable: true},
@@ -692,7 +693,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "users_groups_users",
-				Columns:    []*schema.Column{UsersColumns[12]},
+				Columns:    []*schema.Column{UsersColumns[13]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},

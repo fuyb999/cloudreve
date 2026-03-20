@@ -38,6 +38,7 @@ type (
 
 var (
 	ErrUserEmailExisted      = errors.New("user email has been registered")
+	ErrUserUsernameExisted   = errors.New("user username has been registered")
 	ErrInactiveUserExisted   = errors.New("email already registered but not activated")
 	ErrorUnknownPasswordType = errors.New("unknown password type")
 	ErrorIncorrectPassword   = errors.New("incorrect password")
@@ -49,6 +50,8 @@ type (
 		TxOperator
 		// New creates a new user. If user email registered, existed User will be returned.
 		Create(ctx context.Context, args *NewUserArgs) (*ent.User, error)
+		// GetByUsername get the user with given username, user status is ignored.
+		GetByUsername(ctx context.Context, username string) (*ent.User, error)
 		// GetByEmail get the user with given email, user status is ignored.
 		GetByEmail(ctx context.Context, email string) (*ent.User, error)
 		// GetByID get user by its ID, user status is ignored.
@@ -61,11 +64,11 @@ type (
 		AnonymousUser(ctx context.Context) (*ent.User, error)
 		// GetLoginUserByID returns the login user by its ID. It emits some errors and fallback to anonymous user.
 		GetLoginUserByID(ctx context.Context, uid int) (*ent.User, error)
-		// GetLoginUserByEmail returns the login user by its WebDAV credentials.
-		GetActiveByDavAccount(ctx context.Context, email, pwd string) (*ent.User, error)
+		// GetActiveByDavAccount returns the login user by its WebDAV credentials.
+		GetActiveByDavAccount(ctx context.Context, account, pwd string) (*ent.User, error)
 		// SaveSettings saves user settings.
 		SaveSettings(ctx context.Context, u *ent.User) error
-		// SearchActive search active users by Email or nickname.
+		// SearchActive search active users by username, email or nickname.
 		SearchActive(ctx context.Context, limit int, keyword string) ([]*ent.User, error)
 		// ApplyStorageDiff apply storage diff to user.
 		ApplyStorageDiff(ctx context.Context, diffs StorageDiff) error
@@ -98,10 +101,11 @@ type (
 	}
 	ListUserParameters struct {
 		*PaginationArgs
-		GroupID int
-		Status  user.Status
-		Nick    string
-		Email   string
+		GroupID  int
+		Status   user.Status
+		Username string
+		Nick     string
+		Email    string
 	}
 	ListUserResult struct {
 		*PaginationResults
@@ -120,6 +124,7 @@ type userClient struct {
 type (
 	// NewUserArgs args to create a new user
 	NewUserArgs struct {
+		Username      string
 		Email         string
 		Nick          string // Optional
 		PlainPassword string
@@ -297,6 +302,18 @@ func (c *userClient) SetStatus(ctx context.Context, u *ent.User, status user.Sta
 }
 
 func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, error) {
+	username := NormalizeUsername(args.Username)
+	if username == "" {
+		username = fallbackUsernameCandidate(args.Email, args.Nick)
+	}
+	if username == "" {
+		username = "user"
+	}
+
+	if existedUser, err := c.GetByUsername(ctx, username); err == nil {
+		return existedUser, ErrUserUsernameExisted
+	}
+
 	// Try to check if there's user with same email.
 	if existedUser, err := c.GetByEmail(ctx, args.Email); err == nil {
 		if existedUser.Status == user.StatusInactive {
@@ -307,11 +324,12 @@ func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, 
 
 	nick := args.Nick
 	if nick == "" {
-		nick = strings.Split(args.Email, "@")[0]
+		nick = firstNonEmptyUserString(username, strings.Split(args.Email, "@")[0], "User")
 	}
 
 	userSetting := &types.UserSetting{VersionRetention: true, VersionRetentionMax: 10}
 	query := c.client.User.Create().
+		SetUsername(username).
 		SetEmail(args.Email).
 		SetNick(nick).
 		SetStatus(args.Status).
@@ -347,6 +365,10 @@ func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, 
 	return newUser, nil
 }
 
+func (c *userClient) GetByUsername(ctx context.Context, username string) (*ent.User, error) {
+	return withUserEagerLoading(ctx, c.client.User.Query().Where(user.UsernameEqualFold(NormalizeUsername(username)))).First(ctx)
+}
+
 func (c *userClient) GetByEmail(ctx context.Context, email string) (*ent.User, error) {
 	return withUserEagerLoading(ctx, c.client.User.Query().Where(user.EmailEqualFold(email))).First(ctx)
 }
@@ -364,12 +386,16 @@ func (c *userClient) GetActiveByID(ctx context.Context, id int) (*ent.User, erro
 	).First(ctx)
 }
 
-func (c *userClient) GetActiveByDavAccount(ctx context.Context, email, pwd string) (*ent.User, error) {
+func (c *userClient) GetActiveByDavAccount(ctx context.Context, account, pwd string) (*ent.User, error) {
 	ctx = context.WithValue(ctx, LoadUserGroup{}, true)
 	return withUserEagerLoading(
 		ctx,
 		c.client.User.Query().
-			Where(user.EmailEqualFold(email)).
+			// WebDAV 登录账号已经切换为用户名，邮箱仅作为历史兼容兜底。
+			Where(user.Or(
+				user.UsernameEqualFold(NormalizeUsername(account)),
+				user.EmailEqualFold(strings.TrimSpace(account)),
+			)).
 			Where(user.StatusEQ(user.StatusActive)).
 			WithDavAccounts(func(q *ent.DavAccountQuery) {
 				q.Where(davaccount.Password(pwd))
@@ -401,7 +427,7 @@ func (c *userClient) SearchActive(ctx context.Context, limit int, keyword string
 	return withUserEagerLoading(
 		ctx,
 		c.client.User.Query().
-			Where(user.Or(user.EmailContainsFold(keyword), user.NickContainsFold(keyword))).
+			Where(user.Or(user.UsernameContainsFold(keyword), user.EmailContainsFold(keyword), user.NickContainsFold(keyword))).
 			Limit(limit),
 	).All(ctx)
 }
@@ -452,6 +478,9 @@ func (c *userClient) ListUsers(ctx context.Context, args *ListUserParameters) (*
 	if args.Status != "" {
 		query = query.Where(user.StatusEQ(args.Status))
 	}
+	if args.Username != "" {
+		query = query.Where(user.UsernameContainsFold(args.Username))
+	}
 	if args.Nick != "" {
 		query = query.Where(user.NickContainsFold(args.Nick))
 	}
@@ -483,7 +512,18 @@ func (c *userClient) ListUsers(ctx context.Context, args *ListUserParameters) (*
 
 func (c *userClient) Upsert(ctx context.Context, u *ent.User, password, twoFa string) (*ent.User, error) {
 	if u.ID == 0 {
+		username := NormalizeUsername(userNameValue(u.Username))
+		if username == "" {
+			username = fallbackUsernameCandidate(u.Email, u.Nick)
+		}
+		if err := c.ensureUniqueUsername(ctx, username, 0); err != nil {
+			return nil, err
+		}
+		if err := c.ensureUniqueEmail(ctx, u.Email, 0); err != nil {
+			return nil, err
+		}
 		q := c.client.User.Create().
+			SetUsername(username).
 			SetEmail(u.Email).
 			SetNick(u.Nick).
 			SetAvatar(u.Avatar).
@@ -503,7 +543,15 @@ func (c *userClient) Upsert(ctx context.Context, u *ent.User, password, twoFa st
 		return q.Save(ctx)
 	}
 
+	if err := c.ensureUniqueUsername(ctx, NormalizeUsername(userNameValue(u.Username)), u.ID); err != nil {
+		return nil, err
+	}
+	if err := c.ensureUniqueEmail(ctx, u.Email, u.ID); err != nil {
+		return nil, err
+	}
+
 	q := c.client.User.UpdateOne(u).
+		SetNillableUsername(stringPtrOrNil(NormalizeUsername(userNameValue(u.Username)))).
 		SetEmail(u.Email).
 		SetNick(u.Nick).
 		SetAvatar(u.Avatar).
@@ -525,9 +573,55 @@ func (c *userClient) Upsert(ctx context.Context, u *ent.User, password, twoFa st
 	return q.Save(ctx)
 }
 
+func (c *userClient) ensureUniqueUsername(ctx context.Context, username string, excludeID int) error {
+	username = NormalizeUsername(username)
+	if username == "" {
+		return nil
+	}
+
+	query := c.client.User.Query().Where(user.UsernameEqualFold(username))
+	if excludeID > 0 {
+		query = query.Where(user.IDNEQ(excludeID))
+	}
+
+	existed, err := query.Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check username uniqueness: %w", err)
+	}
+	if existed {
+		return ErrUserUsernameExisted
+	}
+
+	return nil
+}
+
+func (c *userClient) ensureUniqueEmail(ctx context.Context, email string, excludeID int) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+
+	query := c.client.User.Query().Where(user.EmailEqualFold(email))
+	if excludeID > 0 {
+		query = query.Where(user.IDNEQ(excludeID))
+	}
+
+	existed, err := query.Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check email uniqueness: %w", err)
+	}
+	if existed {
+		return ErrUserEmailExisted
+	}
+
+	return nil
+}
+
 func getUserOrderOption(args *ListUserParameters) []user.OrderOption {
 	orderTerm := getOrderTerm(args.Order)
 	switch args.OrderBy {
+	case user.FieldUsername:
+		return []user.OrderOption{user.ByUsername(orderTerm), user.ByID(orderTerm)}
 	case user.FieldNick:
 		return []user.OrderOption{user.ByNick(orderTerm), user.ByID(orderTerm)}
 	case user.FieldStorage:
@@ -539,6 +633,50 @@ func getUserOrderOption(args *ListUserParameters) []user.OrderOption {
 	default:
 		return []user.OrderOption{user.ByID(orderTerm)}
 	}
+}
+
+func NormalizeUsername(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+func firstNonEmptyUserString(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+
+	return ""
+}
+
+func fallbackUsernameCandidate(email, nick string) string {
+	if local, _, ok := strings.Cut(strings.TrimSpace(email), "@"); ok && strings.TrimSpace(local) != "" {
+		return NormalizeUsername(local)
+	}
+
+	if trimmedNick := NormalizeUsername(nick); trimmedNick != "" {
+		return trimmedNick
+	}
+
+	return ""
+}
+
+func stringPtrOrNil(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+
+	return &value
+}
+
+func userNameValue(username *string) string {
+	if username == nil {
+		return ""
+	}
+
+	return *username
 }
 
 // IsAnonymousUser check if given user is anonymous user.

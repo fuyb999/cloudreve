@@ -26,7 +26,7 @@ type LoginParameterCtx struct{}
 
 // UserLoginService 管理用户登录的服务
 type UserLoginService struct {
-	UserName string `form:"email" json:"email" binding:"required,email"`
+	UserName string `form:"username" json:"username" binding:"required,min=3,max=100"`
 	Password string `form:"password" json:"password" binding:"required,min=4,max=128"`
 }
 
@@ -72,7 +72,7 @@ func (service *UserResetService) Reset(c *gin.Context) (*User, error) {
 type (
 	// UserResetEmailService 发送密码重设邮件服务
 	UserResetEmailService struct {
-		UserName string `form:"email" json:"email" binding:"required,email"`
+		UserName string `form:"username" json:"username" binding:"required,min=3,max=100"`
 		Language string `form:"language" json:"language"`
 	}
 	UserResetEmailParameterCtx struct{}
@@ -85,7 +85,7 @@ func (service *UserResetEmailService) Reset(c *gin.Context) error {
 	dep := dependency.FromContext(c)
 	userClient := dep.UserClient()
 
-	u, err := userClient.GetByEmail(c, service.UserName)
+	u, err := userClient.GetByUsername(c, service.UserName)
 	if err != nil {
 		return serializer.NewError(serializer.CodeUserNotFound, "User not found", err)
 	}
@@ -133,13 +133,13 @@ func (service *UserLoginService) Login(c *gin.Context) (*ent.User, string, error
 	userClient := dep.UserClient()
 
 	ctx := context.WithValue(c, inventory.LoadUserGroup{}, true)
-	expectedUser, err := userClient.GetByEmail(ctx, service.UserName)
+	expectedUser, err := userClient.GetByUsername(ctx, service.UserName)
 
 	// 一系列校验
 	if err != nil {
-		err = serializer.NewError(serializer.CodeInvalidPassword, "Incorrect password or email address", err)
+		err = serializer.NewError(serializer.CodeInvalidPassword, "Incorrect username or password", err)
 	} else if checkErr := inventory.CheckPassword(expectedUser, service.Password); checkErr != nil {
-		err = serializer.NewError(serializer.CodeInvalidPassword, "Incorrect password or email address", err)
+		err = serializer.NewError(serializer.CodeInvalidPassword, "Incorrect username or password", err)
 	} else if expectedUser.Status == user.StatusManualBanned || expectedUser.Status == user.StatusSysBanned {
 		err = serializer.NewError(serializer.CodeUserBaned, "This account has been blocked", nil)
 	} else if expectedUser.Status == user.StatusInactive {
@@ -186,6 +186,10 @@ func IssueToken(c *gin.Context) (*BuiltinLoginResponse, error) {
 
 func afterLoginSuccess(c *gin.Context, u *ent.User) error {
 	dep := dependency.FromContext(c)
+	account := userUsernameValue(u.Username)
+	if account == "" {
+		account = u.Email
+	}
 
 	if _, err := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder()).ResolveVisibility(c, u); err != nil {
 		dep.Logger().Warning("Failed to warm public visibility for user %d: %s", u.ID, err)
@@ -195,7 +199,8 @@ func afterLoginSuccess(c *gin.Context, u *ent.User) error {
 		Type:   audit.UserLogin,
 		UserID: u.ID,
 		Content: map[string]any{
-			"account": u.Email,
+			"account":  account,
+			"username": userUsernameValue(u.Username),
 		},
 	}); err != nil {
 		dep.Logger().Warning("Failed to publish login audit log: %s", err)
@@ -304,7 +309,7 @@ func (service *OtpValidationService) Verify2FA(c *gin.Context) (*ent.User, error
 type (
 	PrepareLoginParameterCtx struct{}
 	PrepareLoginService      struct {
-		Email string `form:"email" binding:"required,email"`
+		UserName string `form:"username" binding:"required,min=3,max=100"`
 	}
 )
 
@@ -320,7 +325,7 @@ func (service *PrepareLoginService) Prepare(c *gin.Context) (*PrepareLoginRespon
 	}
 
 	ctx := context.WithValue(c, inventory.LoadUserPasskey{}, true)
-	expectedUser, err := dep.UserClient().GetByEmail(ctx, service.Email)
+	expectedUser, err := dep.UserClient().GetByUsername(ctx, service.UserName)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeNotFound, "User not found", err)
 	}

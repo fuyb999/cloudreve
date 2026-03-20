@@ -157,7 +157,10 @@ func WebDAVAuth() gin.HandlerFunc {
 				},
 			}
 			if username != "" {
-				if u, err := userClient.GetByEmail(c, username); err == nil {
+				if u, err := userClient.GetByUsername(c, username); err == nil {
+					SetUserCtxByUser(c, u)
+					event.UserID = u.ID
+				} else if u, err := userClient.GetByEmail(c, username); err == nil {
 					SetUserCtxByUser(c, u)
 					event.UserID = u.ID
 				}
@@ -197,6 +200,10 @@ func WebDAVAuth() gin.HandlerFunc {
 		}
 
 		if !group.Permissions.Enabled(int(types.GroupPermissionWebDAV)) {
+			accountName := username
+			if expectedUser.Username != nil && *expectedUser.Username != "" {
+				accountName = *expectedUser.Username
+			}
 			_ = audit.Publish(c, &audit.Event{
 				Type:   audit.WebdavLoginFailed,
 				UserID: expectedUser.ID,
@@ -206,7 +213,7 @@ func WebDAVAuth() gin.HandlerFunc {
 				},
 			})
 			c.Status(http.StatusForbidden)
-			l.Debug("WebDAVAuth: user %q does not have WebDAV permission.", expectedUser.Email)
+			l.Debug("WebDAVAuth: user %q does not have WebDAV permission.", accountName)
 			c.Abort()
 			return
 		}

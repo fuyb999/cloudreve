@@ -25,7 +25,8 @@ type RegisterParameterCtx struct{}
 
 // UserRegisterService 管理用户注册的服务
 type UserRegisterService struct {
-	UserName string `form:"email" json:"email" binding:"required,email"`
+	UserName string `form:"username" json:"username" binding:"required,min=3,max=100"`
+	Email    string `form:"email" json:"email" binding:"required,email"`
 	Password string `form:"password" json:"password" binding:"required,min=6,max=128"`
 	Language string `form:"language" json:"language"`
 }
@@ -37,7 +38,8 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 
 	isEmailRequired := settings.EmailActivationEnabled(c)
 	args := &inventory.NewUserArgs{
-		Email:         strings.ToLower(service.UserName),
+		Username:      service.UserName,
+		Email:         strings.ToLower(service.Email),
 		PlainPassword: service.Password,
 		Status:        user.StatusActive,
 		GroupID:       settings.DefaultGroup(c),
@@ -63,6 +65,9 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 		if errors.Is(err, inventory.ErrUserEmailExisted) {
 			return serializer.ErrWithDetails(c, serializer.CodeEmailExisted, "Email already in use", err)
 		}
+		if errors.Is(err, inventory.ErrUserUsernameExisted) {
+			return serializer.ErrWithDetails(c, serializer.CodeParamErr, "Username already in use", err)
+		}
 
 		if errors.Is(err, inventory.ErrInactiveUserExisted) {
 			if err := sendActivationEmail(c, dep, expectedUser); err != nil {
@@ -83,7 +88,8 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 		Type:   audit.UserSignup,
 		UserID: expectedUser.ID,
 		Content: map[string]any{
-			"account": expectedUser.Email,
+			"account":  userUsernameValue(expectedUser.Username),
+			"username": userUsernameValue(expectedUser.Username),
 		},
 	}); err != nil {
 		dep.Logger().Warning("Failed to publish signup audit log: %s", err)
@@ -158,7 +164,8 @@ func ActivateUser(c *gin.Context) serializer.Response {
 		Type:   audit.UserActivated,
 		UserID: activeUser.ID,
 		Content: map[string]any{
-			"account": activeUser.Email,
+			"account":  userUsernameValue(activeUser.Username),
+			"username": userUsernameValue(activeUser.Username),
 		},
 	}); err != nil {
 		dep.Logger().Warning("Failed to publish activation audit log: %s", err)

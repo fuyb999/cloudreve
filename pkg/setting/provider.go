@@ -370,7 +370,7 @@ func (s *settingProvider) AppSetting(ctx context.Context) *AppSetting {
 func (s *settingProvider) OIDC(ctx context.Context) *OIDCSetting {
 	return &OIDCSetting{
 		Enabled:      s.getBoolean(ctx, "oidc_enabled", false),
-		DisplayName:  s.getString(ctx, "oidc_display_name", "Unified Auth"),
+		DisplayName:  s.getString(ctx, "oidc_display_name", "统一认证"),
 		AutoRedirect: s.getBoolean(ctx, "oidc_auto_redirect", false),
 		SSOURL:       s.getString(ctx, "oidc_sso_url", ""),
 		WellKnownURL: s.getString(ctx, "oidc_wellknown_url", ""),

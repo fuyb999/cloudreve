@@ -298,6 +298,19 @@ var oauthClientSyncthingRedirectURIs = []string{
 	"https://localhost:18384/rest/noauth/auth/cloudreve/callback",
 }
 
+var oauthClientSyncthingScopes = []string{
+	types.ScopeProfile,
+	types.ScopeEmail,
+	types.ScopeOpenID,
+	types.ScopeOfflineAccess,
+	types.ScopeUserInfoRead,
+	types.ScopeUserInfoWrite,
+	types.ScopeWorkflowWrite,
+	types.ScopeFilesRead,
+	types.ScopeFilesWrite,
+	types.ScopeSharesWrite,
+}
+
 func migrateOAuthClient(l logging.Logger, client *ent.Client, ctx context.Context) error {
 	if err := migrateOAuthClientDesktop(l, client, ctx); err != nil {
 		return err
@@ -318,20 +331,22 @@ func migrateOAuthClientSyncthing(l logging.Logger, client *ent.Client, ctx conte
 	existing, err := client.OAuthClient.Query().Where(oauthclient.GUID(OAuthClientSyncthingGUID)).First(ctx)
 	if err == nil {
 		props := normalizeSyncthingOAuthClientProps(existing.Props)
+		scopes := normalizeSyncthingOAuthClientScopes(existing.Scopes)
 		shouldUpdate := existing.Props == nil ||
 			existing.Props.Description != props.Description ||
 			existing.Props.AccessTokenTTL != props.AccessTokenTTL ||
-			existing.Props.RefreshTokenTTL != props.RefreshTokenTTL
+			existing.Props.RefreshTokenTTL != props.RefreshTokenTTL ||
+			!sameStringSet(existing.Scopes, scopes)
 		if !shouldUpdate {
 			l.Info("Default OAuth client (GUID=%s) already exists, skip migrating.", OAuthClientSyncthingGUID)
 			return nil
 		}
 
-		if _, err := client.OAuthClient.UpdateOneID(existing.ID).SetProps(props).Save(ctx); err != nil {
+		if _, err := client.OAuthClient.UpdateOneID(existing.ID).SetProps(props).SetScopes(scopes).Save(ctx); err != nil {
 			return fmt.Errorf("failed to update default Syncthing OAuth client: %w", err)
 		}
 
-		l.Info("Default OAuth client (GUID=%s) already exists, updated token lifetime defaults.", OAuthClientSyncthingGUID)
+		l.Info("Default OAuth client (GUID=%s) already exists, updated scopes and token lifetime defaults.", OAuthClientSyncthingGUID)
 		return nil
 	}
 	if !ent.IsNotFound(err) {
@@ -343,7 +358,7 @@ func migrateOAuthClientSyncthing(l logging.Logger, client *ent.Client, ctx conte
 		SetSecret(OAuthClientSyncthingSecret).
 		SetName(OAuthClientSyncthingName).
 		SetRedirectUris(oauthClientSyncthingRedirectURIs).
-		SetScopes([]string{"profile", "email", "openid", "offline_access", "UserInfo.Write", "Workflow.Write", "Files.Write", "Shares.Write"}).
+		SetScopes(normalizeSyncthingOAuthClientScopes(nil)).
 		SetProps(defaultSyncthingOAuthClientProps()).
 		SetIsEnabled(true).
 		Save(ctx); err != nil {
@@ -378,6 +393,64 @@ func normalizeSyncthingOAuthClientProps(props *types.OAuthClientProps) *types.OA
 	}
 
 	return &normalized
+}
+
+func normalizeSyncthingOAuthClientScopes(scopes []string) []string {
+	normalized := normalizeUniqueStrings(scopes)
+	seen := make(map[string]struct{}, len(normalized)+len(oauthClientSyncthingScopes))
+	for _, scope := range normalized {
+		seen[scope] = struct{}{}
+	}
+	for _, scope := range oauthClientSyncthingScopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		normalized = append(normalized, scope)
+	}
+
+	return normalized
+}
+
+func sameStringSet(left, right []string) bool {
+	leftNormalized := normalizeUniqueStrings(left)
+	rightNormalized := normalizeUniqueStrings(right)
+	if len(leftNormalized) != len(rightNormalized) {
+		return false
+	}
+
+	seen := make(map[string]int, len(leftNormalized))
+	for _, value := range leftNormalized {
+		seen[value]++
+	}
+	for _, value := range rightNormalized {
+		if seen[value] == 0 {
+			return false
+		}
+		seen[value]--
+	}
+	return true
+}
+
+func normalizeUniqueStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized
 }
 
 func migrateOAuthClientiOS(l logging.Logger, client *ent.Client, ctx context.Context) error {

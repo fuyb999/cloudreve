@@ -78,7 +78,7 @@ type remoteActionDecision struct {
 	Actions        map[string]bool `json:"actions"`
 }
 
-// UnifiedAuthzEnabled 返回当前是否处于 “OIDC 打开即由 Yudao 接管公共文件授权” 模式。
+// UnifiedAuthzEnabled 返回当前是否处于 “OIDC 打开即由统一认证中心接管公共文件授权” 模式。
 func (s *Service) UnifiedAuthzEnabled(ctx context.Context) bool {
 	raw, err := s.settingClient.Get(ctx, oidcEnabledSettingKey)
 	if err != nil {
@@ -144,7 +144,7 @@ func (s *Service) remoteAuthzBaseURL(ctx context.Context) (string, error) {
 	baseURL := strings.TrimSuffix(wellKnown, "/.well-known/openid-configuration")
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" || baseURL == wellKnown {
-		return "", fmt.Errorf("failed to derive yudao authz base url from oidc well-known url")
+		return "", fmt.Errorf("failed to derive unified authz base url from oidc well-known url")
 	}
 
 	return baseURL, nil

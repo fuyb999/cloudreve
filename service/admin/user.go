@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"strconv"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
@@ -33,10 +34,11 @@ type UserBatchService struct {
 }
 
 const (
-	userStatusCondition = "user_status"
-	userGroupCondition  = "user_group"
-	userNickCondition   = "user_nick"
-	userEmailCondition  = "user_email"
+	userStatusCondition   = "user_status"
+	userGroupCondition    = "user_group"
+	userUsernameCondition = "user_username"
+	userNickCondition     = "user_nick"
+	userEmailCondition    = "user_email"
 )
 
 func (service *AdminListService) Users(c *gin.Context) (*ListUserResponse, error) {
@@ -65,10 +67,11 @@ func (service *AdminListService) Users(c *gin.Context) (*ListUserResponse, error
 			OrderBy:  service.OrderBy,
 			Order:    inventory.OrderDirection(service.OrderDirection),
 		},
-		Status:  user.Status(service.Conditions[userStatusCondition]),
-		GroupID: groupID,
-		Nick:    service.Conditions[userNickCondition],
-		Email:   service.Conditions[userEmailCondition],
+		Status:   user.Status(service.Conditions[userStatusCondition]),
+		GroupID:  groupID,
+		Username: service.Conditions[userUsernameCondition],
+		Nick:     service.Conditions[userNickCondition],
+		Email:    service.Conditions[userEmailCondition],
 	})
 
 	if err != nil {
@@ -171,6 +174,12 @@ func (s *UpsertUserService) Update(c *gin.Context) (*GetUserResponse, error) {
 
 	newUser, err := userClient.Upsert(ctx, s.User, s.Password, s.TwoFA)
 	if err != nil {
+		if errors.Is(err, inventory.ErrUserUsernameExisted) {
+			return nil, serializer.NewError(serializer.CodeParamErr, "Username already in use", err)
+		}
+		if errors.Is(err, inventory.ErrUserEmailExisted) {
+			return nil, serializer.NewError(serializer.CodeEmailExisted, "Email already in use", err)
+		}
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to update user", err)
 	}
 
@@ -192,6 +201,12 @@ func (s *UpsertUserService) Create(c *gin.Context) (*GetUserResponse, error) {
 
 	user, err := userClient.Upsert(c, s.User, s.Password, s.TwoFA)
 	if err != nil {
+		if errors.Is(err, inventory.ErrUserUsernameExisted) {
+			return nil, serializer.NewError(serializer.CodeParamErr, "Username already in use", err)
+		}
+		if errors.Is(err, inventory.ErrUserEmailExisted) {
+			return nil, serializer.NewError(serializer.CodeEmailExisted, "Email already in use", err)
+		}
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to create user", err)
 	}
 

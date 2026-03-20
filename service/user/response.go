@@ -104,6 +104,7 @@ type BuiltinLoginResponse struct {
 // User 用户序列化器
 type User struct {
 	ID                  string                         `json:"id"`
+	Username            string                         `json:"username,omitempty"`
 	Email               string                         `json:"email,omitempty"`
 	Nickname            string                         `json:"nickname"`
 	Status              user.Status                    `json:"status,omitempty"`
@@ -163,6 +164,7 @@ func BuildWebAuthnList(credentials []webauthn.Credential) []WebAuthnCredentials 
 func BuildUser(user *ent.User, idEncoder hashid.Encoder) User {
 	return User{
 		ID:                  hashid.EncodeUserID(idEncoder, user.ID),
+		Username:            userUsernameValue(user.Username),
 		Email:               user.Email,
 		Nickname:            user.Nick,
 		Status:              user.Status,
@@ -229,6 +231,7 @@ func BuildUserRedacted(u *ent.User, level int, idEncoder hashid.Encoder) User {
 
 	user := User{
 		ID:                  userRaw.ID,
+		Username:            userRaw.Username,
 		Nickname:            userRaw.Nickname,
 		Avatar:              userRaw.Avatar,
 		CreatedAt:           userRaw.CreatedAt,
@@ -256,4 +259,12 @@ func RedactedGroup(g *Group) *Group {
 		ID:   g.ID,
 		Name: g.Name,
 	}
+}
+
+func userUsernameValue(username *string) string {
+	if username == nil {
+		return ""
+	}
+
+	return *username
 }

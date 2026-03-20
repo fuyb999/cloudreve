@@ -326,8 +326,12 @@ func (s *UserInfoService) GetUserInfo(c *gin.Context) (*UserInfoResponse, error)
 		switch scope {
 		case types.ScopeProfile:
 			siteUrl := dep.SettingProvider().SiteURL(c)
+			preferredUsername := inventory.NormalizeUsername(lo.FromPtr(u.Username))
+			if preferredUsername == "" {
+				preferredUsername = strings.TrimSpace(u.Nick)
+			}
 			resp.Name = u.Nick
-			resp.PreferredUsername = u.Nick
+			resp.PreferredUsername = preferredUsername
 			resp.Picture = routes.MasterUserAvatarUrl(siteUrl, hashid.EncodeUserID(hashIDEncoder, u.ID)).String()
 			resp.UpdatedAt = u.UpdatedAt.Unix()
 		case types.ScopeEmail:

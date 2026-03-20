@@ -361,7 +361,7 @@ func resolveManagedPublicFile(c *gin.Context, raw string) (*ent.File, *fs.URI, *
 }
 
 func legacyLocalAuthzDisabledErr() error {
-	return serializer.NewError(serializer.CodeFeatureNotEnabled, "public authorization is managed by Yudao when OIDC is enabled", nil)
+	return serializer.NewError(serializer.CodeFeatureNotEnabled, "public authorization is managed by unified auth when OIDC is enabled", nil)
 }
 
 func (s *RemoteVisibilityService) Get(c *gin.Context) (*RemoteVisibilityResponse, error) {

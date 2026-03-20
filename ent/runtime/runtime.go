@@ -566,20 +566,24 @@ func init() {
 	user.DefaultUpdatedAt = userDescUpdatedAt.Default.(func() time.Time)
 	// user.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	user.UpdateDefaultUpdatedAt = userDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// userDescUsername is the schema descriptor for username field.
+	userDescUsername := userFields[0].Descriptor()
+	// user.UsernameValidator is a validator for the "username" field. It is called by the builders before save.
+	user.UsernameValidator = userDescUsername.Validators[0].(func(string) error)
 	// userDescEmail is the schema descriptor for email field.
-	userDescEmail := userFields[0].Descriptor()
+	userDescEmail := userFields[1].Descriptor()
 	// user.EmailValidator is a validator for the "email" field. It is called by the builders before save.
 	user.EmailValidator = userDescEmail.Validators[0].(func(string) error)
 	// userDescNick is the schema descriptor for nick field.
-	userDescNick := userFields[1].Descriptor()
+	userDescNick := userFields[2].Descriptor()
 	// user.NickValidator is a validator for the "nick" field. It is called by the builders before save.
 	user.NickValidator = userDescNick.Validators[0].(func(string) error)
 	// userDescStorage is the schema descriptor for storage field.
-	userDescStorage := userFields[4].Descriptor()
+	userDescStorage := userFields[5].Descriptor()
 	// user.DefaultStorage holds the default value on creation for the storage field.
 	user.DefaultStorage = userDescStorage.Default.(int64)
 	// userDescSettings is the schema descriptor for settings field.
-	userDescSettings := userFields[7].Descriptor()
+	userDescSettings := userFields[8].Descriptor()
 	// user.DefaultSettings holds the default value on creation for the settings field.
 	user.DefaultSettings = userDescSettings.Default.(*types.UserSetting)
 }

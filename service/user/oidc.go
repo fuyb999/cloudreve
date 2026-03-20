@@ -545,6 +545,14 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		}
 	}
 
+	if currentUser == nil && profile.Username != "" {
+		currentUser, err = userClient.GetByUsername(c, profile.Username)
+		if err != nil && !ent.IsNotFound(err) {
+			_ = tx.Rollback()
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to query user by username", err)
+		}
+	}
+
 	if currentUser == nil && profile.Email != "" {
 		currentUser, err = userClient.GetByEmail(c, profile.Email)
 		if err != nil && !ent.IsNotFound(err) {
@@ -554,18 +562,26 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 	}
 
 	if currentUser == nil {
-		/*	email := profile.Email
-			if email == "" {
-				// 外部身份没有邮箱时，生成一个稳定占位邮箱，避免破坏本地用户唯一键约束。
-				email = oidcPlaceholderEmail(profile.Subject)
-			}*/
+		email := profile.Email
+		if email == "" {
+			// 外部身份没有邮箱时，生成一个稳定占位邮箱，避免破坏本地用户唯一键约束。
+			email = oidcPlaceholderEmail(profile.Subject)
+		}
+
+		username := selectOIDCUsername(profile)
+		username, err = inventory.NextAvailableUsername(c, tx.Client(), username, 0)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to allocate shadow username", err)
+		}
 
 		currentUser, err = userClient.Create(c, &inventory.NewUserArgs{
-			Email:   profile.Username,
-			Nick:    selectOIDCNickname(profile),
-			Status:  user.StatusActive,
-			GroupID: dep.SettingProvider().DefaultGroup(c),
-			Avatar:  profile.Avatar,
+			Username: username,
+			Email:    email,
+			Nick:     selectOIDCNickname(profile),
+			Status:   user.StatusActive,
+			GroupID:  dep.SettingProvider().DefaultGroup(c),
+			Avatar:   profile.Avatar,
 		})
 		if err != nil {
 			_ = tx.Rollback()
@@ -596,7 +612,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 			SetExternalUserID(profile.ExternalUserID).
 			SetTenantID(profile.TenantID).
 			SetDepartmentID(profile.DepartmentID).
-			SetEmail(profile.Username).
+			SetEmail(profile.Email).
 			SetUsername(profile.Username).
 			SetNickname(profile.Nickname).
 			SetAvatar(profile.Avatar).
@@ -612,7 +628,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 			SetExternalUserID(profile.ExternalUserID).
 			SetTenantID(profile.TenantID).
 			SetDepartmentID(profile.DepartmentID).
-			//SetEmail(profile.Email).
+			SetEmail(profile.Email).
 			SetUsername(profile.Username).
 			SetNickname(profile.Nickname).
 			SetAvatar(profile.Avatar).
@@ -648,6 +664,19 @@ func updateOIDCShadowUser(c *gin.Context, client *ent.Client, currentUser *ent.U
 	if nickname != "" && currentUser.Nick != nickname {
 		update.SetNick(nickname)
 		changed = true
+	}
+
+	if profile.Username != "" && !strings.EqualFold(userUsernameValue(currentUser.Username), profile.Username) {
+		existed, err := client.User.Query().
+			Where(user.UsernameEqualFold(profile.Username), user.IDNEQ(currentUser.ID)).
+			Exist(c)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to check username collision", err)
+		}
+		if !existed {
+			update.SetUsername(profile.Username)
+			changed = true
+		}
 	}
 
 	if profile.Avatar != "" && currentUser.Avatar != profile.Avatar {
@@ -811,6 +840,10 @@ func oidcPlaceholderEmail(subject string) string {
 
 func selectOIDCNickname(profile *oidcIdentityProfile) string {
 	return firstNonEmptyString(profile.Nickname, profile.Username, strings.TrimSpace(strings.Split(profile.Email, "@")[0]), "OIDC User")
+}
+
+func selectOIDCUsername(profile *oidcIdentityProfile) string {
+	return firstNonEmptyString(profile.Username, strings.TrimSpace(strings.Split(profile.Email, "@")[0]), profile.ExternalUserID, "oidc_user")
 }
 
 func firstNonEmptyString(values ...string) string {

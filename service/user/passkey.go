@@ -37,6 +37,10 @@ func (a *authnUser) WebAuthnID() []byte {
 }
 
 func (a *authnUser) WebAuthnName() string {
+	if username := userUsernameValue(a.u.Username); username != "" {
+		return username
+	}
+
 	return a.u.Email
 }
 

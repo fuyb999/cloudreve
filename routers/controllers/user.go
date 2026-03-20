@@ -86,7 +86,7 @@ func UserLoginValidation(c *gin.Context) {
 				"reason":  err.Error(),
 			},
 		}
-		if existingUser, getErr := dep.UserClient().GetByEmail(c, service.UserName); getErr == nil {
+		if existingUser, getErr := dep.UserClient().GetByUsername(c, service.UserName); getErr == nil {
 			event.UserID = existingUser.ID
 		}
 		_ = audit.Publish(c, event)

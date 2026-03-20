@@ -203,7 +203,7 @@ type AppSetting struct {
 // 开关打开后，前后端都会切换到统一认证链路；关闭时则完全回退到原有本地登录逻辑。
 type OIDCSetting struct {
 	Enabled bool
-	// DisplayName 用于登录页按钮文案，例如 “Yudao SSO”。
+	// DisplayName 用于登录页按钮文案，例如 “统一认证”。
 	DisplayName string
 	// AutoRedirect 控制是否在用户打开登录页时自动跳转到统一认证入口。
 	AutoRedirect bool
