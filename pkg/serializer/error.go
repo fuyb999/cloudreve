@@ -257,6 +257,10 @@ const (
 	CodeAnonymouseAccessDenied = 40088
 	// CodeInsufficientScope OAuth token scope insufficient
 	CodeInsufficientScope = 40089
+	// CodeSyncthingIPConflict another bound syncthing device with the same IP already exists
+	CodeSyncthingIPConflict = 40090
+	// CodeSyncthingDeviceNotRegistered syncthing device is not registered or has been unbound
+	CodeSyncthingDeviceNotRegistered = 40091
 	// CodeDBError 数据库操作失败
 	CodeDBError = 50001
 	// CodeEncryptError 加密失败

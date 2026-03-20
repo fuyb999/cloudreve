@@ -145,6 +145,18 @@ func TestCapabilitySetFromGrantProtectsRootDeleteOnly(t *testing.T) {
 	assertCapabilityEnabled(t, childCapabilities, NavigatorCapabilityDeleteFile)
 }
 
+func TestTopLevelProjectedRootGrantsCollapsesDescendants(t *testing.T) {
+	grants := []publicshare.RootGrant{
+		{RootFileID: 20, RootOwnerID: 1, RootTreePath: "10.20"},
+		{RootFileID: 30, RootOwnerID: 1, RootTreePath: "10.20.30"},
+		{RootFileID: 40, RootOwnerID: 2, RootTreePath: "10.20.30"},
+		{RootFileID: 50, RootOwnerID: 1, RootTreePath: ""},
+	}
+
+	filtered := topLevelProjectedRootGrants(grants)
+	assertProjectedGrantIDs(t, filtered, []int{20, 40, 50})
+}
+
 func TestShouldDeferPublicCapabilityCheck(t *testing.T) {
 	t.Run("public-root", func(t *testing.T) {
 		uri, err := fs.NewUriFromString("cloudreve://public")
@@ -199,5 +211,19 @@ func assertCapabilityEnabled(t *testing.T, capabilities *boolset.BooleanSet, cap
 
 	if capabilities == nil || !capabilities.Enabled(int(capability)) {
 		t.Fatalf("expected capability %d to be enabled", capability)
+	}
+}
+
+func assertProjectedGrantIDs(t *testing.T, grants []publicshare.RootGrant, expected []int) {
+	t.Helper()
+
+	if len(grants) != len(expected) {
+		t.Fatalf("unexpected grant count: got %d, want %d", len(grants), len(expected))
+	}
+
+	for index, expectedID := range expected {
+		if grants[index].RootFileID != expectedID {
+			t.Fatalf("unexpected grant at index %d: got %d, want %d", index, grants[index].RootFileID, expectedID)
+		}
 	}
 }

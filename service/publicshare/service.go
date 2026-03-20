@@ -139,8 +139,9 @@ func buildFolderResponse(c *gin.Context, file *ent.File, rule *acl.Rule, ownerBa
 	dep := dependency.FromContext(c)
 	publicURI := acl.BuildPublicURI()
 	ownerURI := publicURI
-	if ownerBase != nil {
-		ownerURI = ownerBase
+	displayBase := publicDisplayOwnerBase(ownerBase)
+	if displayBase != nil {
+		ownerURI = displayBase
 	}
 
 	if !isRoot {
@@ -275,11 +276,11 @@ func buildResourceSnapshot(c *gin.Context, file *ent.File, uri *fs.URI, ownerBas
 		publicURI = uri.String()
 	}
 	ownerURI := ""
-	if ownerBase != nil {
+	if displayBase := publicDisplayOwnerBase(ownerBase); displayBase != nil {
 		if uri != nil && len(uri.Elements()) > 0 {
-			ownerURI = ownerBase.Join(uri.Elements()...).String()
+			ownerURI = displayBase.Join(uri.Elements()...).String()
 		} else {
-			ownerURI = ownerBase.String()
+			ownerURI = displayBase.String()
 		}
 	}
 
@@ -296,6 +297,20 @@ func buildResourceSnapshot(c *gin.Context, file *ent.File, uri *fs.URI, ownerBas
 		Type:         file.Type,
 		HasChildren:  file.Type == int(types.FileTypeFolder) && file.FileChildren > 0,
 	}
+}
+
+func publicDisplayOwnerBase(ownerBase *fs.URI) *fs.URI {
+	if ownerBase == nil {
+		return nil
+	}
+
+	// 真实公共根“公共文件”是系统隐藏根，展示给管理端时裁掉这一层，
+	// 这样一级授权目录显示出来就是用户感知到的可见层级。
+	if len(ownerBase.Elements()) > 0 {
+		return ownerBase.DirUri()
+	}
+
+	return ownerBase
 }
 
 func resolveManagedPublicFile(c *gin.Context, raw string) (*ent.File, *fs.URI, *fs.URI, error) {

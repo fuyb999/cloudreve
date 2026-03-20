@@ -202,6 +202,7 @@ func (m *manager) MoveOrCopy(ctx context.Context, src []*fs.URI, dst *fs.URI, is
 }
 
 func (m *manager) SoftDelete(ctx context.Context, path ...*fs.URI) error {
+	ctx = withPublicBypass(ctx, path...)
 	return m.fs.SoftDelete(ctx, path...)
 }
 

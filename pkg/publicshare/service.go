@@ -54,6 +54,12 @@ func (s *Service) Root(ctx context.Context) (*ent.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get public root: %w", err)
 	}
+	if root.Name != DefaultRootName {
+		root, err = s.fileClient.Rename(ctx, root, DefaultRootName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to normalize public root name: %w", err)
+		}
+	}
 
 	return root, nil
 }

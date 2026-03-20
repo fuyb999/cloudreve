@@ -20,6 +20,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+	"github.com/samber/lo"
 )
 
 var publicNavigatorCapability = &boolset.BooleanSet{}
@@ -151,7 +152,7 @@ func (n *publicNavigator) refreshVisibility(ctx context.Context) (*publicshare.V
 	return visibility, nil
 }
 
-func (n *publicNavigator) rootCapabilities() *boolset.BooleanSet {
+func (n *publicNavigator) fallbackRootCapabilities() *boolset.BooleanSet {
 	res := &boolset.BooleanSet{}
 	if n.isAdmin() {
 		boolset.Sets(map[NavigatorCapability]bool{
@@ -178,6 +179,30 @@ func (n *publicNavigator) rootCapabilities() *boolset.BooleanSet {
 		NavigatorCapabilityInfo:         true,
 	}, res)
 	return res
+}
+
+func (n *publicNavigator) rootCapabilities(ctx context.Context) *boolset.BooleanSet {
+	if n.root == nil || n.root.Model == nil || n.root.ID() <= 0 {
+		return n.fallbackRootCapabilities()
+	}
+
+	decision, err := n.publicService.CheckActionByFile(ctx, n.user, n.root.Model, publicshare.ActionCreate)
+	if err != nil || decision == nil {
+		return n.fallbackRootCapabilities()
+	}
+
+	capabilities := capabilitySetFromActions(decision.Actions)
+	if capabilities == nil {
+		return n.fallbackRootCapabilities()
+	}
+
+	// 隐藏根本身始终允许进入和查看；真正能否在其下创建一级目录由授权服务返回的动作集控制。
+	boolset.Sets(map[NavigatorCapability]bool{
+		NavigatorCapabilityListChildren: true,
+		NavigatorCapabilityEnterFolder:  true,
+		NavigatorCapabilityInfo:         true,
+	}, capabilities)
+	return capabilities
 }
 
 func capabilitySetFromActions(actions map[publicshare.Action]bool) *boolset.BooleanSet {
@@ -290,7 +315,7 @@ func (n *publicNavigator) filter(ctx context.Context, file *File) (*File, bool) 
 	}
 
 	if file == n.root {
-		file.CapabilitiesBs = n.rootCapabilities()
+		file.CapabilitiesBs = n.rootCapabilities(ctx)
 		return file, true
 	}
 
@@ -317,28 +342,44 @@ func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 	if n.root == nil {
 		rootModel, err := n.publicService.Root(ctx)
 		if err != nil {
-			if !n.isAdmin() {
-				return nil, fs.ErrPathNotExist.WithError(err)
-			}
-
-			rootModel, err = n.publicService.EnsureRoot(ctx, n.user)
-			if err != nil {
-				return nil, fs.ErrPathNotExist.WithError(err)
+			// 公共文件真实根是系统隐藏根。
+			// 当它尚未初始化时，任何已登录用户进入公共文件都允许触发一次补建，
+			// 避免系统首次使用还依赖管理员先手动点开公共文件。
+			if n.user != nil {
+				rootModel, err = n.publicService.EnsureRoot(ctx, n.user)
+				if err != nil {
+					rootModel = nil
+				}
 			}
 		}
 
 		rootUri := newPublicUri()
-		ownerUri, err := n.publicService.RootOwnerURI(ctx, rootModel)
-		if err != nil {
+		ownerUri := rootUri
+		if rootModel != nil {
+			ownerUri, err = n.publicService.RootOwnerURI(ctx, rootModel)
+		}
+		if err != nil || rootModel == nil {
 			ownerUri = rootUri
 		}
 
-		n.root = newFile(nil, rootModel)
+		if rootModel != nil {
+			n.root = newFile(nil, rootModel)
+		} else {
+			n.root = newFile(nil, &ent.File{
+				Name:    publicshare.DefaultRootName,
+				Type:    int(types.FileTypeFolder),
+				OwnerID: lo.Ternary(n.user != nil, n.user.ID, 0),
+			})
+		}
 		n.root.Path[pathIndexRoot] = ownerUri
 		n.root.Path[pathIndexUser] = rootUri
-		n.root.OwnerModel = &ent.User{ID: rootModel.OwnerID}
+		if rootModel != nil {
+			n.root.OwnerModel = &ent.User{ID: rootModel.OwnerID}
+		} else {
+			n.root.OwnerModel = n.user
+		}
 		n.root.IsUserRoot = true
-		n.root.CapabilitiesBs = n.rootCapabilities()
+		n.root.CapabilitiesBs = n.rootCapabilities(ctx)
 	}
 
 	if _, err := n.refreshVisibility(ctx); err != nil {
@@ -451,10 +492,11 @@ func (n *publicNavigator) projectRootChildren(ctx context.Context, args *ListArg
 		}, nil
 	}
 
-	projected := make([]*File, 0, len(visibility.RootGrants))
-	seen := make(map[int]struct{}, len(visibility.RootGrants))
+	displayGrants := topLevelProjectedRootGrants(visibility.RootGrants)
+	projected := make([]*File, 0, len(displayGrants))
+	seen := make(map[int]struct{}, len(displayGrants))
 	expandedPublicRoot := false
-	for _, grant := range visibility.RootGrants {
+	for _, grant := range displayGrants {
 		if grant.RootFileID <= 0 {
 			continue
 		}
@@ -596,6 +638,9 @@ func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshar
 	if target == nil {
 		return nil, fmt.Errorf("file %d is empty", grant.RootFileID)
 	}
+	if _, err := n.relativeElementsFromPublicRoot(ctx, target); err != nil {
+		return nil, err
+	}
 
 	projected := newFile(nil, target)
 	projected.Parent = n.root
@@ -616,6 +661,56 @@ func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshar
 		n.root.mu.Unlock()
 	}
 	return projected, nil
+}
+
+func topLevelProjectedRootGrants(grants []publicshare.RootGrant) []publicshare.RootGrant {
+	if len(grants) <= 1 {
+		return grants
+	}
+
+	sorted := append([]publicshare.RootGrant(nil), grants...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		leftDepth := projectedGrantDepth(sorted[i])
+		rightDepth := projectedGrantDepth(sorted[j])
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		if sorted[i].RootOwnerID != sorted[j].RootOwnerID {
+			return sorted[i].RootOwnerID < sorted[j].RootOwnerID
+		}
+		if sorted[i].RootTreePath != sorted[j].RootTreePath {
+			return sorted[i].RootTreePath < sorted[j].RootTreePath
+		}
+		return sorted[i].RootFileID < sorted[j].RootFileID
+	})
+
+	filtered := make([]publicshare.RootGrant, 0, len(sorted))
+	for _, grant := range sorted {
+		skip := false
+		for _, existing := range filtered {
+			if existing.RootOwnerID != grant.RootOwnerID {
+				continue
+			}
+			if publicshare.RootGrantWithinTree(existing.RootTreePath, grant) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, grant)
+		}
+	}
+
+	return filtered
+}
+
+func projectedGrantDepth(grant publicshare.RootGrant) int {
+	treePath := strings.TrimSpace(grant.RootTreePath)
+	if treePath == "" {
+		return int(^uint(0) >> 1)
+	}
+
+	return len(strings.Split(treePath, "."))
 }
 
 func (n *publicNavigator) ownerURIForTarget(ctx context.Context, target *ent.File) (*fs.URI, error) {
@@ -907,7 +1002,19 @@ func (n *publicNavigator) ExecuteHook(ctx context.Context, hookType fs.HookType,
 }
 
 func (n *publicNavigator) GetView(ctx context.Context, file *File) *types.ExplorerView {
-	return file.View()
+	if n.user == nil {
+		return getDefaultView()
+	}
+
+	myRootModel, err := n.fileClient.Root(ctx, n.user)
+	if err != nil || myRootModel == nil {
+		return getDefaultView()
+	}
+
+	myRoot := newFile(nil, myRootModel)
+	myRoot.OwnerModel = n.user
+	myRoot.IsUserRoot = true
+	return myRoot.View()
 }
 
 func newPublicUri() *fs.URI {

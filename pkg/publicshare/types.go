@@ -17,7 +17,7 @@ const (
 	PublicMockStateSetting  = "public_mock_state"
 
 	FolderRuleMetadataKey = "sys:public_rule"
-	DefaultRootName       = "Public"
+	DefaultRootName       = "公共文件"
 )
 
 type Action string

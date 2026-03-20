@@ -1,6 +1,7 @@
 package setting
 
 import (
+	"errors"
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
@@ -27,6 +28,11 @@ type (
 		Platform      string         `json:"platform" binding:"omitempty,max=255"`
 	}
 	UpsertSyncthingDeviceParamCtx struct{}
+
+	DeleteSyncthingDeviceService struct {
+		DeviceID string `uri:"deviceID" binding:"required,min=1,max=255"`
+	}
+	DeleteSyncthingDeviceParamCtx struct{}
 
 	SyncthingHeartbeatService struct {
 		DeviceID string `json:"device_id" binding:"required,min=1,max=255"`
@@ -56,12 +62,12 @@ func (service *ListSyncthingDevicesService) List(c *gin.Context) (*ListSyncthing
 	return BuildListSyncthingDeviceResponse(devices, time.Now()), nil
 }
 
-func (service *UpsertSyncthingDeviceService) Upsert(c *gin.Context) (*SyncthingDevice, error) {
+func (service *UpsertSyncthingDeviceService) Upsert(c *gin.Context) (*UpsertSyncthingDeviceResponse, error) {
 	dep := dependency.FromContext(c)
 	user := inventory.UserFromContext(c)
 	now := time.Now()
 
-	device, err := dep.SyncthingDeviceClient().Upsert(c, &inventory.UpsertSyncthingDeviceArgs{
+	result, err := dep.SyncthingDeviceClient().Upsert(c, &inventory.UpsertSyncthingDeviceArgs{
 		UserID:        user.ID,
 		DeviceID:      service.DeviceID,
 		ShortID:       service.ShortID,
@@ -75,11 +81,39 @@ func (service *UpsertSyncthingDeviceService) Upsert(c *gin.Context) (*SyncthingD
 		Online:        true,
 	})
 	if err != nil {
+		if errors.Is(err, inventory.ErrSyncthingDeviceIPConflict) {
+			return nil, serializer.NewError(
+				serializer.CodeSyncthingIPConflict,
+				"Another bound Syncthing device with the same IP already exists. Unbind it on the Cloudreve devices page before registering again.",
+				err,
+			)
+		}
+		if errors.Is(err, inventory.ErrSyncthingDeviceNotRegistered) {
+			return nil, serializer.NewError(
+				serializer.CodeSyncthingDeviceNotRegistered,
+				"Syncthing device has been unbound. Register a new client from the same IP to restore the previous configuration.",
+				err,
+			)
+		}
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to save syncthing device", err)
 	}
 
-	resp := BuildSyncthingDevice(device, now)
-	return &resp, nil
+	return BuildUpsertSyncthingDeviceResponse(result, now), nil
+}
+
+func (service *DeleteSyncthingDeviceService) Unbind(c *gin.Context) error {
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+
+	device, err := dep.SyncthingDeviceClient().Unbind(c, user.ID, service.DeviceID)
+	if err != nil {
+		return serializer.NewError(serializer.CodeDBError, "Failed to unbind syncthing device", err)
+	}
+	if device == nil {
+		return serializer.NewError(serializer.CodeNotFound, "Syncthing device not found", nil)
+	}
+
+	return nil
 }
 
 func (service *SyncthingHeartbeatService) Heartbeat(c *gin.Context) (*SyncthingDevice, error) {
@@ -97,6 +131,13 @@ func (service *SyncthingHeartbeatService) Heartbeat(c *gin.Context) (*SyncthingD
 		Online:     true,
 	})
 	if err != nil {
+		if errors.Is(err, inventory.ErrSyncthingDeviceNotRegistered) {
+			return nil, serializer.NewError(
+				serializer.CodeSyncthingDeviceNotRegistered,
+				"Syncthing device is not registered or has been unbound.",
+				err,
+			)
+		}
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to update syncthing heartbeat", err)
 	}
 
@@ -124,6 +165,13 @@ func (service *SyncthingActivityService) Report(c *gin.Context) (*SyncthingDevic
 		Online:     true,
 	})
 	if err != nil {
+		if errors.Is(err, inventory.ErrSyncthingDeviceNotRegistered) {
+			return nil, serializer.NewError(
+				serializer.CodeSyncthingDeviceNotRegistered,
+				"Syncthing device is not registered or has been unbound.",
+				err,
+			)
+		}
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to update syncthing activity", err)
 	}
 

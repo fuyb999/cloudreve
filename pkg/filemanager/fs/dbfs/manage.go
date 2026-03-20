@@ -2,6 +2,7 @@ package dbfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -42,9 +43,12 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 		ancestor = o.ancestor
 	} else {
 		ancestor, err = f.getFileByPath(ctx, navigator, path)
-		if err != nil && !ent.IsNotFound(err) {
+		if err != nil && !ent.IsNotFound(err) && !errors.Is(err, fs.ErrPathNotExist) {
 			return nil, fmt.Errorf("failed to get ancestor: %w", err)
 		}
+	}
+	if ancestor == nil || ancestor.IsNil() {
+		return nil, fs.ErrPathNotExist
 	}
 
 	if ancestor.Uri(false).IsSame(path, hashid.EncodeUserID(f.hasher, f.user.ID)) {
@@ -984,6 +988,8 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 
 	// newTargetsMap is the map of between new target files in first layer, and its src file ID.
 	newTargetsMap := make(map[int]*ent.File)
+	allCopiedTargetsMap := make(map[int]*ent.File)
+	copiedUserURI := make(map[int]*fs.URI)
 	storageDiff := make(inventory.StorageDiff)
 	indexToCopy := make([]fs.IndexDiffCopyDetails, 0)
 	var diff inventory.StorageDiff
@@ -1035,14 +1041,31 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 					newTargetsMap[k] = v[0]
 				}
 			}
+			for k, v := range initialDstMap {
+				if len(v) == 0 || v[0] == nil {
+					continue
+				}
+				allCopiedTargetsMap[k] = v[0]
+			}
 
 			for _, file := range targets {
+				copiedFile := allCopiedTargetsMap[file.ID()]
+				if copiedFile == nil {
+					continue
+				}
+
+				parentURI, ok := copiedUserURI[file.Model.FileChildren]
+				if !ok || parentURI == nil {
+					parentURI = destination.Uri(false)
+				}
+				copiedURI := parentURI.Join(copiedFile.Name)
+				copiedUserURI[file.ID()] = copiedURI
+
 				if _, ok := file.Metadata()[FullTextIndexKey]; ok {
-					copiedFile := newTargetsMap[file.ID()]
 					indexToCopy = append(indexToCopy, fs.IndexDiffCopyDetails{
 						OriginalFileID: file.ID(),
 						FileID:         copiedFile.ID,
-						Uri:            *destination.Uri(false).Join(file.Name()),
+						Uri:            *copiedURI,
 						EntityID:       copiedFile.PrimaryEntity,
 						OwnerID:        destination.OwnerID(),
 					})

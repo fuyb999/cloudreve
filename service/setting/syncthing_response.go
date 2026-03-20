@@ -4,10 +4,17 @@ import (
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory"
 )
 
 type ListSyncthingDeviceResponse struct {
 	Devices []SyncthingDevice `json:"devices"`
+}
+
+type UpsertSyncthingDeviceResponse struct {
+	Device              SyncthingDevice `json:"device"`
+	RestoreConfig       map[string]any  `json:"restore_config,omitempty"`
+	RestoreFromDeviceID string          `json:"restore_from_device_id,omitempty"`
 }
 
 type SyncthingDevice struct {
@@ -22,6 +29,7 @@ type SyncthingDevice struct {
 	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
 	LastSyncAt    *time.Time `json:"last_sync_at,omitempty"`
 	Online        bool       `json:"online"`
+	IsBound       bool       `json:"is_bound"`
 }
 
 func BuildListSyncthingDeviceResponse(devices []*ent.SyncthingDevice, now time.Time) *ListSyncthingDeviceResponse {
@@ -48,5 +56,18 @@ func BuildSyncthingDevice(device *ent.SyncthingDevice, now time.Time) SyncthingD
 		LastSeenAt:    device.LastSeenAt,
 		LastSyncAt:    device.LastSyncAt,
 		Online:        isSyncthingDeviceOnline(device, now),
+		IsBound:       device.IsBound,
+	}
+}
+
+func BuildUpsertSyncthingDeviceResponse(result *inventory.UpsertSyncthingDeviceResult, now time.Time) *UpsertSyncthingDeviceResponse {
+	if result == nil || result.Device == nil {
+		return nil
+	}
+
+	return &UpsertSyncthingDeviceResponse{
+		Device:              BuildSyncthingDevice(result.Device, now),
+		RestoreConfig:       result.RestoreConfig,
+		RestoreFromDeviceID: result.RestoreFromDeviceID,
 	}
 }

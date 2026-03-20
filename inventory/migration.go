@@ -292,10 +292,10 @@ const (
 )
 
 var oauthClientSyncthingRedirectURIs = []string{
-	"http://127.0.0.1:8384/rest/noauth/auth/cloudreve/callback",
-	"http://localhost:8384/rest/noauth/auth/cloudreve/callback",
-	"https://127.0.0.1:8384/rest/noauth/auth/cloudreve/callback",
-	"https://localhost:8384/rest/noauth/auth/cloudreve/callback",
+	"http://127.0.0.1:18384/rest/noauth/auth/cloudreve/callback",
+	"http://localhost:18384/rest/noauth/auth/cloudreve/callback",
+	"https://127.0.0.1:18384/rest/noauth/auth/cloudreve/callback",
+	"https://localhost:18384/rest/noauth/auth/cloudreve/callback",
 }
 
 func migrateOAuthClient(l logging.Logger, client *ent.Client, ctx context.Context) error {

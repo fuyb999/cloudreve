@@ -2,6 +2,7 @@ package dbfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"path"
@@ -83,8 +84,11 @@ func (f *DBFS) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ..
 	// Get most recent ancestor or target file
 	ctx = context.WithValue(ctx, inventory.LoadFileEntity{}, true)
 	ancestor, err := f.getFileByPath(ctx, navigator, req.Props.Uri)
-	if err != nil && !ent.IsNotFound(err) {
+	if err != nil && !ent.IsNotFound(err) && !errors.Is(err, fs.ErrPathNotExist) {
 		return nil, fmt.Errorf("failed to get ancestor: %w", err)
+	}
+	if ancestor == nil || ancestor.IsNil() {
+		return nil, fs.ErrPathNotExist
 	}
 
 	if ancestor.IsSymbolic() {

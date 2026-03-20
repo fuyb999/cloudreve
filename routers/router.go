@@ -1407,6 +1407,11 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 						controllers.FromJSON[setting.UpsertSyncthingDeviceService](setting.UpsertSyncthingDeviceParamCtx{}),
 						controllers.UpsertSyncthingDevice,
 					)
+					syncthing.DELETE(":deviceID",
+						middleware.RequiredScopes(types.ScopeUserInfoWrite),
+						controllers.FromUri[setting.DeleteSyncthingDeviceService](setting.DeleteSyncthingDeviceParamCtx{}),
+						controllers.UnbindSyncthingDevice,
+					)
 					syncthing.POST("heartbeat",
 						middleware.RequiredScopes(types.ScopeUserInfoWrite),
 						controllers.FromJSON[setting.SyncthingHeartbeatService](setting.SyncthingHeartbeatParamCtx{}),

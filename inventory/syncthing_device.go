@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 )
 
 type (
+	UpsertSyncthingDeviceResult struct {
+		Device              *ent.SyncthingDevice
+		RestoreConfig       map[string]any
+		RestoreFromDeviceID string
+	}
+
 	UpsertSyncthingDeviceArgs struct {
 		UserID        int
 		DeviceID      string
@@ -50,10 +57,16 @@ type (
 	SyncthingDeviceClient interface {
 		TxOperator
 		ListByUser(ctx context.Context, userID int) ([]*ent.SyncthingDevice, error)
-		Upsert(ctx context.Context, args *UpsertSyncthingDeviceArgs) (*ent.SyncthingDevice, error)
+		Upsert(ctx context.Context, args *UpsertSyncthingDeviceArgs) (*UpsertSyncthingDeviceResult, error)
 		Heartbeat(ctx context.Context, args *SyncthingDeviceHeartbeatArgs) (*ent.SyncthingDevice, error)
 		ReportActivity(ctx context.Context, args *SyncthingDeviceActivityArgs) (*ent.SyncthingDevice, error)
+		Unbind(ctx context.Context, userID int, deviceID string) (*ent.SyncthingDevice, error)
 	}
+)
+
+var (
+	ErrSyncthingDeviceIPConflict    = errors.New("syncthing device ip conflict")
+	ErrSyncthingDeviceNotRegistered = errors.New("syncthing device not registered")
 )
 
 func NewSyncthingDeviceClient(client *ent.Client, _ conf.DBType) SyncthingDeviceClient {
@@ -85,80 +98,101 @@ func (c *syncthingDeviceClient) ListByUser(ctx context.Context, userID int) ([]*
 		All(ctx)
 }
 
-func (c *syncthingDeviceClient) Upsert(ctx context.Context, args *UpsertSyncthingDeviceArgs) (*ent.SyncthingDevice, error) {
+func (c *syncthingDeviceClient) Upsert(ctx context.Context, args *UpsertSyncthingDeviceArgs) (*UpsertSyncthingDeviceResult, error) {
 	device, err := c.find(ctx, args.UserID, args.DeviceID)
 	if err != nil {
 		return nil, err
 	}
 
-	if device == nil {
-		create := c.client.SyncthingDevice.Create().
-			SetOwnerID(args.UserID).
+	if device != nil {
+		if !device.IsBound {
+			return nil, ErrSyncthingDeviceNotRegistered
+		}
+
+		res, updateErr := c.client.SyncthingDevice.UpdateOneID(device.ID).
 			SetDeviceID(args.DeviceID).
-			SetOnline(args.Online)
-		if !args.LastSeenAt.IsZero() {
-			create.SetLastSeenAt(args.LastSeenAt)
+			SetShortID(args.ShortID).
+			SetLastIP(args.LastIP).
+			SetAPIKey(args.APIKey).
+			SetJSONRaw(args.JSONRaw).
+			SetBindURI(args.BindURI).
+			SetClientVersion(args.ClientVersion).
+			SetPlatform(args.Platform).
+			SetOnline(args.Online).
+			SetIsBound(true).
+			SetLastSeenAt(args.LastSeenAt).
+			Save(ctx)
+		if updateErr != nil {
+			return nil, fmt.Errorf("failed to update syncthing device: %w", updateErr)
 		}
-		if args.ShortID != "" {
-			create.SetShortID(args.ShortID)
-		}
-		if args.LastIP != "" {
-			create.SetLastIP(args.LastIP)
-		}
-		if args.APIKey != "" {
-			create.SetAPIKey(args.APIKey)
-		}
-		if args.JSONRaw != nil {
-			create.SetJSONRaw(args.JSONRaw)
-		}
-		if args.BindURI != "" {
-			create.SetBindURI(args.BindURI)
-		}
-		if args.ClientVersion != "" {
-			create.SetClientVersion(args.ClientVersion)
-		}
-		if args.Platform != "" {
-			create.SetPlatform(args.Platform)
-		}
-		res, createErr := create.Save(ctx)
-		if createErr != nil {
-			return nil, fmt.Errorf("failed to create syncthing device: %w", createErr)
-		}
-		return res, nil
+
+		return &UpsertSyncthingDeviceResult{Device: res}, nil
 	}
 
-	update := c.client.SyncthingDevice.UpdateOneID(device.ID).
-		SetOnline(args.Online)
+	conflict, err := c.findByIP(ctx, args.UserID, args.LastIP, true)
+	if err != nil {
+		return nil, err
+	}
+	if conflict != nil {
+		return nil, ErrSyncthingDeviceIPConflict
+	}
+
+	candidate, err := c.findByIP(ctx, args.UserID, args.LastIP, false)
+	if err != nil {
+		return nil, err
+	}
+	if candidate != nil {
+		res, updateErr := c.client.SyncthingDevice.UpdateOneID(candidate.ID).
+			SetDeviceID(args.DeviceID).
+			SetShortID(args.ShortID).
+			SetLastIP(args.LastIP).
+			SetAPIKey(args.APIKey).
+			SetJSONRaw(args.JSONRaw).
+			SetBindURI(args.BindURI).
+			SetClientVersion(args.ClientVersion).
+			SetPlatform(args.Platform).
+			SetOnline(args.Online).
+			SetIsBound(true).
+			SetLastSeenAt(args.LastSeenAt).
+			Save(ctx)
+		if updateErr != nil {
+			return nil, fmt.Errorf("failed to migrate syncthing device binding: %w", updateErr)
+		}
+
+		restoreConfig := candidate.JSONRaw
+		if len(restoreConfig) == 0 {
+			restoreConfig = nil
+		}
+
+		return &UpsertSyncthingDeviceResult{
+			Device:              res,
+			RestoreConfig:       restoreConfig,
+			RestoreFromDeviceID: candidate.DeviceID,
+		}, nil
+	}
+
+	create := c.client.SyncthingDevice.Create().
+		SetOwnerID(args.UserID).
+		SetDeviceID(args.DeviceID).
+		SetShortID(args.ShortID).
+		SetLastIP(args.LastIP).
+		SetAPIKey(args.APIKey).
+		SetJSONRaw(args.JSONRaw).
+		SetBindURI(args.BindURI).
+		SetClientVersion(args.ClientVersion).
+		SetPlatform(args.Platform).
+		SetOnline(args.Online).
+		SetIsBound(true)
 	if !args.LastSeenAt.IsZero() {
-		update.SetLastSeenAt(args.LastSeenAt)
-	}
-	if args.ShortID != "" {
-		update.SetShortID(args.ShortID)
-	}
-	if args.LastIP != "" {
-		update.SetLastIP(args.LastIP)
-	}
-	if args.APIKey != "" {
-		update.SetAPIKey(args.APIKey)
-	}
-	if args.JSONRaw != nil {
-		update.SetJSONRaw(args.JSONRaw)
-	}
-	if args.BindURI != "" {
-		update.SetBindURI(args.BindURI)
-	}
-	if args.ClientVersion != "" {
-		update.SetClientVersion(args.ClientVersion)
-	}
-	if args.Platform != "" {
-		update.SetPlatform(args.Platform)
+		create.SetLastSeenAt(args.LastSeenAt)
 	}
 
-	res, updateErr := update.Save(ctx)
-	if updateErr != nil {
-		return nil, fmt.Errorf("failed to update syncthing device: %w", updateErr)
+	res, createErr := create.Save(ctx)
+	if createErr != nil {
+		return nil, fmt.Errorf("failed to create syncthing device: %w", createErr)
 	}
-	return res, nil
+
+	return &UpsertSyncthingDeviceResult{Device: res}, nil
 }
 
 func (c *syncthingDeviceClient) Heartbeat(ctx context.Context, args *SyncthingDeviceHeartbeatArgs) (*ent.SyncthingDevice, error) {
@@ -166,29 +200,39 @@ func (c *syncthingDeviceClient) Heartbeat(ctx context.Context, args *SyncthingDe
 	if err != nil {
 		return nil, err
 	}
+	if device == nil || !device.IsBound {
+		return nil, ErrSyncthingDeviceNotRegistered
+	}
 
-	if device == nil {
-		create := c.client.SyncthingDevice.Create().
-			SetOwnerID(args.UserID).
-			SetDeviceID(args.DeviceID).
-			SetOnline(args.Online)
-		if args.ShortID != "" {
-			create.SetShortID(args.ShortID)
-		}
-		if args.LastIP != "" {
-			create.SetLastIP(args.LastIP)
-		}
-		if args.BindURI != "" {
-			create.SetBindURI(args.BindURI)
-		}
-		if !args.LastSeenAt.IsZero() {
-			create.SetLastSeenAt(args.LastSeenAt)
-		}
-		res, createErr := create.Save(ctx)
-		if createErr != nil {
-			return nil, fmt.Errorf("failed to create syncthing device heartbeat: %w", createErr)
-		}
-		return res, nil
+	update := c.client.SyncthingDevice.UpdateOneID(device.ID).
+		SetOnline(args.Online)
+	if args.ShortID != "" {
+		update.SetShortID(args.ShortID)
+	}
+	if args.LastIP != "" {
+		update.SetLastIP(args.LastIP)
+	}
+	if args.BindURI != "" {
+		update.SetBindURI(args.BindURI)
+	}
+	if !args.LastSeenAt.IsZero() {
+		update.SetLastSeenAt(args.LastSeenAt)
+	}
+
+	res, updateErr := update.Save(ctx)
+	if updateErr != nil {
+		return nil, fmt.Errorf("failed to update syncthing device activity: %w", updateErr)
+	}
+	return res, nil
+}
+
+func (c *syncthingDeviceClient) ReportActivity(ctx context.Context, args *SyncthingDeviceActivityArgs) (*ent.SyncthingDevice, error) {
+	device, err := c.find(ctx, args.UserID, args.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if device == nil || !device.IsBound {
+		return nil, ErrSyncthingDeviceNotRegistered
 	}
 
 	update := c.client.SyncthingDevice.UpdateOneID(device.ID).
@@ -213,60 +257,21 @@ func (c *syncthingDeviceClient) Heartbeat(ctx context.Context, args *SyncthingDe
 	return res, nil
 }
 
-func (c *syncthingDeviceClient) ReportActivity(ctx context.Context, args *SyncthingDeviceActivityArgs) (*ent.SyncthingDevice, error) {
-	device, err := c.find(ctx, args.UserID, args.DeviceID)
+func (c *syncthingDeviceClient) Unbind(ctx context.Context, userID int, deviceID string) (*ent.SyncthingDevice, error) {
+	device, err := c.find(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
-
 	if device == nil {
-		create := c.client.SyncthingDevice.Create().
-			SetOwnerID(args.UserID).
-			SetDeviceID(args.DeviceID).
-			SetOnline(args.Online)
-		if args.ShortID != "" {
-			create.SetShortID(args.ShortID)
-		}
-		if args.LastIP != "" {
-			create.SetLastIP(args.LastIP)
-		}
-		if args.BindURI != "" {
-			create.SetBindURI(args.BindURI)
-		}
-		if !args.LastSeenAt.IsZero() {
-			create.SetLastSeenAt(args.LastSeenAt)
-		}
-		if !args.LastSyncAt.IsZero() {
-			create.SetLastSyncAt(args.LastSyncAt)
-		}
-		res, createErr := create.Save(ctx)
-		if createErr != nil {
-			return nil, fmt.Errorf("failed to create syncthing device activity: %w", createErr)
-		}
-		return res, nil
+		return nil, nil
 	}
 
-	update := c.client.SyncthingDevice.UpdateOneID(device.ID).
-		SetOnline(args.Online)
-	if args.ShortID != "" {
-		update.SetShortID(args.ShortID)
-	}
-	if args.LastIP != "" {
-		update.SetLastIP(args.LastIP)
-	}
-	if args.BindURI != "" {
-		update.SetBindURI(args.BindURI)
-	}
-	if !args.LastSeenAt.IsZero() {
-		update.SetLastSeenAt(args.LastSeenAt)
-	}
-	if !args.LastSyncAt.IsZero() {
-		update.SetLastSyncAt(args.LastSyncAt)
-	}
-
-	res, updateErr := update.Save(ctx)
+	res, updateErr := c.client.SyncthingDevice.UpdateOneID(device.ID).
+		SetIsBound(false).
+		SetOnline(false).
+		Save(ctx)
 	if updateErr != nil {
-		return nil, fmt.Errorf("failed to update syncthing device activity: %w", updateErr)
+		return nil, fmt.Errorf("failed to unbind syncthing device: %w", updateErr)
 	}
 	return res, nil
 }
@@ -283,6 +288,31 @@ func (c *syncthingDeviceClient) find(ctx context.Context, userID int, deviceID s
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query syncthing device: %w", err)
+	}
+	return res, nil
+}
+
+func (c *syncthingDeviceClient) findByIP(ctx context.Context, userID int, lastIP string, isBound bool) (*ent.SyncthingDevice, error) {
+	if lastIP == "" {
+		return nil, nil
+	}
+
+	res, err := c.client.SyncthingDevice.Query().
+		Where(
+			syncthingdevice.OwnerID(userID),
+			syncthingdevice.LastIP(lastIP),
+			syncthingdevice.IsBound(isBound),
+		).
+		Order(
+			syncthingdevice.ByUpdatedAt(sql.OrderDesc()),
+			syncthingdevice.ByID(sql.OrderDesc()),
+		).
+		First(ctx)
+	if ent.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query syncthing device by ip: %w", err)
 	}
 	return res, nil
 }
