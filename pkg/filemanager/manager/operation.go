@@ -362,6 +362,8 @@ func (l *manager) CreateOrUpdateShare(ctx context.Context, path *fs.URI, args *C
 	props := &types.ShareProps{
 		ShareView:  args.ShareView,
 		ShowReadMe: args.ShowReadMe,
+		// 公共文件分享不是源文件 owner 独占创建，后续访问校验需要识别这类分享。
+		PublicSource: isPublicShare,
 	}
 
 	share, err := shareClient.Upsert(ctx, &inventory.CreateShareParams{

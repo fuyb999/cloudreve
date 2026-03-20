@@ -232,9 +232,16 @@ func IsValidShare(share *ent.Share) error {
 
 	// Check source file status
 	file, err := share.Edges.FileOrErr()
-	if err != nil || file.FileChildren == 0 || file.OwnerID != owner.ID {
+	if err != nil || file.FileChildren == 0 {
 		// Source file already deleted
 		return ErrSourceFileInvalid
+	}
+	if file.OwnerID != owner.ID {
+		// 公共文件分享允许“分享创建者”和“源文件真实 owner”不同。
+		// 普通个人分享仍维持原先 owner 一致性约束，避免把跨 owner 的异常数据误判为有效。
+		if share.Props == nil || !share.Props.PublicSource {
+			return ErrSourceFileInvalid
+		}
 	}
 
 	return nil

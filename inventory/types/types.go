@@ -205,6 +205,9 @@ type (
 		ShareView bool `json:"share_view,omitempty"`
 		// Whether to automatically show readme file in share view
 		ShowReadMe bool `json:"show_read_me,omitempty"`
+		// PublicSource 标记该分享来自公共文件投影视图。
+		// 这类分享允许“分享创建者”和“源文件真实 owner”不是同一个人。
+		PublicSource bool `json:"public_source,omitempty"`
 	}
 
 	OAuthClientProps struct {
