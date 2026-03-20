@@ -184,6 +184,69 @@ func TestSyncthingDeviceClientRequiresBoundRegistrationForHeartbeatActivityAndRe
 	}
 }
 
+func TestSyncthingDeviceClientDeleteRemovesDevicePermanently(t *testing.T) {
+	client := newSyncthingDeviceTestClient(t)
+	defer client.Close()
+
+	ctx := context.Background()
+	user := newSyncthingDeviceTestUser(t, ctx, client)
+	deviceClient := NewSyncthingDeviceClient(client, "")
+
+	if _, err := deviceClient.Upsert(ctx, &UpsertSyncthingDeviceArgs{
+		UserID:   user.ID,
+		DeviceID: "OLD-DEVICE",
+		ShortID:  "OLD123",
+		LastIP:   "10.0.0.6",
+		APIKey:   "api-old",
+		JSONRaw: map[string]any{
+			"profile": "old",
+			"folders": []any{"docs"},
+		},
+		BindURI:    "cloudreve://my/docs",
+		LastSeenAt: time.Now(),
+		Online:     true,
+	}); err != nil {
+		t.Fatalf("failed to create device: %v", err)
+	}
+
+	deleted, err := deviceClient.Delete(ctx, user.ID, "OLD-DEVICE")
+	if err != nil {
+		t.Fatalf("failed to delete device: %v", err)
+	}
+	if !deleted {
+		t.Fatal("expected device to be deleted")
+	}
+
+	devices, err := deviceClient.ListByUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("failed to list devices: %v", err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("expected device list to be empty after delete, got %#v", devices)
+	}
+
+	recreated, err := deviceClient.Upsert(ctx, &UpsertSyncthingDeviceArgs{
+		UserID:     user.ID,
+		DeviceID:   "NEW-DEVICE",
+		ShortID:    "NEW123",
+		LastIP:     "10.0.0.6",
+		APIKey:     "api-new",
+		JSONRaw:    map[string]any{"profile": "new"},
+		BindURI:    "cloudreve://my/docs",
+		LastSeenAt: time.Now(),
+		Online:     true,
+	})
+	if err != nil {
+		t.Fatalf("failed to recreate device after delete: %v", err)
+	}
+	if recreated.RestoreConfig != nil {
+		t.Fatalf("expected deleted device to leave no restore snapshot, got %#v", recreated.RestoreConfig)
+	}
+	if recreated.RestoreFromDeviceID != "" {
+		t.Fatalf("expected no restore source after delete, got %q", recreated.RestoreFromDeviceID)
+	}
+}
+
 func newSyncthingDeviceTestClient(t *testing.T) *ent.Client {
 	t.Helper()
 

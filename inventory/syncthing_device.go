@@ -61,6 +61,7 @@ type (
 		Heartbeat(ctx context.Context, args *SyncthingDeviceHeartbeatArgs) (*ent.SyncthingDevice, error)
 		ReportActivity(ctx context.Context, args *SyncthingDeviceActivityArgs) (*ent.SyncthingDevice, error)
 		Unbind(ctx context.Context, userID int, deviceID string) (*ent.SyncthingDevice, error)
+		Delete(ctx context.Context, userID int, deviceID string) (bool, error)
 	}
 )
 
@@ -274,6 +275,22 @@ func (c *syncthingDeviceClient) Unbind(ctx context.Context, userID int, deviceID
 		return nil, fmt.Errorf("failed to unbind syncthing device: %w", updateErr)
 	}
 	return res, nil
+}
+
+func (c *syncthingDeviceClient) Delete(ctx context.Context, userID int, deviceID string) (bool, error) {
+	device, err := c.find(ctx, userID, deviceID)
+	if err != nil {
+		return false, err
+	}
+	if device == nil {
+		return false, nil
+	}
+
+	if err := c.client.SyncthingDevice.DeleteOneID(device.ID).Exec(ctx); err != nil {
+		return false, fmt.Errorf("failed to delete syncthing device: %w", err)
+	}
+
+	return true, nil
 }
 
 func (c *syncthingDeviceClient) find(ctx context.Context, userID int, deviceID string) (*ent.SyncthingDevice, error) {

@@ -45,6 +45,17 @@ func UnbindSyncthingDevice(c *gin.Context) {
 	c.JSON(200, serializer.Response{})
 }
 
+func DeleteSyncthingDevice(c *gin.Context) {
+	service := ParametersFromContext[*setting.DeleteSyncthingDeviceService](c, setting.DeleteSyncthingDeviceParamCtx{})
+	if err := service.Delete(c); err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{})
+}
+
 func SyncthingDeviceHeartbeat(c *gin.Context) {
 	service := ParametersFromContext[*setting.SyncthingHeartbeatService](c, setting.SyncthingHeartbeatParamCtx{})
 	resp, err := service.Heartbeat(c)

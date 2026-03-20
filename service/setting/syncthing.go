@@ -116,6 +116,21 @@ func (service *DeleteSyncthingDeviceService) Unbind(c *gin.Context) error {
 	return nil
 }
 
+func (service *DeleteSyncthingDeviceService) Delete(c *gin.Context) error {
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+
+	deleted, err := dep.SyncthingDeviceClient().Delete(c, user.ID, service.DeviceID)
+	if err != nil {
+		return serializer.NewError(serializer.CodeDBError, "Failed to delete syncthing device", err)
+	}
+	if !deleted {
+		return serializer.NewError(serializer.CodeNotFound, "Syncthing device not found", nil)
+	}
+
+	return nil
+}
+
 func (service *SyncthingHeartbeatService) Heartbeat(c *gin.Context) (*SyncthingDevice, error) {
 	dep := dependency.FromContext(c)
 	user := inventory.UserFromContext(c)
