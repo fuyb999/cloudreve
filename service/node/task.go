@@ -78,6 +78,8 @@ func (s *GetSlaveTaskService) Get(c *gin.Context) (*cluster.SlaveTaskSummary, er
 
 	res := &cluster.SlaveTaskSummary{
 		Status:       status,
+		DisplayType:  queue.DisplayType(t.Type(), t.State()),
+		Summary:      t.Summarize(nil),
 		PrivateState: t.State(),
 		Progress:     t.Progress(c),
 	}

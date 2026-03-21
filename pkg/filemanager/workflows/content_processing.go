@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 )
@@ -191,4 +192,209 @@ func (t *SlaveContentProcessingTask) Progress(ctx context.Context) queue.Progres
 		res[k] = v
 	}
 	return res
+}
+
+func (t *SlaveContentProcessingTask) Summarize(hasher hashid.Encoder) *queue.Summary {
+	state, err := t.stateForSummary()
+	if err != nil {
+		return nil
+	}
+
+	props := map[string]any{
+		"kind": string(state.Kind),
+	}
+	mergeSummaryProps(props, summarizeContentProcessingPayload(state.Kind, state.Payload))
+	mergeSummaryProps(props, summarizeContentProcessingResult(state.Kind, state.Result))
+
+	return &queue.Summary{
+		Props: props,
+	}
+}
+
+func (t *SlaveContentProcessingTask) stateForSummary() (*SlaveContentProcessingTaskState, error) {
+	if t.state != nil {
+		stateCopy := *t.state
+		return &stateCopy, nil
+	}
+
+	state := &SlaveContentProcessingTaskState{}
+	if err := json.Unmarshal([]byte(t.State()), state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func summarizeContentProcessingPayload(kind ContentProcessingTaskKind, payloadRaw json.RawMessage) map[string]any {
+	if len(payloadRaw) == 0 {
+		return nil
+	}
+
+	switch kind {
+	case ContentProcessingTaskKindFullTextExtract:
+		payload := &manager.SlaveFullTextExtractPayload{}
+		if err := json.Unmarshal(payloadRaw, payload); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"file_id":   payload.FileID,
+			"owner_id":  payload.OwnerID,
+			"file_name": payload.FileName,
+			"file_size": payload.FileSize,
+		}
+		if payload.Entity != nil {
+			props["entity_id"] = payload.Entity.ID
+		}
+		if payload.Policy != nil {
+			props["policy_id"] = payload.Policy.ID
+		}
+		return props
+	case ContentProcessingTaskKindMediaMetaExtract:
+		payload := &manager.SlaveMediaMetaExtractPayload{}
+		if err := json.Unmarshal(payloadRaw, payload); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"file_name": payload.FileName,
+			"file_ext":  payload.FileExt,
+		}
+		if payload.Language != "" {
+			props["language"] = payload.Language
+		}
+		if payload.Entity != nil {
+			props["entity_id"] = payload.Entity.ID
+		}
+		if payload.Policy != nil {
+			props["policy_id"] = payload.Policy.ID
+		}
+		return props
+	case ContentProcessingTaskKindThumbnailGenerate:
+		payload := &manager.SlaveThumbnailGeneratePayload{}
+		if err := json.Unmarshal(payloadRaw, payload); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"file_id":  payload.FileID,
+			"owner_id": payload.OwnerID,
+			"ext":      payload.Ext,
+		}
+		if payload.URI != "" {
+			props["src"] = payload.URI
+		}
+		if payload.Entity != nil {
+			props["entity_id"] = payload.Entity.ID
+		}
+		if payload.Policy != nil {
+			props["policy_id"] = payload.Policy.ID
+		}
+		return props
+	case ContentProcessingTaskKindDocumentInspect:
+		payload := &manager.SlaveDocumentInspectPayload{}
+		if err := json.Unmarshal(payloadRaw, payload); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"file_name": payload.FileName,
+			"file_size": payload.FileSize,
+		}
+		if payload.Entity != nil {
+			props["entity_id"] = payload.Entity.ID
+		}
+		if payload.Policy != nil {
+			props["policy_id"] = payload.Policy.ID
+		}
+		return props
+	default:
+		return nil
+	}
+}
+
+func summarizeContentProcessingResult(kind ContentProcessingTaskKind, resultRaw json.RawMessage) map[string]any {
+	if len(resultRaw) == 0 {
+		return nil
+	}
+
+	switch kind {
+	case ContentProcessingTaskKindFullTextExtract:
+		result := &manager.SlaveFullTextExtractResult{}
+		if err := json.Unmarshal(resultRaw, result); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"entity_id": result.EntityID,
+		}
+		if result.ManifestPath != "" {
+			props["manifest_path"] = result.ManifestPath
+		}
+		return props
+	case ContentProcessingTaskKindMediaMetaExtract:
+		result := &manager.SlaveMediaMetaExtractResult{}
+		if err := json.Unmarshal(resultRaw, result); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"entity_id":  result.EntityID,
+			"meta_count": len(result.Metas),
+		}
+		return props
+	case ContentProcessingTaskKindThumbnailGenerate:
+		result := &manager.SlaveThumbnailGenerateResult{}
+		if err := json.Unmarshal(resultRaw, result); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"file_id":       result.FileID,
+			"entity_id":     result.EntityID,
+			"not_available": result.NotAvailable,
+		}
+		if result.SavePath != "" {
+			props["save_path"] = result.SavePath
+		}
+		if result.Size > 0 {
+			props["size"] = result.Size
+		}
+		return props
+	case ContentProcessingTaskKindDocumentInspect:
+		result := &manager.DocumentInspection{}
+		if err := json.Unmarshal(resultRaw, result); err != nil {
+			return nil
+		}
+
+		props := map[string]any{
+			"entity_id": result.EntityID,
+		}
+		if result.MimeType != "" {
+			props["mime_type"] = result.MimeType
+		}
+		if result.Parser != "" {
+			props["parser"] = result.Parser
+		}
+		if result.Language != "" {
+			props["language"] = result.Language
+		}
+		if result.Title != "" {
+			props["title"] = result.Title
+		}
+		if result.Author != "" {
+			props["author"] = result.Author
+		}
+		if len(result.Metadata) > 0 {
+			props["metadata_count"] = len(result.Metadata)
+		}
+		return props
+	default:
+		return nil
+	}
+}
+
+func mergeSummaryProps(dst, src map[string]any) {
+	for key, value := range src {
+		dst[key] = value
+	}
 }

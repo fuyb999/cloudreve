@@ -61,6 +61,8 @@ type (
 	SlaveTaskSummary struct {
 		Status       task.Status      `json:"status"`
 		Error        string           `json:"error"`
+		DisplayType  string           `json:"display_type,omitempty"`
+		Summary      *queue.Summary   `json:"summary,omitempty"`
 		PrivateState string           `json:"private_state"`
 		Progress     queue.Progresses `json:"progress,omitempty"`
 	}
