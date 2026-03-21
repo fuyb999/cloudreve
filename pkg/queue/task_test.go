@@ -60,3 +60,25 @@ func TestDisplayType(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagnostic(t *testing.T) {
+	got := Diagnostic(
+		315,
+		SlaveContentProcessingTaskType,
+		`{"kind":"thumbnail_generate"}`,
+		&Summary{
+			Phase: "await_slave_extract",
+			Props: map[string]any{
+				"file_id":       801,
+				"entity_id":     901,
+				"save_path":     "thumb/901.png",
+				"not_available": false,
+			},
+		},
+	)
+
+	want := ` [task_id=315, task_type=slave_content_processing, display_type=thumbnail_generate, summary={"phase":"await_slave_extract","props":{"entity_id":901,"file_id":801,"not_available":false,"save_path":"thumb/901.png"}}]`
+	if got != want {
+		t.Fatalf("unexpected diagnostic: got %s want %s", got, want)
+	}
+}

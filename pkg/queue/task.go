@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,6 +172,35 @@ func DisplayType(taskType string, privateState string) string {
 	default:
 		return taskType
 	}
+}
+
+func Diagnostic(taskID int, taskType string, privateState string, summary *Summary) string {
+	parts := []string{
+		fmt.Sprintf("task_id=%d", taskID),
+		fmt.Sprintf("task_type=%s", taskType),
+	}
+
+	displayType := DisplayType(taskType, privateState)
+	if displayType != "" && displayType != taskType {
+		parts = append(parts, fmt.Sprintf("display_type=%s", displayType))
+	}
+
+	if summary != nil {
+		summaryPayload := map[string]any{}
+		if summary.Phase != "" {
+			summaryPayload["phase"] = summary.Phase
+		}
+		if len(summary.Props) > 0 {
+			summaryPayload["props"] = summary.Props
+		}
+		if len(summaryPayload) > 0 {
+			if raw, err := json.Marshal(summaryPayload); err == nil {
+				parts = append(parts, fmt.Sprintf("summary=%s", string(raw)))
+			}
+		}
+	}
+
+	return " [" + strings.Join(parts, ", ") + "]"
 }
 
 // InMemoryTask implements part Task interface using in-memory data.
@@ -445,7 +475,12 @@ func init() {
 		task.StatusProcessing: {
 			task.StatusQueued: persistTask,
 			task.StatusCompleted: func(ctx context.Context, task Task, newStatus task.Status, q *queue) error {
-				q.logger.Info("Execution completed in %s with %d retries, clean up...", task.Executed(), task.Retried())
+				q.logger.Info(
+					"Execution completed in %s with %d retries, clean up...%s",
+					task.Executed(),
+					task.Retried(),
+					Diagnostic(task.ID(), task.Type(), task.State(), task.Summarize(nil)),
+				)
 				q.metric.IncSuccessTask()
 
 				if err := task.Cleanup(ctx); err != nil {
@@ -462,7 +497,12 @@ func init() {
 				return nil
 			},
 			task.StatusError: func(ctx context.Context, task Task, newStatus task.Status, q *queue) error {
-				q.logger.Error("Execution failed with error in %s with %d retries, clean up...", task.Executed(), task.Retried())
+				q.logger.Error(
+					"Execution failed with error in %s with %d retries, clean up...%s",
+					task.Executed(),
+					task.Retried(),
+					Diagnostic(task.ID(), task.Type(), task.State(), task.Summarize(nil)),
+				)
 				q.metric.IncFailureTask()
 
 				if err := task.Cleanup(ctx); err != nil {
@@ -480,7 +520,10 @@ func init() {
 				return nil
 			},
 			task.StatusCanceled: func(ctx context.Context, task Task, newStatus task.Status, q *queue) error {
-				q.logger.Info("Execution canceled, clean up...", task.Executed(), task.Retried())
+				q.logger.Info(
+					"Execution canceled, clean up...%s",
+					Diagnostic(task.ID(), task.Type(), task.State(), task.Summarize(nil)),
+				)
 				q.metric.IncFailureTask()
 
 				if err := task.Cleanup(ctx); err != nil {
@@ -503,7 +546,12 @@ func init() {
 				if err := persistTask(ctx, task, newStatus, q); err != nil {
 					return err
 				}
-				q.logger.Info("Task %d suspended, resume time: %d", task.ID(), task.ResumeTime())
+				q.logger.Info(
+					"Task %d suspended, resume time: %d%s",
+					task.ID(),
+					task.ResumeTime(),
+					Diagnostic(task.ID(), task.Type(), task.State(), task.Summarize(nil)),
+				)
 				return q.QueueTask(ctx, task)
 			},
 		},
