@@ -185,11 +185,12 @@ func (s *AdminListService) Tasks(c *gin.Context) (*ListTaskResponse, error) {
 			}
 
 			return GetTaskResponse{
-				Task:       task,
-				TaskHashID: hashid.EncodeTaskID(hasher, task.ID),
-				UserHashID: uid,
-				Node:       node,
-				Summary:    summary,
+				Task:        task,
+				TaskHashID:  hashid.EncodeTaskID(hasher, task.ID),
+				UserHashID:  uid,
+				DisplayType: queue.DisplayType(task.Type, task.PrivateState),
+				Node:        node,
+				Summary:     summary,
 			}
 		}),
 	}, nil
@@ -233,11 +234,12 @@ func (s *SingleTaskService) Get(c *gin.Context) (*GetTaskResponse, error) {
 	}
 
 	return &GetTaskResponse{
-		Task:       task,
-		Summary:    summary,
-		Node:       node,
-		UserHashID: userHashID,
-		TaskHashID: hashid.EncodeTaskID(hasher, task.ID),
+		Task:        task,
+		Summary:     summary,
+		Node:        node,
+		UserHashID:  userHashID,
+		TaskHashID:  hashid.EncodeTaskID(hasher, task.ID),
+		DisplayType: queue.DisplayType(task.Type, task.PrivateState),
 	}, nil
 }
 

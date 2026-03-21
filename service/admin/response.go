@@ -39,10 +39,11 @@ type GetAuditLogResponse struct {
 
 type GetTaskResponse struct {
 	*ent.Task
-	UserHashID string         `json:"user_hash_id,omitempty"`
-	TaskHashID string         `json:"task_hash_id,omitempty"`
-	Summary    *queue.Summary `json:"summary,omitempty"`
-	Node       *ent.Node      `json:"node,omitempty"`
+	UserHashID  string         `json:"user_hash_id,omitempty"`
+	TaskHashID  string         `json:"task_hash_id,omitempty"`
+	DisplayType string         `json:"display_type,omitempty"`
+	Summary     *queue.Summary `json:"summary,omitempty"`
+	Node        *ent.Node      `json:"node,omitempty"`
 }
 
 type ListEntityResponse struct {

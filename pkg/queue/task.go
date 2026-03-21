@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -118,6 +119,11 @@ const (
 	SlaveUploadTaskType            = "slave_upload"
 	SlaveExtractArchiveType        = "slave_extract_archive"
 	SlaveContentProcessingTaskType = "slave_content_processing"
+
+	ContentProcessingTaskKindFullTextExtract   = "full_text_extract"
+	ContentProcessingTaskKindMediaMetaExtract  = "media_meta_extract"
+	ContentProcessingTaskKindThumbnailGenerate = "thumbnail_generate"
+	ContentProcessingTaskKindDocumentInspect   = "document_inspect"
 )
 
 func init() {
@@ -136,6 +142,35 @@ func NewTaskFromModel(model *ent.Task) (Task, error) {
 	}
 
 	return nil, fmt.Errorf("unknown Task type: %s", model.Type)
+}
+
+func DisplayType(taskType string, privateState string) string {
+	switch taskType {
+	case FullTextDeleteTaskType:
+		return FullTextIndexTaskType
+	case SlaveContentProcessingTaskType:
+		kind := struct {
+			Kind string `json:"kind"`
+		}{}
+		if err := json.Unmarshal([]byte(privateState), &kind); err != nil {
+			return taskType
+		}
+
+		switch kind.Kind {
+		case ContentProcessingTaskKindFullTextExtract:
+			return FullTextIndexTaskType
+		case ContentProcessingTaskKindMediaMetaExtract:
+			return MediaMetaTaskType
+		case ContentProcessingTaskKindThumbnailGenerate:
+			return ContentProcessingTaskKindThumbnailGenerate
+		case ContentProcessingTaskKindDocumentInspect:
+			return DocumentInspectTaskType
+		default:
+			return taskType
+		}
+	default:
+		return taskType
+	}
 }
 
 // InMemoryTask implements part Task interface using in-memory data.

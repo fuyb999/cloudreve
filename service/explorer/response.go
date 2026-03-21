@@ -96,6 +96,7 @@ type TaskResponse struct {
 	ID           string         `json:"id"`
 	Status       string         `json:"status"`
 	Type         string         `json:"type"`
+	DisplayType  string         `json:"display_type,omitempty"`
 	Node         *user.Node     `json:"node,omitempty"`
 	Summary      *queue.Summary `json:"summary,omitempty"`
 	Error        string         `json:"error,omitempty"`
@@ -130,13 +131,14 @@ func BuildTaskListResponse(tasks []queue.Task, res *inventory.ListTaskResult, no
 func BuildTaskResponse(task queue.Task, node *ent.Node, hasher hashid.Encoder) *TaskResponse {
 	model := task.Model()
 	t := &TaskResponse{
-		Status:    string(task.Status()),
-		CreatedAt: model.CreatedAt,
-		UpdatedAt: model.UpdatedAt,
-		ID:        hashid.EncodeTaskID(hasher, task.ID()),
-		Type:      task.Type(),
-		Summary:   task.Summarize(hasher),
-		Error:     auth.RedactSensitiveValues(model.PublicState.Error),
+		Status:      string(task.Status()),
+		CreatedAt:   model.CreatedAt,
+		UpdatedAt:   model.UpdatedAt,
+		ID:          hashid.EncodeTaskID(hasher, task.ID()),
+		Type:        task.Type(),
+		DisplayType: queue.DisplayType(task.Type(), task.State()),
+		Summary:     task.Summarize(hasher),
+		Error:       auth.RedactSensitiveValues(model.PublicState.Error),
 		ErrorHistory: lo.Map(model.PublicState.ErrorHistory, func(s string, index int) string {
 			return auth.RedactSensitiveValues(s)
 		}),
