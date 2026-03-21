@@ -82,9 +82,19 @@ func (m *manager) Thumbnail(ctx context.Context, uri *fs.URI) (entitysource.Enti
 			return nil, fs.ErrEntityNotExist
 		}
 
-		thumbEntity, err := m.SubmitAndAwaitThumbnailTask(ctx, uri, file.Ext(), latest)
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute thumb task: %w", err)
+		var thumbEntity fs.Entity
+		if !m.stateless && uri != nil {
+			thumbEntity, err = m.submitAndAwaitSlaveThumbnailTask(ctx, uri, file.Ext(), file.ID(), file.OwnerID(), latest)
+			if err != nil {
+				m.l.Warning("Failed to offload thumbnail generation to slave for %s: %v", uri.String(), err)
+			}
+		}
+
+		if thumbEntity == nil {
+			thumbEntity, err = m.SubmitAndAwaitThumbnailTask(ctx, uri, file.Ext(), latest)
+			if err != nil {
+				return nil, fmt.Errorf("failed to execute thumb task: %w", err)
+			}
 		}
 
 		thumbSource, err := m.GetEntitySource(ctx, 0, fs.WithEntity(thumbEntity))

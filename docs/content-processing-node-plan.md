@@ -318,6 +318,11 @@ NodeCapabilityContentProcessing
 
 - 将 Tika 重型处理下放到从节点
 
+当前状态：
+
+- 已完成
+- 当前实现采用统一 `slave_content_processing` 任务类型，内部通过 `full_text_extract` kind 区分，而不是单独新增独立 slave task type
+
 工作项：
 
 1. 新增 `SlaveFullTextExtractTaskType`
@@ -346,6 +351,13 @@ NodeCapabilityContentProcessing
 
 - 把“按需调用从节点接口”升级成“可调度内容处理任务”
 
+当前状态：
+
+- 已完成第一阶段落地
+- 当前实现采用统一 `slave_content_processing` 任务类型，内部通过 `thumbnail_generate` kind 区分
+- 主站在 `ThumbProxy` 场景下会优先尝试下发到内容处理节点；从节点生成完成后由主站 finalize 缩略图 entity
+- 原本的本地 `ThumbQueue` 路径仍保留，作为 master 本地执行 fallback
+
 工作项：
 
 1. 新增 `SlaveThumbGenerateTaskType`
@@ -363,6 +375,12 @@ NodeCapabilityContentProcessing
 目标：
 
 - 媒体元数据提取与全文抽取共享调度基础设施
+
+当前状态：
+
+- 已完成
+- 当前实现采用统一 `slave_content_processing` 任务类型，内部通过 `media_meta_extract` kind 区分
+- 原生驱动能力仍优先，本地 extractor/proxy 场景可下发到内容处理节点执行，主站回写 metadata 并继续触发 FTS 同步
 
 工作项：
 
@@ -633,6 +651,11 @@ QueueTypeContentProcessing
 7. 再把缩略图迁入统一能力
 8. 再把媒体元数据迁入统一能力
 9. 最后扩展文档识别 / MIME 识别
+
+截至当前代码状态：
+
+- 1-8 已完成主体实现
+- 尚未完成的是文档识别 / MIME 识别能力下放，以及是否引入独立 `ContentProcessingQueue`
 
 ## 12. 最终推荐
 

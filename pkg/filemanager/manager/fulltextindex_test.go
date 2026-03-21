@@ -28,6 +28,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+	"github.com/cloudreve/Cloudreve/v4/pkg/thumb"
 )
 
 type testTextExtractor struct {
@@ -1408,9 +1409,11 @@ type testDep struct {
 	searchIndexer searcher.SearchIndexer
 	fileClient    inventory.FileClient
 	policyClient  inventory.StoragePolicyClient
+	userClient    inventory.UserClient
 	nodePool      cluster.NodePool
 	textExtractor searcher.TextExtractor
 	mediaMetaExt  mediameta.Extractor
+	thumbGen      thumb.Generator
 }
 
 func (d testDep) SettingProvider() setting.Provider {
@@ -1445,6 +1448,10 @@ func (d testDep) FileClient() inventory.FileClient {
 	return d.fileClient
 }
 
+func (d testDep) UserClient() inventory.UserClient {
+	return d.userClient
+}
+
 func (d testDep) StoragePolicyClient() inventory.StoragePolicyClient {
 	return d.policyClient
 }
@@ -1471,6 +1478,10 @@ func (d testDep) TextExtractor(ctx context.Context) searcher.TextExtractor {
 
 func (d testDep) MediaMetaExtractor(ctx context.Context) mediameta.Extractor {
 	return d.mediaMetaExt
+}
+
+func (d testDep) ThumbPipeline() thumb.Generator {
+	return d.thumbGen
 }
 
 type testTaskClient struct {
