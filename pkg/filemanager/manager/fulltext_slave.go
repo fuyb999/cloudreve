@@ -91,8 +91,8 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 	}
 
 	cfg := dep.SettingProvider().FTSTikaExtractor(ctx)
-	if !cfg.SidecarEnabled || !cfg.SidecarTextEnabled {
-		return nil, fmt.Errorf("slave full text extraction requires text sidecar to be enabled")
+	if !cfg.SidecarEnabled || (!cfg.SidecarTextEnabled && !cfg.SidecarAssetsEnabled) {
+		return nil, fmt.Errorf("slave full text extraction requires text or assets sidecar to be enabled")
 	}
 
 	fm := NewFileManager(dep, nil)

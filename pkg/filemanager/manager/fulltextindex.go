@@ -851,7 +851,7 @@ func (m *manager) shouldOffloadFullTextToSlave(ctx context.Context) bool {
 	}
 
 	cfg := m.settings.FTSTikaExtractor(ctx)
-	return cfg.SidecarEnabled && cfg.SidecarTextEnabled
+	return cfg.SidecarEnabled && (cfg.SidecarTextEnabled || cfg.SidecarAssetsEnabled)
 }
 
 func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, result *SlaveFullTextExtractResult) (task.Status, error) {

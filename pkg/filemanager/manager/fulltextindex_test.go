@@ -960,6 +960,31 @@ func TestManagerShouldOffloadFullTextToSlaveRequiresTikaAndSidecarText(t *testin
 	}
 }
 
+func TestManagerShouldOffloadFullTextToSlaveAllowsAssetsOnly(t *testing.T) {
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:             "http://tika:9998",
+			Exts:                 []string{".pdf"},
+			MaxFileSize:          1024,
+			SidecarEnabled:       true,
+			SidecarTextEnabled:   false,
+			SidecarAssetsEnabled: true,
+		},
+	}
+	m := &manager{
+		settings: settings,
+		dep: testDep{
+			settings:      settings,
+			textExtractor: tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+		},
+	}
+
+	if !m.shouldOffloadFullTextToSlave(context.Background()) {
+		t.Fatalf("expected manager to offload when assets sidecar is enabled")
+	}
+}
+
 func TestFullTextIndexTaskAwaitSlaveExtractionHandlesRunningAndError(t *testing.T) {
 	runningNode := &testClusterNode{
 		id:          51,
@@ -1122,6 +1147,39 @@ func TestExecuteSlaveFullTextExtractValidatesExtractorAndEligibility(t *testing.
 	}
 	if result == nil || result.EntityID != 902 || result.ManifestPath != "" {
 		t.Fatalf("unexpected short-circuit result: %+v", result)
+	}
+}
+
+func TestExecuteSlaveFullTextExtractAllowsAssetsOnlyConfig(t *testing.T) {
+	payload := &SlaveFullTextExtractPayload{
+		FileID:   901,
+		OwnerID:  902,
+		FileName: "sample.bin",
+		FileSize: 128,
+		Entity:   &ent.Entity{ID: 903},
+	}
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:             "http://tika:9998",
+			Exts:                 []string{".pdf"},
+			MaxFileSize:          1024,
+			SidecarEnabled:       true,
+			SidecarTextEnabled:   false,
+			SidecarAssetsEnabled: true,
+		},
+	}
+	dep := testDep{
+		settings:      settings,
+		textExtractor: tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+	}
+
+	result, err := ExecuteSlaveFullTextExtract(context.WithValue(context.Background(), dependency.DepCtx{}, dep), dep, payload)
+	if err != nil {
+		t.Fatalf("expected assets-only config to be allowed, got %v", err)
+	}
+	if result == nil || result.EntityID != 903 || result.ManifestPath != "" {
+		t.Fatalf("unexpected assets-only short-circuit result: %+v", result)
 	}
 }
 
