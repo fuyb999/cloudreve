@@ -225,3 +225,50 @@ func TestExecuteSlaveDocumentInspectSkipsUnsupportedExt(t *testing.T) {
 		t.Fatalf("unexpected document inspect result: %+v", result)
 	}
 }
+
+func TestDocumentInspectTaskSummarize(t *testing.T) {
+	stateRaw, err := json.Marshal(&DocumentInspectTaskState{
+		Uri:      mustURI(t, "cloudreve:///inspect/summary.pdf"),
+		FileID:   801,
+		OwnerID:  701,
+		EntityID: 901,
+		Phase:    DocumentInspectTaskPhaseAwaitSlave,
+		NodeID:   22,
+		SlaveID:  315,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal state: %v", err)
+	}
+
+	task := &DocumentInspectTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:         queue.DocumentInspectTaskType,
+				PrivateState: string(stateRaw),
+			},
+		},
+	}
+
+	summary := task.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if summary.NodeID != 22 {
+		t.Fatalf("unexpected node id: got %d want %d", summary.NodeID, 22)
+	}
+	if summary.Phase != string(DocumentInspectTaskPhaseAwaitSlave) {
+		t.Fatalf("unexpected phase: got %s", summary.Phase)
+	}
+	if summary.Props["src"] != "cloudreve:///inspect/summary.pdf" {
+		t.Fatalf("unexpected src: %+v", summary.Props["src"])
+	}
+	if summary.Props["file_id"] != 801 {
+		t.Fatalf("unexpected file id: %+v", summary.Props["file_id"])
+	}
+	if summary.Props["owner_id"] != 701 {
+		t.Fatalf("unexpected owner id: %+v", summary.Props["owner_id"])
+	}
+	if summary.Props["entity_id"] != 901 {
+		t.Fatalf("unexpected entity id: %+v", summary.Props["entity_id"])
+	}
+}

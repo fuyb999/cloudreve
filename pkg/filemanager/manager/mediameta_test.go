@@ -200,3 +200,50 @@ func TestExecuteSlaveMediaMetaExtractSkipsUnsupportedExt(t *testing.T) {
 		t.Fatalf("unexpected slave media meta result: %+v", result)
 	}
 }
+
+func TestMediaMetaTaskSummarize(t *testing.T) {
+	stateRaw, err := json.Marshal(&MediaMetaTaskState{
+		Uri:      mustURI(t, "cloudreve:///media/summary.mp4"),
+		FileID:   801,
+		OwnerID:  701,
+		EntityID: 901,
+		Phase:    MediaMetaTaskPhaseAwaitSlave,
+		NodeID:   22,
+		SlaveID:  315,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal state: %v", err)
+	}
+
+	task := &MediaMetaTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:         queue.MediaMetaTaskType,
+				PrivateState: string(stateRaw),
+			},
+		},
+	}
+
+	summary := task.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if summary.NodeID != 22 {
+		t.Fatalf("unexpected node id: got %d want %d", summary.NodeID, 22)
+	}
+	if summary.Phase != string(MediaMetaTaskPhaseAwaitSlave) {
+		t.Fatalf("unexpected phase: got %s", summary.Phase)
+	}
+	if summary.Props["src"] != "cloudreve:///media/summary.mp4" {
+		t.Fatalf("unexpected src: %+v", summary.Props["src"])
+	}
+	if summary.Props["file_id"] != 801 {
+		t.Fatalf("unexpected file id: %+v", summary.Props["file_id"])
+	}
+	if summary.Props["owner_id"] != 701 {
+		t.Fatalf("unexpected owner id: %+v", summary.Props["owner_id"])
+	}
+	if summary.Props["entity_id"] != 901 {
+		t.Fatalf("unexpected entity id: %+v", summary.Props["entity_id"])
+	}
+}
