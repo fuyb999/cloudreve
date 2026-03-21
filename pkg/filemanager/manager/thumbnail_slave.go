@@ -123,9 +123,9 @@ func (m *manager) submitAndAwaitSlaveThumbnailTask(ctx context.Context, uri *fs.
 
 			return m.applySlaveThumbnailResult(ctx, uri, fileID, entity, result)
 		case task.StatusError:
-			return nil, fmt.Errorf("slave thumbnail task failed: %s (%w)", summary.Error, queue.CriticalErr)
+			return nil, fmt.Errorf("slave thumbnail task failed: %s%s (%w)", summary.Error, slaveTaskDiagnostic(summary), queue.CriticalErr)
 		case task.StatusCanceled:
-			return nil, fmt.Errorf("slave thumbnail task canceled (%w)", queue.CriticalErr)
+			return nil, fmt.Errorf("slave thumbnail task canceled%s (%w)", slaveTaskDiagnostic(summary), queue.CriticalErr)
 		}
 
 		select {

@@ -748,12 +748,12 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
-		return task.StatusError, fmt.Errorf("slave content processing task failed: %s (%w)", summary.Error, queue.CriticalErr)
+		return task.StatusError, fmt.Errorf("slave content processing task failed: %s%s (%w)", summary.Error, slaveTaskDiagnostic(summary), queue.CriticalErr)
 	case task.StatusCanceled:
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
-		return task.StatusError, fmt.Errorf("slave content processing task canceled (%w)", queue.CriticalErr)
+		return task.StatusError, fmt.Errorf("slave content processing task canceled%s (%w)", slaveTaskDiagnostic(summary), queue.CriticalErr)
 	default:
 		t.Lock()
 		t.progress = summary.Progress

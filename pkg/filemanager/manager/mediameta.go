@@ -205,9 +205,9 @@ func (m *MediaMetaTask) awaitSlaveExtraction(ctx context.Context, fm *manager, s
 		state.SlaveID = 0
 		return task.StatusCompleted, nil
 	case task.StatusError:
-		return task.StatusError, fmt.Errorf("slave content processing task failed: %s (%w)", summary.Error, queue.CriticalErr)
+		return task.StatusError, fmt.Errorf("slave content processing task failed: %s%s (%w)", summary.Error, slaveTaskDiagnostic(summary), queue.CriticalErr)
 	case task.StatusCanceled:
-		return task.StatusError, fmt.Errorf("slave content processing task canceled (%w)", queue.CriticalErr)
+		return task.StatusError, fmt.Errorf("slave content processing task canceled%s (%w)", slaveTaskDiagnostic(summary), queue.CriticalErr)
 	default:
 		m.ResumeAfter(30 * time.Second)
 		return task.StatusSuspending, nil
