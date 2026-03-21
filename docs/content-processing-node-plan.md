@@ -680,13 +680,14 @@ QueueTypeContentProcessing
 - 后端任务响应已统一下发 `display_type`，前端不再依赖手工解析 `private_state`
 - 从节点 `slave_content_processing` 查询结果已补充 `display_type + summary`
 - 主站等待从节点内容处理失败时，会在错误信息中附带结构化诊断上下文，便于线上排障
+- 用户任务详情页与管理后台任务详情页已支持展示 `file_id`、`entity_id`、`policy_id`、`manifest_path`、`save_path`、`meta_count` 等结构化诊断字段
 
 ## 12.1 当前剩余增强项
 
 虽然主体链路已经完成，但仍有几类增强项可继续推进：
 
 1. 从节点任务摘要进一步接入更外层诊断入口
-   - 例如管理员侧的节点任务巡检页、日志聚合、告警输出
+   - 当前任务详情页已可见，后续可继续接入日志聚合、告警输出、节点巡检页
 2. 新内容处理子能力接入统一抽象
    - OCR
    - 杀毒扫描
