@@ -23,6 +23,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/mediameta"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
@@ -1381,6 +1382,22 @@ func (s testSettingProvider) FTSTikaExtractor(ctx context.Context) *setting.FTST
 	return &setting.FTSTikaExtractorSetting{}
 }
 
+func (s testSettingProvider) MediaMetaExifEnabled(ctx context.Context) bool {
+	return false
+}
+
+func (s testSettingProvider) MediaMetaMusicEnabled(ctx context.Context) bool {
+	return false
+}
+
+func (s testSettingProvider) MediaMetaFFProbeEnabled(ctx context.Context) bool {
+	return false
+}
+
+func (s testSettingProvider) MediaMetaGeocodingEnabled(ctx context.Context) bool {
+	return false
+}
+
 type testDep struct {
 	dependency.Dep
 	settings      setting.Provider
@@ -1393,6 +1410,7 @@ type testDep struct {
 	policyClient  inventory.StoragePolicyClient
 	nodePool      cluster.NodePool
 	textExtractor searcher.TextExtractor
+	mediaMetaExt  mediameta.Extractor
 }
 
 func (d testDep) SettingProvider() setting.Provider {
@@ -1451,6 +1469,10 @@ func (d testDep) TextExtractor(ctx context.Context) searcher.TextExtractor {
 	return d.textExtractor
 }
 
+func (d testDep) MediaMetaExtractor(ctx context.Context) mediameta.Extractor {
+	return d.mediaMetaExt
+}
+
 type testTaskClient struct {
 	inventory.TaskClient
 	pending []*ent.Task
@@ -1482,6 +1504,10 @@ type testConfigProvider struct {
 
 func (c testConfigProvider) System() *conf.System {
 	return &conf.System{}
+}
+
+func (c testConfigProvider) Slave() *conf.Slave {
+	return &conf.Slave{}
 }
 
 type testSearchIndexer struct {

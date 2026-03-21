@@ -33,7 +33,8 @@ type (
 )
 
 const (
-	ContentProcessingTaskKindFullTextExtract ContentProcessingTaskKind = "full_text_extract"
+	ContentProcessingTaskKindFullTextExtract  ContentProcessingTaskKind = "full_text_extract"
+	ContentProcessingTaskKindMediaMetaExtract ContentProcessingTaskKind = "media_meta_extract"
 )
 
 // NewSlaveContentProcessingTask creates a new generic content processing task on slave.
@@ -84,6 +85,32 @@ func (t *SlaveContentProcessingTask) Do(ctx context.Context) (task.Status, error
 		resultRaw, err := json.Marshal(result)
 		if err != nil {
 			return task.StatusError, fmt.Errorf("failed to marshal full text extract result: %w", err)
+		}
+		t.state.Result = resultRaw
+
+		newState, err := json.Marshal(t.state)
+		if err != nil {
+			return task.StatusError, fmt.Errorf("failed to marshal content processing state: %w", err)
+		}
+
+		t.Lock()
+		t.Task.PrivateState = string(newState)
+		t.Unlock()
+		return task.StatusCompleted, nil
+	case ContentProcessingTaskKindMediaMetaExtract:
+		payload := &manager.SlaveMediaMetaExtractPayload{}
+		if err := json.Unmarshal(t.state.Payload, payload); err != nil {
+			return task.StatusError, fmt.Errorf("failed to unmarshal media meta extract payload: %w", err)
+		}
+
+		result, err := manager.ExecuteSlaveMediaMetaExtract(ctx, dep, payload)
+		if err != nil {
+			return task.StatusError, err
+		}
+
+		resultRaw, err := json.Marshal(result)
+		if err != nil {
+			return task.StatusError, fmt.Errorf("failed to marshal media meta extract result: %w", err)
 		}
 		t.state.Result = resultRaw
 
