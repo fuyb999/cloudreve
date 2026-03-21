@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"math/rand"
 	"strconv"
@@ -13,14 +14,18 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	taskModel "github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cache"
+	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
 
@@ -145,6 +150,42 @@ func TestFullTextIndexTaskStatePreservesLatestHeadAfterReplacement(t *testing.T)
 	}
 	if state.Uri == nil || state.Uri.String() != uriB.String() {
 		t.Fatalf("unexpected head uri: %+v", state.Uri)
+	}
+}
+
+func TestFullTextIndexTaskStateActiveLifecycle(t *testing.T) {
+	uriA := mustURI(t, "cloudreve:///my/a.txt")
+	uriB := mustURI(t, "cloudreve:///my/b.txt")
+
+	state := &FullTextIndexTaskState{}
+	state.Upsert(FullTextIndexTaskItem{FileID: 1, OwnerID: 10, EntityID: 100, Uri: uriA})
+	state.Upsert(FullTextIndexTaskItem{FileID: 2, OwnerID: 20, EntityID: 200, Uri: uriB})
+
+	if !state.ActivateNext() {
+		t.Fatal("expected ActivateNext to return true")
+	}
+	current, ok := state.Current()
+	if !ok {
+		t.Fatal("expected current item after activation")
+	}
+	if current.FileID != 1 {
+		t.Fatalf("unexpected current file id: %+v", current)
+	}
+
+	state.Phase = fullTextIndexPhaseAwaitSlave
+	state.NodeID = 7
+	state.SlaveID = 8
+	state.CompleteActive()
+
+	if state.Active != nil {
+		t.Fatalf("expected active item to be cleared, got %+v", state.Active)
+	}
+	if state.Phase != fullTextIndexPhasePending || state.NodeID != 0 || state.SlaveID != 0 {
+		t.Fatalf("expected node/phase state to be reset, got %+v", state)
+	}
+	items := state.Items()
+	if len(items) != 1 || items[0].FileID != 2 {
+		t.Fatalf("unexpected remaining items after CompleteActive: %+v", items)
 	}
 }
 
@@ -778,6 +819,404 @@ func TestFullTextIndexTaskDoSkipsWhenFTSDisabled(t *testing.T) {
 	}
 }
 
+func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:           "http://tika:9998",
+			Exts:               []string{".pdf"},
+			MaxFileSize:        20 << 20,
+			SidecarEnabled:     true,
+			SidecarTextEnabled: true,
+		},
+	}
+	textExtractor := tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg)
+	policy := &ent.StoragePolicy{
+		ID:       9,
+		Type:     inventorytypes.PolicyTypeLocal,
+		Settings: &inventorytypes.PolicySetting{},
+	}
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			801: {
+				ID:            801,
+				OwnerID:       701,
+				Name:          "dispatch.pdf",
+				Size:          1024,
+				PrimaryEntity: 901,
+				Edges: ent.FileEdges{
+					Entities: []*ent.Entity{
+						{
+							ID:                    901,
+							StoragePolicyEntities: 9,
+						},
+					},
+				},
+			},
+		},
+	}
+	node := &testClusterNode{
+		id:       21,
+		isMaster: false,
+		createID: 314,
+	}
+	dep := testDep{
+		settings:      settings,
+		taskClient:    &testTaskClient{},
+		mediaMeta:     &testQueue{},
+		registry:      queue.NewTaskRegistry(),
+		config:        testConfigProvider{},
+		searchIndexer: &testSearchIndexer{},
+		fileClient:    fileClient,
+		policyClient:  &testPolicyClient{policyByID: map[int]*ent.StoragePolicy{9: policy}},
+		nodePool:      &testNodePool{node: node},
+		textExtractor: textExtractor,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	uri := mustURI(t, "cloudreve:///dispatch/dispatch.pdf")
+	ftTask, err := NewFullTextIndexTask(ctx, uri, 901, 801, 701, nil)
+	if err != nil {
+		t.Fatalf("failed to create full text index task: %v", err)
+	}
+
+	status, err := ftTask.Do(ctx)
+	if err != nil {
+		t.Fatalf("unexpected index task error: %v", err)
+	}
+	if status != task.StatusSuspending {
+		t.Fatalf("unexpected index task status: got %s want %s", status, task.StatusSuspending)
+	}
+	if node.createdTaskType != queue.SlaveContentProcessingTaskType {
+		t.Fatalf("unexpected created task type: got %s want %s", node.createdTaskType, queue.SlaveContentProcessingTaskType)
+	}
+
+	state := mustParseTaskState(t, ftTask)
+	if state.Phase != fullTextIndexPhaseAwaitSlave {
+		t.Fatalf("unexpected task phase: got %s want %s", state.Phase, fullTextIndexPhaseAwaitSlave)
+	}
+	if state.SlaveID != 314 || state.NodeID != 21 {
+		t.Fatalf("unexpected slave dispatch state: %+v", state)
+	}
+	if state.Active == nil || state.Active.FileID != 801 {
+		t.Fatalf("expected active file 801 after slave dispatch, got %+v", state.Active)
+	}
+
+	wrapper, err := parseSlaveContentProcessingState(node.createdState)
+	if err != nil {
+		t.Fatalf("failed to parse created slave state: %v", err)
+	}
+	if wrapper.Kind != slaveContentProcessingKindFullTextExtract {
+		t.Fatalf("unexpected slave content processing kind: got %s want %s", wrapper.Kind, slaveContentProcessingKindFullTextExtract)
+	}
+
+	payload := &SlaveFullTextExtractPayload{}
+	if err := json.Unmarshal(wrapper.Payload, payload); err != nil {
+		t.Fatalf("failed to parse slave full text payload: %v", err)
+	}
+	if payload.FileID != 801 || payload.OwnerID != 701 || payload.Entity == nil || payload.Entity.ID != 901 {
+		t.Fatalf("unexpected slave full text payload: %+v", payload)
+	}
+}
+
+func TestManagerShouldOffloadFullTextToSlaveRequiresTikaAndSidecarText(t *testing.T) {
+	tikaSettings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:           "http://tika:9998",
+			Exts:               []string{".pdf"},
+			MaxFileSize:        1024,
+			SidecarEnabled:     true,
+			SidecarTextEnabled: true,
+		},
+	}
+	tikaManager := &manager{
+		settings: tikaSettings,
+		dep: testDep{
+			settings:      tikaSettings,
+			textExtractor: tikaextractor.NewTikaExtractor(nil, tikaSettings, logging.NewConsoleLogger(logging.LevelError), tikaSettings.tikaCfg),
+		},
+	}
+	if !tikaManager.shouldOffloadFullTextToSlave(context.Background()) {
+		t.Fatalf("expected manager to offload when tika and text sidecar are enabled")
+	}
+
+	plainSettings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			SidecarEnabled:     true,
+			SidecarTextEnabled: true,
+		},
+	}
+	plainManager := &manager{
+		settings: plainSettings,
+		dep: testDep{
+			settings:      plainSettings,
+			textExtractor: testTextExtractor{exts: []string{".txt"}, maxFileSize: 1024},
+		},
+	}
+	if plainManager.shouldOffloadFullTextToSlave(context.Background()) {
+		t.Fatalf("expected manager not to offload for non-tika extractor")
+	}
+}
+
+func TestFullTextIndexTaskAwaitSlaveExtractionHandlesRunningAndError(t *testing.T) {
+	runningNode := &testClusterNode{
+		id:          51,
+		slaveTask:   &cluster.SlaveTaskSummary{Status: task.StatusProcessing, Progress: queue.Progresses{"slave": &queue.Progress{Current: 2, Total: 5}}},
+		isMaster:    false,
+		clearCalled: false,
+	}
+	runningTask := &FullTextIndexTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:        queue.FullTextIndexTaskType,
+				PublicState: &inventorytypes.TaskPublicState{},
+			},
+		},
+	}
+	runningState := &FullTextIndexTaskState{
+		Phase:   fullTextIndexPhaseAwaitSlave,
+		NodeID:  51,
+		SlaveID: 1001,
+		Active:  &FullTextIndexTaskItem{FileID: 801},
+	}
+	runningManager := &manager{
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings: testSettingProvider{enabled: true},
+			nodePool: &testNodePool{node: runningNode},
+		},
+	}
+
+	status, err := runningTask.awaitSlaveExtraction(context.Background(), runningManager, runningState)
+	if err != nil {
+		t.Fatalf("unexpected running await error: %v", err)
+	}
+	if status != task.StatusSuspending {
+		t.Fatalf("unexpected running await status: got %s want %s", status, task.StatusSuspending)
+	}
+	if runningTask.ResumeTime() == 0 {
+		t.Fatalf("expected resume time to be set while slave task is still running")
+	}
+	progress := runningTask.Progress(context.Background())
+	if progress["slave"] == nil || progress["slave"].Current != 2 || progress["slave"].Total != 5 {
+		t.Fatalf("unexpected slave progress relay: %+v", progress)
+	}
+	if runningNode.getTaskID != 1001 || !runningNode.clearCalled {
+		t.Fatalf("unexpected running node getTask call: id=%d clear=%v", runningNode.getTaskID, runningNode.clearCalled)
+	}
+
+	failedNode := &testClusterNode{
+		id:        52,
+		isMaster:  false,
+		slaveTask: &cluster.SlaveTaskSummary{Status: task.StatusError, Error: "boom"},
+	}
+	failedTask := &FullTextIndexTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:        queue.FullTextIndexTaskType,
+				PublicState: &inventorytypes.TaskPublicState{},
+			},
+		},
+	}
+	failedState := &FullTextIndexTaskState{
+		Phase:   fullTextIndexPhaseAwaitSlave,
+		NodeID:  52,
+		SlaveID: 1002,
+		Active:  &FullTextIndexTaskItem{FileID: 802},
+	}
+	failedManager := &manager{
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings: testSettingProvider{enabled: true},
+			nodePool: &testNodePool{node: failedNode},
+		},
+	}
+
+	status, err = failedTask.awaitSlaveExtraction(context.Background(), failedManager, failedState)
+	if err == nil {
+		t.Fatalf("expected slave failure to be returned")
+	}
+	if status != task.StatusError {
+		t.Fatalf("unexpected failed await status: got %s want %s", status, task.StatusError)
+	}
+}
+
+func TestFullTextIndexTaskSummarizeReportsPhaseNodeAndCurrentFile(t *testing.T) {
+	uri := mustURI(t, "cloudreve:///summary/current.pdf")
+	taskModel := &ent.Task{
+		Type:        queue.FullTextIndexTaskType,
+		PublicState: &inventorytypes.TaskPublicState{},
+	}
+	ftTask := &FullTextIndexTask{
+		DBTask: &queue.DBTask{Task: taskModel},
+		state: &FullTextIndexTaskState{
+			Phase:  fullTextIndexPhaseAwaitSlave,
+			NodeID: 61,
+			Active: &FullTextIndexTaskItem{
+				Uri:      uri,
+				FileID:   810,
+				OwnerID:  710,
+				EntityID: 910,
+			},
+			Files: []FullTextIndexTaskItem{{FileID: 810}},
+		},
+	}
+
+	summary := ftTask.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if summary.NodeID != 61 || summary.Phase != string(fullTextIndexPhaseAwaitSlave) {
+		t.Fatalf("unexpected summary basic fields: %+v", summary)
+	}
+	if summary.Props["file_id"] != 810 || summary.Props["owner_id"] != 710 || summary.Props["entity_id"] != 910 {
+		t.Fatalf("unexpected summary props: %+v", summary.Props)
+	}
+	if summary.Props["src"] != uri {
+		t.Fatalf("unexpected summary src: %+v", summary.Props["src"])
+	}
+}
+
+func TestExecuteSlaveFullTextExtractValidatesExtractorAndEligibility(t *testing.T) {
+	payload := &SlaveFullTextExtractPayload{
+		FileID:   900,
+		OwnerID:  901,
+		FileName: "sample.bin",
+		FileSize: 128,
+		Entity:   &ent.Entity{ID: 902},
+	}
+
+	plainDep := testDep{
+		settings: testSettingProvider{
+			enabled: true,
+			tikaCfg: &setting.FTSTikaExtractorSetting{
+				SidecarEnabled:     true,
+				SidecarTextEnabled: true,
+			},
+		},
+		textExtractor: testTextExtractor{exts: []string{".txt"}, maxFileSize: 1024},
+	}
+	if _, err := ExecuteSlaveFullTextExtract(context.WithValue(context.Background(), dependency.DepCtx{}, plainDep), plainDep, payload); err == nil {
+		t.Fatalf("expected non-tika extractor to be rejected")
+	}
+
+	tikaSettings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:           "http://tika:9998",
+			Exts:               []string{".pdf"},
+			MaxFileSize:        1024,
+			SidecarEnabled:     true,
+			SidecarTextEnabled: true,
+		},
+	}
+	tikaDep := testDep{
+		settings:      tikaSettings,
+		textExtractor: tikaextractor.NewTikaExtractor(nil, tikaSettings, logging.NewConsoleLogger(logging.LevelError), tikaSettings.tikaCfg),
+	}
+	result, err := ExecuteSlaveFullTextExtract(context.WithValue(context.Background(), dependency.DepCtx{}, tikaDep), tikaDep, payload)
+	if err != nil {
+		t.Fatalf("expected unsupported extension to short-circuit without error, got %v", err)
+	}
+	if result == nil || result.EntityID != 902 || result.ManifestPath != "" {
+		t.Fatalf("unexpected short-circuit result: %+v", result)
+	}
+}
+
+func TestApplySlaveFTSSidecarResultPatchesMetadata(t *testing.T) {
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			801: {
+				ID:            801,
+				OwnerID:       701,
+				Name:          "finalize.pdf",
+				PrimaryEntity: 901,
+				Edges: ent.FileEdges{
+					Metadata: []*ent.Metadata{},
+				},
+			},
+		},
+	}
+	backend := &testMetadataFS{}
+	m := &manager{
+		fs:       backend,
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings:   testSettingProvider{enabled: true},
+			fileClient: fileClient,
+		},
+	}
+
+	uri := mustURI(t, "cloudreve:///finalize/finalize.pdf")
+	err := m.applySlaveFTSSidecarResult(context.Background(), 801, uri, &SlaveFullTextExtractResult{
+		EntityID:     901,
+		ManifestPath: "cloudreve/fts-sidecar/701/801/901/manifest.json",
+	})
+	if err != nil {
+		t.Fatalf("unexpected applySlaveFTSSidecarResult error: %v", err)
+	}
+
+	if len(backend.paths) != 1 || backend.paths[0].String() != uri.String() {
+		t.Fatalf("unexpected metadata patch paths: %+v", backend.paths)
+	}
+	if len(backend.patches) != 2 {
+		t.Fatalf("unexpected metadata patch count: %+v", backend.patches)
+	}
+
+	if backend.patches[0].Key != dbfs.FTSSidecarManifestKey || backend.patches[0].Value == "" || !backend.patches[0].Private {
+		t.Fatalf("unexpected manifest metadata patch: %+v", backend.patches[0])
+	}
+	if backend.patches[1].Key != dbfs.FTSSidecarEntityIDKey || backend.patches[1].Value != "901" || !backend.patches[1].Private {
+		t.Fatalf("unexpected entity metadata patch: %+v", backend.patches[1])
+	}
+}
+
+func TestApplySlaveFTSSidecarResultRemovesMetadataWhenResultEmpty(t *testing.T) {
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			802: {
+				ID:            802,
+				OwnerID:       702,
+				Name:          "cleanup.pdf",
+				PrimaryEntity: 902,
+				Edges: ent.FileEdges{
+					Metadata: []*ent.Metadata{
+						{Name: dbfs.FTSSidecarManifestKey, Value: "old/manifest.json"},
+						{Name: dbfs.FTSSidecarEntityIDKey, Value: "902"},
+					},
+				},
+			},
+		},
+	}
+	backend := &testMetadataFS{}
+	m := &manager{
+		fs:       backend,
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings:   testSettingProvider{enabled: true},
+			fileClient: fileClient,
+		},
+	}
+
+	uri := mustURI(t, "cloudreve:///cleanup/cleanup.pdf")
+	err := m.applySlaveFTSSidecarResult(context.Background(), 802, uri, nil)
+	if err != nil {
+		t.Fatalf("unexpected applySlaveFTSSidecarResult remove error: %v", err)
+	}
+
+	if len(backend.patches) != 2 {
+		t.Fatalf("unexpected metadata patch count: %+v", backend.patches)
+	}
+	if backend.patches[0].Key != dbfs.FTSSidecarManifestKey || !backend.patches[0].Remove || !backend.patches[0].Private {
+		t.Fatalf("unexpected manifest remove patch: %+v", backend.patches[0])
+	}
+	if backend.patches[1].Key != dbfs.FTSSidecarEntityIDKey || !backend.patches[1].Remove || !backend.patches[1].Private {
+		t.Fatalf("unexpected entity remove patch: %+v", backend.patches[1])
+	}
+}
+
 func mustURI(t *testing.T, raw string) *fs.URI {
 	t.Helper()
 	uri, err := fs.NewUriFromString(raw)
@@ -870,10 +1309,18 @@ func (f testWalkFile) ID() int {
 type testSettingProvider struct {
 	setting.Provider
 	enabled bool
+	tikaCfg *setting.FTSTikaExtractorSetting
 }
 
 func (s testSettingProvider) FTSEnabled(ctx context.Context) bool {
 	return s.enabled
+}
+
+func (s testSettingProvider) FTSTikaExtractor(ctx context.Context) *setting.FTSTikaExtractorSetting {
+	if s.tikaCfg != nil {
+		return s.tikaCfg
+	}
+	return &setting.FTSTikaExtractorSetting{}
 }
 
 type testDep struct {
@@ -884,6 +1331,10 @@ type testDep struct {
 	registry      queue.TaskRegistry
 	config        conf.ConfigProvider
 	searchIndexer searcher.SearchIndexer
+	fileClient    inventory.FileClient
+	policyClient  inventory.StoragePolicyClient
+	nodePool      cluster.NodePool
+	textExtractor searcher.TextExtractor
 }
 
 func (d testDep) SettingProvider() setting.Provider {
@@ -914,6 +1365,18 @@ func (d testDep) Logger() logging.Logger {
 	return logging.NewConsoleLogger(logging.LevelError)
 }
 
+func (d testDep) FileClient() inventory.FileClient {
+	return d.fileClient
+}
+
+func (d testDep) StoragePolicyClient() inventory.StoragePolicyClient {
+	return d.policyClient
+}
+
+func (d testDep) NodePool(ctx context.Context) (cluster.NodePool, error) {
+	return d.nodePool, nil
+}
+
 func (d testDep) KV() cache.Driver {
 	return nil
 }
@@ -924,6 +1387,10 @@ func (d testDep) GeneralAuth() auth.Auth {
 
 func (d testDep) HashIDEncoder() hashid.Encoder {
 	return nil
+}
+
+func (d testDep) TextExtractor(ctx context.Context) searcher.TextExtractor {
+	return d.textExtractor
 }
 
 type testTaskClient struct {
@@ -998,4 +1465,88 @@ func (s *testSearchIndexer) DeleteAll(ctx context.Context) error {
 
 func (s *testSearchIndexer) Close() error {
 	return nil
+}
+
+type testFileClient struct {
+	inventory.FileClient
+	fileByID map[int]*ent.File
+}
+
+func (c *testFileClient) GetByID(ctx context.Context, id int) (*ent.File, error) {
+	if file, ok := c.fileByID[id]; ok {
+		return file, nil
+	}
+	return nil, &ent.NotFoundError{}
+}
+
+type testPolicyClient struct {
+	inventory.StoragePolicyClient
+	policyByID map[int]*ent.StoragePolicy
+}
+
+func (c *testPolicyClient) GetPolicyByID(ctx context.Context, id int) (*ent.StoragePolicy, error) {
+	if policy, ok := c.policyByID[id]; ok {
+		return policy, nil
+	}
+	return nil, &ent.NotFoundError{}
+}
+
+type testNodePool struct {
+	cluster.NodePool
+	node cluster.Node
+}
+
+func (p *testNodePool) Get(ctx context.Context, capability inventorytypes.NodeCapability, preferred int) (cluster.Node, error) {
+	return p.node, nil
+}
+
+type testClusterNode struct {
+	cluster.Node
+	id              int
+	isMaster        bool
+	createID        int
+	createdTaskType string
+	createdState    string
+	slaveTask       *cluster.SlaveTaskSummary
+	getTaskID       int
+	clearCalled     bool
+}
+
+func (n *testClusterNode) ID() int {
+	return n.id
+}
+
+func (n *testClusterNode) IsMaster() bool {
+	return n.isMaster
+}
+
+func (n *testClusterNode) CreateTask(ctx context.Context, taskType string, state string) (int, error) {
+	n.createdTaskType = taskType
+	n.createdState = state
+	return n.createID, nil
+}
+
+func (n *testClusterNode) GetTask(ctx context.Context, id int, clearOnComplete bool) (*cluster.SlaveTaskSummary, error) {
+	n.getTaskID = id
+	n.clearCalled = clearOnComplete
+	if n.slaveTask == nil {
+		return nil, nil
+	}
+	return n.slaveTask, nil
+}
+
+type testMetadataFS struct {
+	fs.FileSystem
+	paths   []*fs.URI
+	patches []fs.MetadataPatch
+}
+
+func (f *testMetadataFS) PatchMetadata(ctx context.Context, path []*fs.URI, metas ...fs.MetadataPatch) error {
+	f.paths = append(f.paths, path...)
+	f.patches = append(f.patches, metas...)
+	return nil
+}
+
+func (f *testMetadataFS) GetEntity(ctx context.Context, entityID int) (fs.Entity, error) {
+	return nil, nil
 }

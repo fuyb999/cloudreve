@@ -55,6 +55,8 @@ type FTSSidecarManifest struct {
 	EntityID    int                  `json:"entity_id"`
 	SourcePath  string               `json:"source_path"`
 	ExtractedAt time.Time            `json:"extracted_at"`
+	TextReady   bool                 `json:"text_ready,omitempty"`
+	AssetsReady bool                 `json:"assets_ready,omitempty"`
 	Objects     []FTSSidecarArtifact `json:"objects,omitempty"`
 }
 
@@ -173,87 +175,10 @@ func persistFTSSidecars(
 		return
 	}
 
-	artifactOpts := tikaextractor.ArtifactOptions{
-		ExtractInlineImages: cfg.ExtractInlineImages,
-	}
-	prefix := ftsSidecarPrefix(fileModel.OwnerID, fileModel.ID, primaryEntity.ID())
-	manifest := &FTSSidecarManifest{
-		Version:     ftsSidecarVersion,
-		FileID:      fileModel.ID,
-		EntityID:    primaryEntity.ID(),
-		SourcePath:  uri.String(),
-		ExtractedAt: time.Now(),
-	}
-
-	if cfg.SidecarTextEnabled {
-		if text == "" && rewindSidecarSource(internal, source) {
-			extracted, err := tika.ExtractFile(ctx, source, fileModel.Name)
-			if err != nil {
-				internal.l.Warning("Failed to extract sidecar text for file %d: %s", fileModel.ID, err)
-			} else {
-				text = strings.TrimSpace(extracted)
-			}
-		}
-
-		if text != "" {
-			savePath := path.Join(prefix, "content.txt")
-			if err := putSidecarBytes(ctx, handler, savePath, "content.txt", "text/plain; charset=utf-8", []byte(text)); err != nil {
-				internal.l.Warning("Failed to save sidecar text for file %d: %s", fileModel.ID, err)
-			} else {
-				manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
-					ID:       "content.txt",
-					Depth:    0,
-					Kind:     "text",
-					Name:     "content.txt",
-					Path:     savePath,
-					MimeType: "text/plain; charset=utf-8",
-					Size:     int64(len(text)),
-				})
-			}
-		}
-	}
-
-	if cfg.SidecarAssetsEnabled {
-		if rewindSidecarSource(internal, source) {
-			if raw, err := tika.RMetaFile(ctx, source, fileModel.Name, artifactOpts); err != nil {
-				internal.l.Warning("Failed to extract Tika rmeta for file %d: %s", fileModel.ID, err)
-			} else if len(bytes.TrimSpace(raw)) > 0 {
-				savePath := path.Join(prefix, "rmeta.json")
-				if err := putSidecarBytes(ctx, handler, savePath, "rmeta.json", "application/json", raw); err != nil {
-					internal.l.Warning("Failed to save Tika rmeta sidecar for file %d: %s", fileModel.ID, err)
-				} else {
-					manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
-						ID:       "rmeta.json",
-						Depth:    0,
-						Kind:     "metadata",
-						Name:     "rmeta.json",
-						Path:     savePath,
-						MimeType: "application/json",
-						Size:     int64(len(raw)),
-					})
-				}
-			}
-		}
-
-		if rewindSidecarSource(internal, source) {
-			if raw, err := unpackTikaAssets(ctx, tika, fileModel.Name, source, artifactOpts); err != nil {
-				internal.l.Warning("Failed to unpack Tika embedded resources for file %d: %s", fileModel.ID, err)
-			} else if artifacts, err := saveSidecarArchive(ctx, handler, prefix, ftsSidecarEmbeddedDir, raw); err != nil {
-				internal.l.Warning("Failed to save Tika embedded resources for file %d: %s", fileModel.ID, err)
-			} else {
-				manifest.Objects = append(manifest.Objects, artifacts...)
-			}
-		}
-
-		if strings.EqualFold(filepath.Ext(fileModel.Name), ".docx") {
-			if raw, err := buildDocxMediaArchive(source, primaryEntity.Size()); err != nil {
-				internal.l.Warning("Failed to collect DOCX media sidecar for file %d: %s", fileModel.ID, err)
-			} else if artifacts, err := saveSidecarArchive(ctx, handler, prefix, ftsSidecarDocxDir, raw); err != nil {
-				internal.l.Warning("Failed to save DOCX media sidecar for file %d: %s", fileModel.ID, err)
-			} else {
-				manifest.Objects = append(manifest.Objects, artifacts...)
-			}
-		}
+	manifest, savePath, err := internal.persistFTSSidecarsToHandler(ctx, extractor, fileModel, uri.String(), primaryEntity, handler, source, text)
+	if err != nil {
+		internal.l.Warning("Failed to persist Tika sidecars for file %d: %s", fileModel.ID, err)
+		return
 	}
 
 	patches := []fs.MetadataPatch{
@@ -269,19 +194,7 @@ func persistFTSSidecars(
 		},
 	}
 
-	if len(manifest.Objects) > 0 {
-		raw, err := json.Marshal(manifest)
-		if err != nil {
-			internal.l.Warning("Failed to marshal Tika sidecar manifest for file %d: %s", fileModel.ID, err)
-			return
-		}
-
-		savePath := path.Join(prefix, "manifest.json")
-		if err := putSidecarBytes(ctx, handler, savePath, "manifest.json", "application/json", raw); err != nil {
-			internal.l.Warning("Failed to save Tika sidecar manifest for file %d: %s", fileModel.ID, err)
-			return
-		}
-
+	if manifest != nil && savePath != "" {
 		patches = []fs.MetadataPatch{
 			{
 				Key:     dbfs.FTSSidecarManifestKey,
@@ -296,7 +209,7 @@ func persistFTSSidecars(
 		}
 	}
 
-	if existingManifestPath != "" && (existingEntityID != strconv.Itoa(primaryEntity.ID()) || len(manifest.Objects) == 0) {
+	if existingManifestPath != "" && (existingEntityID != strconv.Itoa(primaryEntity.ID()) || manifest == nil || savePath == "") {
 		if err := cleanupFTSSidecarsByMetadata(ctx, internal, existingManifestPath, existingEntityID, primaryEntity); err != nil {
 			internal.l.Warning("Failed to cleanup stale Tika sidecars for file %d: %s", fileModel.ID, err)
 		}
@@ -305,6 +218,160 @@ func persistFTSSidecars(
 	if err := internal.fs.PatchMetadata(ctx, []*fs.URI{uri}, patches...); err != nil {
 		internal.l.Warning("Failed to update Tika sidecar metadata for file %d: %s", fileModel.ID, err)
 	}
+}
+
+func (m *manager) persistFTSSidecarsForSlave(
+	ctx context.Context,
+	extractor searcher.TextExtractor,
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	policy *ent.StoragePolicy,
+	source sidecarSource,
+) (*FTSSidecarManifest, string, error) {
+	if m == nil || primaryEntity == nil || fileModel == nil {
+		return nil, "", nil
+	}
+	if policy == nil {
+		return nil, "", fmt.Errorf("storage policy is required for slave sidecar persistence")
+	}
+
+	_, handler, err := m.getEntityPolicyDriver(ctx, primaryEntity, policy)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to resolve storage driver for slave Tika sidecar: %w", err)
+	}
+
+	return m.persistFTSSidecarsToHandler(ctx, extractor, fileModel, "", primaryEntity, handler, source, "")
+}
+
+func (m *manager) persistFTSSidecarsToHandler(
+	ctx context.Context,
+	extractor searcher.TextExtractor,
+	fileModel *ent.File,
+	sourcePath string,
+	primaryEntity fs.Entity,
+	handler driver.Handler,
+	source sidecarSource,
+	text string,
+) (*FTSSidecarManifest, string, error) {
+	if m == nil || primaryEntity == nil || fileModel == nil || handler == nil {
+		return nil, "", nil
+	}
+
+	tika, ok := extractor.(*tikaextractor.TikaExtractor)
+	if !ok {
+		return nil, "", nil
+	}
+
+	cfg := m.settings.FTSTikaExtractor(ctx)
+	if !cfg.SidecarEnabled || (!cfg.SidecarTextEnabled && !cfg.SidecarAssetsEnabled) {
+		return nil, "", nil
+	}
+
+	artifactOpts := tikaextractor.ArtifactOptions{
+		ExtractInlineImages: cfg.ExtractInlineImages,
+	}
+	prefix := ftsSidecarPrefix(fileModel.OwnerID, fileModel.ID, primaryEntity.ID())
+	manifest := &FTSSidecarManifest{
+		Version:     ftsSidecarVersion,
+		FileID:      fileModel.ID,
+		EntityID:    primaryEntity.ID(),
+		SourcePath:  sourcePath,
+		ExtractedAt: time.Now(),
+	}
+
+	if cfg.SidecarTextEnabled {
+		manifest.TextReady = true
+		if text == "" && rewindSidecarSource(m, source) {
+			extracted, err := tika.ExtractFile(ctx, source, fileModel.Name)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to extract sidecar text: %w", err)
+			}
+			text = strings.TrimSpace(extracted)
+		}
+
+		if text != "" {
+			savePath := path.Join(prefix, "content.txt")
+			if err := putSidecarBytes(ctx, handler, savePath, "content.txt", "text/plain; charset=utf-8", []byte(text)); err != nil {
+				return nil, "", fmt.Errorf("failed to save sidecar text: %w", err)
+			}
+
+			manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+				ID:       "content.txt",
+				Depth:    0,
+				Kind:     "text",
+				Name:     "content.txt",
+				Path:     savePath,
+				MimeType: "text/plain; charset=utf-8",
+				Size:     int64(len(text)),
+			})
+		}
+	}
+
+	if cfg.SidecarAssetsEnabled {
+		manifest.AssetsReady = true
+
+		if rewindSidecarSource(m, source) {
+			raw, err := tika.RMetaFile(ctx, source, fileModel.Name, artifactOpts)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to extract tika rmeta: %w", err)
+			}
+			if len(bytes.TrimSpace(raw)) > 0 {
+				savePath := path.Join(prefix, "rmeta.json")
+				if err := putSidecarBytes(ctx, handler, savePath, "rmeta.json", "application/json", raw); err != nil {
+					return nil, "", fmt.Errorf("failed to save tika rmeta sidecar: %w", err)
+				}
+				manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+					ID:       "rmeta.json",
+					Depth:    0,
+					Kind:     "metadata",
+					Name:     "rmeta.json",
+					Path:     savePath,
+					MimeType: "application/json",
+					Size:     int64(len(raw)),
+				})
+			}
+		}
+
+		if rewindSidecarSource(m, source) {
+			raw, err := unpackTikaAssets(ctx, tika, fileModel.Name, source, artifactOpts)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to unpack tika embedded resources: %w", err)
+			}
+			if len(raw) > 0 {
+				artifacts, err := saveSidecarArchive(ctx, handler, prefix, ftsSidecarEmbeddedDir, raw)
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to save tika embedded resources: %w", err)
+				}
+				manifest.Objects = append(manifest.Objects, artifacts...)
+			}
+		}
+
+		if strings.EqualFold(filepath.Ext(fileModel.Name), ".docx") {
+			raw, err := buildDocxMediaArchive(source, primaryEntity.Size())
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to collect docx media sidecar: %w", err)
+			}
+			if len(raw) > 0 {
+				artifacts, err := saveSidecarArchive(ctx, handler, prefix, ftsSidecarDocxDir, raw)
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to save docx media sidecar: %w", err)
+				}
+				manifest.Objects = append(manifest.Objects, artifacts...)
+			}
+		}
+	}
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal tika sidecar manifest: %w", err)
+	}
+
+	savePath := path.Join(prefix, "manifest.json")
+	if err := putSidecarBytes(ctx, handler, savePath, "manifest.json", "application/json", raw); err != nil {
+		return nil, "", fmt.Errorf("failed to save tika sidecar manifest: %w", err)
+	}
+
+	return manifest, savePath, nil
 }
 
 func cleanupFTSSidecarsForFile(ctx context.Context, m *manager, file fs.File) error {

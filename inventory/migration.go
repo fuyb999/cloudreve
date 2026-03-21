@@ -242,9 +242,10 @@ func migrateMasterNode(l logging.Logger, client *ent.Client, ctx context.Context
 
 	capabilities := &boolset.BooleanSet{}
 	boolset.Sets(map[types.NodeCapability]bool{
-		types.NodeCapabilityCreateArchive:  true,
-		types.NodeCapabilityExtractArchive: true,
-		types.NodeCapabilityRemoteDownload: true,
+		types.NodeCapabilityCreateArchive:     true,
+		types.NodeCapabilityExtractArchive:    true,
+		types.NodeCapabilityRemoteDownload:    true,
+		types.NodeCapabilityContentProcessing: true,
 	}, capabilities)
 
 	stm := client.Node.Create().

@@ -113,9 +113,10 @@ const (
 	FullTextDeleteTaskType      = "full_text_delete"
 	FullTextRebuildTaskType     = "full_text_rebuild"
 
-	SlaveCreateArchiveTaskType = "slave_create_archive"
-	SlaveUploadTaskType        = "slave_upload"
-	SlaveExtractArchiveType    = "slave_extract_archive"
+	SlaveCreateArchiveTaskType     = "slave_create_archive"
+	SlaveUploadTaskType            = "slave_upload"
+	SlaveExtractArchiveType        = "slave_extract_archive"
+	SlaveContentProcessingTaskType = "slave_content_processing"
 )
 
 func init() {

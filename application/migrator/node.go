@@ -61,8 +61,9 @@ func (m *Migrator) migrateNode() error {
 
 		if n.Type == model.MasterNodeType {
 			boolset.Sets(map[types.NodeCapability]bool{
-				types.NodeCapabilityExtractArchive: true,
-				types.NodeCapabilityCreateArchive:  true,
+				types.NodeCapabilityExtractArchive:    true,
+				types.NodeCapabilityCreateArchive:     true,
+				types.NodeCapabilityContentProcessing: true,
 			}, cap)
 		}
 

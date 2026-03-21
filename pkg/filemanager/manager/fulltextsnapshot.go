@@ -203,6 +203,7 @@ func extractFTSContent(
 		sidecarContent     string
 		sidecarAttachments []searcher.SearchAttachmentDocument
 		hasCurrentSidecar  bool
+		sidecarManifest    *FTSSidecarManifest
 		internal           *manager
 		sidecarCfg         = struct {
 			textEnabled   bool
@@ -214,12 +215,20 @@ func extractFTSContent(
 		cfg := internal.settings.FTSTikaExtractor(ctx)
 		sidecarCfg.textEnabled = cfg.SidecarTextEnabled
 		sidecarCfg.assetsEnabled = cfg.SidecarAssetsEnabled
-		sidecarContent, sidecarAttachments, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri)
-		if hasCurrentSidecar && sidecarCfg.textEnabled && sidecarContent != "" {
-			if !sidecarCfg.assetsEnabled {
-				sidecarAttachments = nil
+		sidecarContent, sidecarAttachments, sidecarManifest, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri)
+		if hasCurrentSidecar {
+			if sidecarCfg.textEnabled && sidecarManifest != nil && sidecarManifest.TextReady {
+				if !sidecarCfg.assetsEnabled {
+					sidecarAttachments = nil
+				}
+				if !sidecarCfg.assetsEnabled || sidecarManifest.AssetsReady {
+					return sidecarContent, sidecarAttachments, nil
+				}
 			}
-			return sidecarContent, sidecarAttachments, nil
+
+			if !sidecarCfg.textEnabled && sidecarCfg.assetsEnabled && sidecarManifest != nil && sidecarManifest.AssetsReady {
+				return "", sidecarAttachments, nil
+			}
 		}
 	}
 
@@ -251,15 +260,16 @@ func extractFTSContent(
 	if sidecarCfg.assetsEnabled {
 		attachments = sidecarAttachments
 	}
-	if len(attachments) == 0 && (!hasCurrentSidecar || sidecarCfg.assetsEnabled) {
+	if len(attachments) == 0 && (!hasCurrentSidecar || sidecarManifest == nil || !sidecarManifest.AssetsReady) {
 		attachments = extractFTSEmbeddedAttachments(ctx, extractor, ownerManager, fileModel, primaryEntity, uri, source)
 	}
-	if !hasCurrentSidecar ||
-		(sidecarCfg.textEnabled && sidecarContent == "" && text != "") ||
-		(sidecarCfg.assetsEnabled && len(sidecarAttachments) == 0 && len(attachments) > 0) {
+	shouldPersistSidecar := !hasCurrentSidecar ||
+		(sidecarCfg.textEnabled && (sidecarManifest == nil || !sidecarManifest.TextReady)) ||
+		(sidecarCfg.assetsEnabled && (sidecarManifest == nil || !sidecarManifest.AssetsReady))
+	if shouldPersistSidecar {
 		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, uri, primaryEntity, source, text)
 		if internal != nil && sidecarCfg.assetsEnabled && len(attachments) > 0 {
-			if refreshedText, refreshedAttachments, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri); ok {
+			if refreshedText, refreshedAttachments, _, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri); ok {
 				if sidecarCfg.textEnabled && text == "" {
 					text = refreshedText
 				}
@@ -277,14 +287,14 @@ func (m *manager) loadFTSContentFromSidecar(
 	fileModel *ent.File,
 	primaryEntity fs.Entity,
 	uri *fs.URI,
-) (string, []searcher.SearchAttachmentDocument, bool) {
+) (string, []searcher.SearchAttachmentDocument, *FTSSidecarManifest, bool) {
 	if m == nil || fileModel == nil || primaryEntity == nil || uri == nil {
-		return "", nil, false
+		return "", nil, nil, false
 	}
 
 	_, manifest, handler, _, err := m.loadFTSSidecarManifest(ctx, uri)
 	if err != nil || manifest == nil || manifest.EntityID != primaryEntity.ID() {
-		return "", nil, false
+		return "", nil, nil, false
 	}
 
 	var (
@@ -299,7 +309,7 @@ func (m *manager) loadFTSContentFromSidecar(
 		rmetaRaw = raw
 	}
 
-	return content, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw), true
+	return content, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw), manifest, true
 }
 
 func (m *manager) readFTSSidecarObject(

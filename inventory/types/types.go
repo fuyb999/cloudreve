@@ -252,6 +252,7 @@ const (
 	NodeCapabilityCreateArchive
 	NodeCapabilityExtractArchive
 	NodeCapabilityRemoteDownload
+	NodeCapabilityContentProcessing
 	NodeCapability_CommunityPlaceholder
 )
 

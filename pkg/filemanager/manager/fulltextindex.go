@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
@@ -15,6 +16,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
@@ -22,6 +24,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/samber/lo"
 )
@@ -29,7 +32,12 @@ import (
 type (
 	FullTextIndexTask struct {
 		*queue.DBTask
+
+		progress queue.Progresses
+		state    *FullTextIndexTaskState
 	}
+
+	FullTextIndexTaskPhase string
 
 	FullTextIndexTaskItem struct {
 		Uri      *fs.URI `json:"uri,omitempty"`
@@ -45,6 +53,10 @@ type (
 		OwnerID  int                     `json:"owner_id,omitempty"`
 		FileIDs  []int                   `json:"file_ids,omitempty"`
 		Files    []FullTextIndexTaskItem `json:"files,omitempty"`
+		Phase    FullTextIndexTaskPhase  `json:"phase,omitempty"`
+		NodeID   int                     `json:"node_id,omitempty"`
+		SlaveID  int                     `json:"slave_id,omitempty"`
+		Active   *FullTextIndexTaskItem  `json:"active,omitempty"`
 	}
 
 	ftsFileInfo struct {
@@ -62,7 +74,12 @@ var fullTextMergeableTaskTypes = []string{
 var fullTextEnqueueLocks [64]sync.Mutex
 var fullTextPendingMergeLock sync.Mutex
 
-const fullTextMaxFilesPerTask = 64
+const (
+	fullTextMaxFilesPerTask = 64
+
+	fullTextIndexPhasePending    FullTextIndexTaskPhase = ""
+	fullTextIndexPhaseAwaitSlave FullTextIndexTaskPhase = "await_slave_extract"
+)
 
 func (m *manager) SearchFullText(ctx context.Context, query string, offset int, base *fs.URI) (*FullTextSearchResults, error) {
 	indexer := m.dep.SearchIndexer(ctx)
@@ -325,6 +342,41 @@ func (s *FullTextIndexTaskState) Len() int {
 	return len(s.Files)
 }
 
+func (s *FullTextIndexTaskState) Current() (FullTextIndexTaskItem, bool) {
+	s.normalize()
+	if s.Active != nil && s.Active.FileID > 0 {
+		return *s.Active, true
+	}
+	if len(s.Files) == 0 {
+		return FullTextIndexTaskItem{}, false
+	}
+	return s.Files[0], true
+}
+
+func (s *FullTextIndexTaskState) ActivateNext() bool {
+	s.normalize()
+	if s.Active != nil && s.Active.FileID > 0 {
+		return true
+	}
+	if len(s.Files) == 0 {
+		return false
+	}
+	item := s.Files[0]
+	s.Active = &item
+	return true
+}
+
+func (s *FullTextIndexTaskState) CompleteActive() {
+	s.normalize()
+	if s.Active != nil {
+		s.Remove(s.Active.FileID)
+	}
+	s.Active = nil
+	s.Phase = fullTextIndexPhasePending
+	s.SlaveID = 0
+	s.NodeID = 0
+}
+
 type (
 	FullTextCopyTask struct {
 		*queue.DBTask
@@ -552,22 +604,173 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
+	t.state = state
 
-	items := state.Items()
-	if len(items) == 0 {
+	if state.Len() == 0 && state.Active == nil {
 		l.Debug("No files left in full text reconcile task, skipping.")
 		return task.StatusCompleted, nil
 	}
 
-	for _, item := range items {
+	for {
+		switch state.Phase {
+		case fullTextIndexPhasePending:
+			if !state.ActivateNext() {
+				stateBytes, err := marshalFullTextIndexTaskState(state)
+				if err != nil {
+					return task.StatusError, fmt.Errorf("failed to marshal state: %w", err)
+				}
+				t.UpdateState(string(stateBytes))
+				l.Debug("Successfully reconciled full text index.")
+				return task.StatusCompleted, nil
+			}
+
+			item, _ := state.Current()
+			next, err := t.dispatchOrIndexLocally(ctx, fm, state, item)
+			if err != nil {
+				return task.StatusError, err
+			}
+			if next == task.StatusSuspending {
+				return t.persistAndSuspend(state)
+			}
+		case fullTextIndexPhaseAwaitSlave:
+			next, err := t.awaitSlaveExtraction(ctx, fm, state)
+			if err != nil {
+				return task.StatusError, err
+			}
+			if next == task.StatusSuspending {
+				return t.persistAndSuspend(state)
+			}
+		default:
+			return task.StatusError, fmt.Errorf("unknown full text task phase %q: %w", state.Phase, queue.CriticalErr)
+		}
+	}
+}
+
+func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *manager, state *FullTextIndexTaskState, item FullTextIndexTaskItem) (task.Status, error) {
+	node, err := allocateContentProcessingNode(ctx, fm.dep, state.NodeID)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to allocate content processing node: %w", err)
+	}
+
+	state.NodeID = node.ID()
+	t.Lock()
+	t.progress = nil
+	t.Unlock()
+	if node.IsMaster() || !fm.shouldOffloadFullTextToSlave(ctx) {
 		status, err := performIndexing(ctx, fm, item.FileID)
 		if err != nil {
 			return status, err
 		}
+
+		state.CompleteActive()
+		return task.StatusProcessing, nil
 	}
 
-	l.Debug("Successfully reconciled full text index for %d file(s).", len(items))
-	return task.StatusCompleted, nil
+	payload, err := fm.buildSlaveFullTextExtractPayload(ctx, item.FileID)
+	if err != nil {
+		status, localErr := performIndexing(ctx, fm, item.FileID)
+		if localErr != nil {
+			return status, fmt.Errorf("failed to build slave full text payload for file %d: %v; local fallback failed: %w", item.FileID, err, localErr)
+		}
+		state.CompleteActive()
+		return task.StatusProcessing, nil
+	}
+	if payload.Policy == nil {
+		status, err := performIndexing(ctx, fm, item.FileID)
+		if err != nil {
+			return status, err
+		}
+		state.CompleteActive()
+		return task.StatusProcessing, nil
+	}
+
+	stateRaw, err := marshalSlaveContentProcessingState(slaveContentProcessingKindFullTextExtract, payload)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to marshal slave full text payload: %w", err)
+	}
+
+	taskID, err := node.CreateTask(ctx, queue.SlaveContentProcessingTaskType, stateRaw)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to create slave content processing task: %w", err)
+	}
+
+	state.Phase = fullTextIndexPhaseAwaitSlave
+	state.SlaveID = taskID
+	t.ResumeAfter(10 * time.Second)
+	return task.StatusSuspending, nil
+}
+
+func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manager, state *FullTextIndexTaskState) (task.Status, error) {
+	if state.SlaveID == 0 {
+		return task.StatusError, fmt.Errorf("missing slave task id in full text await phase: %w", queue.CriticalErr)
+	}
+
+	node, err := allocateContentProcessingNode(ctx, fm.dep, state.NodeID)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to resolve content processing node: %w", err)
+	}
+
+	summary, err := node.GetTask(ctx, state.SlaveID, true)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to get slave task: %w", err)
+	}
+
+	switch summary.Status {
+	case task.StatusCompleted:
+		t.Lock()
+		t.progress = summary.Progress
+		t.Unlock()
+		wrapper, err := parseSlaveContentProcessingState(summary.PrivateState)
+		if err != nil {
+			return task.StatusError, fmt.Errorf("failed to parse slave content processing result: %w", err)
+		}
+
+		result := &SlaveFullTextExtractResult{}
+		if len(wrapper.Result) > 0 {
+			if err := json.Unmarshal(wrapper.Result, result); err != nil {
+				return task.StatusError, fmt.Errorf("failed to unmarshal slave full text result: %w", err)
+			}
+		}
+
+		item, ok := state.Current()
+		if !ok {
+			return task.StatusError, fmt.Errorf("missing active file in full text await phase: %w", queue.CriticalErr)
+		}
+
+		status, err := finalizeSlaveIndexedFile(ctx, fm, item.FileID, result)
+		if err != nil {
+			return status, err
+		}
+
+		state.CompleteActive()
+		return task.StatusProcessing, nil
+	case task.StatusError:
+		t.Lock()
+		t.progress = summary.Progress
+		t.Unlock()
+		return task.StatusError, fmt.Errorf("slave content processing task failed: %s (%w)", summary.Error, queue.CriticalErr)
+	case task.StatusCanceled:
+		t.Lock()
+		t.progress = summary.Progress
+		t.Unlock()
+		return task.StatusError, fmt.Errorf("slave content processing task canceled (%w)", queue.CriticalErr)
+	default:
+		t.Lock()
+		t.progress = summary.Progress
+		t.Unlock()
+		t.ResumeAfter(30 * time.Second)
+		return task.StatusSuspending, nil
+	}
+}
+
+func (t *FullTextIndexTask) persistAndSuspend(state *FullTextIndexTaskState) (task.Status, error) {
+	stateBytes, err := marshalFullTextIndexTaskState(state)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to marshal state: %w", err)
+	}
+
+	t.UpdateState(string(stateBytes))
+	return task.StatusSuspending, nil
 }
 
 func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
@@ -625,6 +828,96 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 
 	l.Debug("Successfully indexed file %d for owner %d.", fileID, doc.OwnerID)
 	return task.StatusCompleted, nil
+}
+
+func allocateContentProcessingNode(ctx context.Context, dep dependency.Dep, nodeID int) (cluster.Node, error) {
+	np, err := dep.NodePool(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node pool: %w", err)
+	}
+
+	node, err := np.Get(ctx, types.NodeCapabilityContentProcessing, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get content processing node: %w", err)
+	}
+
+	return node, nil
+}
+
+func (m *manager) shouldOffloadFullTextToSlave(ctx context.Context) bool {
+	extractor := m.dep.TextExtractor(ctx)
+	if _, ok := extractor.(*tikaextractor.TikaExtractor); !ok {
+		return false
+	}
+
+	cfg := m.settings.FTSTikaExtractor(ctx)
+	return cfg.SidecarEnabled && cfg.SidecarTextEnabled
+}
+
+func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, result *SlaveFullTextExtractResult) (task.Status, error) {
+	dep := dependency.FromContext(ctx)
+	indexer := dep.SearchIndexer(ctx)
+
+	uri, err := fm.resolveFTSFileURI(ctx, fileID)
+	if err != nil {
+		if shouldIgnoreFTSSyncError(err) {
+			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
+			}
+			return task.StatusCompleted, nil
+		}
+		return task.StatusError, fmt.Errorf("failed to resolve search uri for file %d: %w", fileID, err)
+	}
+
+	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
+		if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
+		}
+		return task.StatusCompleted, nil
+	}
+
+	if err := fm.applySlaveFTSSidecarResult(ctx, fileID, uri, result); err != nil {
+		return task.StatusError, err
+	}
+
+	return performIndexing(ctx, fm, fileID)
+}
+
+func (t *FullTextIndexTask) Progress(ctx context.Context) queue.Progresses {
+	t.Lock()
+	defer t.Unlock()
+
+	res := make(queue.Progresses)
+	for k, v := range t.progress {
+		res[k] = v
+	}
+	return res
+}
+
+func (t *FullTextIndexTask) Summarize(hasher hashid.Encoder) *queue.Summary {
+	if t.state == nil {
+		state, err := parseFullTextIndexTaskState(t.State())
+		if err != nil {
+			return nil
+		}
+		t.state = state
+	}
+
+	props := map[string]any{
+		"total": t.state.Len(),
+	}
+	if item, ok := t.state.Current(); ok {
+		props["src"] = item.Uri
+		props["file_id"] = item.FileID
+		props["owner_id"] = item.OwnerID
+		props["entity_id"] = item.EntityID
+	}
+
+	return &queue.Summary{
+		NodeID: t.state.NodeID,
+		Phase:  string(t.state.Phase),
+		Props:  props,
+	}
 }
 
 func (m *manager) resolveFTSFileURI(ctx context.Context, fileID int) (*fs.URI, error) {
