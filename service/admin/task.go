@@ -77,6 +77,11 @@ const (
 	taskStatusCondition        = "task_status"
 	taskCorrelationIDCondition = "task_correlation_id"
 	taskUserIDCondition        = "task_user_id"
+
+	contentProcessingKindFullTextExtract   = `"kind":"full_text_extract"`
+	contentProcessingKindMediaMetaExtract  = `"kind":"media_meta_extract"`
+	contentProcessingKindThumbnailGenerate = `"kind":"thumbnail_generate"`
+	contentProcessingKindDocumentInspect   = `"kind":"document_inspect"`
 )
 
 func (s *AdminListService) Tasks(c *gin.Context) (*ListTaskResponse, error) {
@@ -84,15 +89,16 @@ func (s *AdminListService) Tasks(c *gin.Context) (*ListTaskResponse, error) {
 	taskClient := dep.TaskClient()
 	hasher := dep.HashIDEncoder()
 	var (
-		err           error
-		userID        int
-		correlationID *uuid.UUID
-		status        []task.Status
-		taskType      []string
+		err             error
+		userID          int
+		correlationID   *uuid.UUID
+		status          []task.Status
+		taskType        []string
+		taskTypeFilters []inventory.TaskTypeFilter
 	)
 
 	if s.Conditions[taskTypeCondition] != "" {
-		taskType = []string{s.Conditions[taskTypeCondition]}
+		taskType, taskTypeFilters = resolveAdminTaskTypeFilter(s.Conditions[taskTypeCondition])
 	}
 
 	if s.Conditions[taskStatusCondition] != "" {
@@ -125,6 +131,7 @@ func (s *AdminListService) Tasks(c *gin.Context) (*ListTaskResponse, error) {
 		UserID:        userID,
 		CorrelationID: correlationID,
 		Types:         taskType,
+		TypeFilters:   taskTypeFilters,
 		Status:        status,
 	})
 
@@ -271,12 +278,58 @@ func (s *CleanupTaskService) CleanupTask(c *gin.Context) error {
 	}
 
 	if err := taskClient.DeleteBy(c, &inventory.DeleteTaskArgs{
-		NotAfter: s.NotAfter,
-		Types:    s.Types,
-		Status:   s.Status,
+		NotAfter:    s.NotAfter,
+		Types:       expandCleanupTaskTypes(s.Types),
+		TypeFilters: expandCleanupTaskTypeFilters(s.Types),
+		Status:      s.Status,
 	}); err != nil {
 		return serializer.NewError(serializer.CodeDBError, "Failed to cleanup tasks", err)
 	}
 
 	return nil
+}
+
+func resolveAdminTaskTypeFilter(taskType string) ([]string, []inventory.TaskTypeFilter) {
+	switch taskType {
+	case queue.FullTextIndexTaskType:
+		return []string{queue.FullTextIndexTaskType, queue.FullTextDeleteTaskType}, []inventory.TaskTypeFilter{
+			{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindFullTextExtract},
+		}
+	case queue.MediaMetaTaskType:
+		return []string{queue.MediaMetaTaskType}, []inventory.TaskTypeFilter{
+			{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindMediaMetaExtract},
+		}
+	case queue.DocumentInspectTaskType:
+		return []string{queue.DocumentInspectTaskType}, []inventory.TaskTypeFilter{
+			{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindDocumentInspect},
+		}
+	case "thumbnail_generate":
+		return nil, []inventory.TaskTypeFilter{
+			{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindThumbnailGenerate},
+		}
+	case "":
+		return nil, nil
+	default:
+		return []string{taskType}, nil
+	}
+}
+
+func expandCleanupTaskTypes(taskTypes []string) []string {
+	expanded := make([]string, 0, len(taskTypes))
+	for _, taskType := range taskTypes {
+		rawTypes, _ := resolveAdminTaskTypeFilter(taskType)
+		expanded = append(expanded, rawTypes...)
+	}
+
+	return lo.Uniq(expanded)
+}
+
+func expandCleanupTaskTypeFilters(taskTypes []string) []inventory.TaskTypeFilter {
+	expanded := make([]inventory.TaskTypeFilter, 0, len(taskTypes))
+	for _, taskType := range taskTypes {
+		_, filters := resolveAdminTaskTypeFilter(taskType)
+		expanded = append(expanded, filters...)
+	}
+
+	return expanded
 }

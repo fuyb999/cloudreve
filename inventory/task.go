@@ -7,6 +7,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
@@ -57,6 +58,7 @@ type (
 	ListTaskArgs struct {
 		*PaginationArgs
 		Types         []string
+		TypeFilters   []TaskTypeFilter
 		Status        []task.Status
 		UserID        int
 		CorrelationID *uuid.UUID
@@ -68,9 +70,15 @@ type (
 	}
 
 	DeleteTaskArgs struct {
-		NotAfter time.Time
-		Types    []string
-		Status   []task.Status
+		NotAfter    time.Time
+		Types       []string
+		TypeFilters []TaskTypeFilter
+		Status      []task.Status
+	}
+
+	TaskTypeFilter struct {
+		Type                 string
+		PrivateStateContains string
 	}
 )
 
@@ -135,8 +143,8 @@ func (c *taskClient) DeleteBy(ctx context.Context, args *DeleteTaskArgs) error {
 		query.Where(task.StatusIn(args.Status...))
 	}
 
-	if len(args.Types) > 0 {
-		query.Where(task.TypeIn(args.Types...))
+	if predicates := taskTypePredicates(args.Types, args.TypeFilters); len(predicates) > 0 {
+		query.Where(task.Or(predicates...))
 	}
 
 	_, err := query.Exec(ctx)
@@ -252,8 +260,8 @@ func (c *taskClient) List(ctx context.Context, args *ListTaskArgs) (*ListTaskRes
 		q.Where(task.UserTasks(args.UserID))
 	}
 
-	if args.Types != nil {
-		q.Where(task.TypeIn(args.Types...))
+	if predicates := taskTypePredicates(args.Types, args.TypeFilters); len(predicates) > 0 {
+		q.Where(task.Or(predicates...))
 	}
 
 	if args.Status != nil {
@@ -285,6 +293,34 @@ func (c *taskClient) List(ctx context.Context, args *ListTaskArgs) (*ListTaskRes
 		Tasks:             tasks,
 		PaginationResults: paginationRes,
 	}, nil
+}
+
+func taskTypePredicates(types []string, filters []TaskTypeFilter) []predicate.Task {
+	predicates := make([]predicate.Task, 0, len(types)+len(filters))
+	if len(types) > 0 {
+		predicates = append(predicates, task.TypeIn(types...))
+	}
+
+	for _, filter := range filters {
+		andPredicates := make([]predicate.Task, 0, 2)
+		if filter.Type != "" {
+			andPredicates = append(andPredicates, task.Type(filter.Type))
+		}
+		if filter.PrivateStateContains != "" {
+			andPredicates = append(andPredicates, task.PrivateStateContains(filter.PrivateStateContains))
+		}
+		if len(andPredicates) == 0 {
+			continue
+		}
+		if len(andPredicates) == 1 {
+			predicates = append(predicates, andPredicates[0])
+			continue
+		}
+
+		predicates = append(predicates, task.And(andPredicates...))
+	}
+
+	return predicates
 }
 
 func (c *taskClient) cursorPagination(ctx context.Context, query *ent.TaskQuery, args *ListTaskArgs, paramMargin int) ([]*ent.Task, *PaginationResults, error) {
