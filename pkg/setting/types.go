@@ -97,12 +97,13 @@ type ThumbEncode struct {
 }
 
 var (
-	QueueTypeMediaMeta      = QueueType("media_meta")
-	QueueTypeIOIntense      = QueueType("io_intense")
-	QueueTypeThumb          = QueueType("thumb")
-	QueueTypeEntityRecycle  = QueueType("recycle")
-	QueueTypeSlave          = QueueType("slave")
-	QueueTypeRemoteDownload = QueueType("remote_download")
+	QueueTypeContentProcessing = QueueType("content_processing")
+	QueueTypeMediaMeta         = QueueType("media_meta")
+	QueueTypeIOIntense         = QueueType("io_intense")
+	QueueTypeThumb             = QueueType("thumb")
+	QueueTypeEntityRecycle     = QueueType("recycle")
+	QueueTypeSlave             = QueueType("slave")
+	QueueTypeRemoteDownload    = QueueType("remote_download")
 )
 
 type CronType string

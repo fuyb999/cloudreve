@@ -234,7 +234,7 @@ func (m *manager) mediaMetaForNewEntity(ctx context.Context, session *fs.UploadS
 			m.l.Warning("Failed to create media meta task: %s", err)
 			return
 		}
-		if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, mediaMetaTask); err != nil {
+		if err := m.dep.ContentProcessingQueue(ctx).QueueTask(ctx, mediaMetaTask); err != nil {
 			m.l.Warning("Failed to queue media meta task: %s", err)
 		}
 

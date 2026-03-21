@@ -63,6 +63,12 @@ const (
 	FullTextIndexKey      = MetadataSysPrefix + "fulltext_index"
 	FTSSidecarManifestKey = MetadataSysPrefix + "fts_sidecar_manifest"
 	FTSSidecarEntityIDKey = MetadataSysPrefix + "fts_sidecar_entity_id"
+	DocInspectMimeKey     = MetadataSysPrefix + "doc_mime"
+	DocInspectParserKey   = MetadataSysPrefix + "doc_parser"
+	DocInspectLanguageKey = MetadataSysPrefix + "doc_language"
+	DocInspectTitleKey    = MetadataSysPrefix + "doc_title"
+	DocInspectAuthorKey   = MetadataSysPrefix + "doc_author"
+	DocInspectEntityIDKey = MetadataSysPrefix + "doc_entity_id"
 
 	pathIndexRoot = 0
 	pathIndexUser = 1

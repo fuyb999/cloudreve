@@ -115,7 +115,10 @@ type Dep interface {
 	TaskClient() inventory.TaskClient
 	// ForkWithLogger create a shallow copy of dependency with a new correlated logger, used as per-request dep.
 	ForkWithLogger(ctx context.Context, l logging.Logger) context.Context
+	// ContentProcessingQueue Get a singleton queue.Queue instance for content processing tasks.
+	ContentProcessingQueue(ctx context.Context) queue.Queue
 	// MediaMetaQueue Get a singleton queue.Queue instance for media metadata processing.
+	// Deprecated: use ContentProcessingQueue.
 	MediaMetaQueue(ctx context.Context) queue.Queue
 	// SlaveQueue Get a singleton queue.Queue instance for slave tasks.
 	SlaveQueue(ctx context.Context) queue.Queue
@@ -156,56 +159,57 @@ type Dep interface {
 }
 
 type dependency struct {
-	configProvider        conf.ConfigProvider
-	logger                logging.Logger
-	statics               iofs.FS
-	serverStaticFS        static.ServeFileSystem
-	dbClient              *ent.Client
-	rawEntClient          *ent.Client
-	kv                    cache.Driver
-	navigatorStateKv      cache.Driver
-	settingClient         inventory.SettingClient
-	fileClient            inventory.FileClient
-	shareClient           inventory.ShareClient
-	settingProvider       setting.Provider
-	userClient            inventory.UserClient
-	groupClient           inventory.GroupClient
-	storagePolicyClient   inventory.StoragePolicyClient
-	taskClient            inventory.TaskClient
-	nodeClient            inventory.NodeClient
-	davAccountClient      inventory.DavAccountClient
-	syncthingDeviceClient inventory.SyncthingDeviceClient
-	directLinkClient      inventory.DirectLinkClient
-	auditLogClient        inventory.AuditLogClient
-	fsEventClient         inventory.FsEventClient
-	oAuthClient           inventory.OAuthClientClient
-	emailClient           email.Driver
-	generalAuth           auth.Auth
-	hashidEncoder         hashid.Encoder
-	tokenAuth             auth.TokenAuth
-	lockSystem            lock.LockSystem
-	requestClient         request.Client
-	kafkaClient           kafka.Client
-	ioIntenseQueue        queue.Queue
-	thumbQueue            queue.Queue
-	mediaMetaQueue        queue.Queue
-	entityRecycleQueue    queue.Queue
-	slaveQueue            queue.Queue
-	remoteDownloadQueue   queue.Queue
-	ioIntenseQueueTask    queue.Task
-	mediaMeta             mediameta.Extractor
-	thumbPipeline         thumb.Generator
-	mimeDetector          mime.MimeDetector
-	credManager           credmanager.CredManager
-	nodePool              cluster.NodePool
-	taskRegistry          queue.TaskRegistry
-	webauthn              *webauthn.WebAuthn
-	parser                *uaparser.Parser
-	cron                  *cron.Cron
-	masterEncryptKeyVault encrypt.MasterEncryptKeyVault
-	eventHub              eventhub.EventHub
-	searchIndexer         searcher.SearchIndexer
-	textExtractor         searcher.TextExtractor
+	configProvider         conf.ConfigProvider
+	logger                 logging.Logger
+	statics                iofs.FS
+	serverStaticFS         static.ServeFileSystem
+	dbClient               *ent.Client
+	rawEntClient           *ent.Client
+	kv                     cache.Driver
+	navigatorStateKv       cache.Driver
+	settingClient          inventory.SettingClient
+	fileClient             inventory.FileClient
+	shareClient            inventory.ShareClient
+	settingProvider        setting.Provider
+	userClient             inventory.UserClient
+	groupClient            inventory.GroupClient
+	storagePolicyClient    inventory.StoragePolicyClient
+	taskClient             inventory.TaskClient
+	nodeClient             inventory.NodeClient
+	davAccountClient       inventory.DavAccountClient
+	syncthingDeviceClient  inventory.SyncthingDeviceClient
+	directLinkClient       inventory.DirectLinkClient
+	auditLogClient         inventory.AuditLogClient
+	fsEventClient          inventory.FsEventClient
+	oAuthClient            inventory.OAuthClientClient
+	emailClient            email.Driver
+	generalAuth            auth.Auth
+	hashidEncoder          hashid.Encoder
+	tokenAuth              auth.TokenAuth
+	lockSystem             lock.LockSystem
+	requestClient          request.Client
+	kafkaClient            kafka.Client
+	ioIntenseQueue         queue.Queue
+	thumbQueue             queue.Queue
+	contentProcessingQueue queue.Queue
+	mediaMetaQueue         queue.Queue
+	entityRecycleQueue     queue.Queue
+	slaveQueue             queue.Queue
+	remoteDownloadQueue    queue.Queue
+	ioIntenseQueueTask     queue.Task
+	mediaMeta              mediameta.Extractor
+	thumbPipeline          thumb.Generator
+	mimeDetector           mime.MimeDetector
+	credManager            credmanager.CredManager
+	nodePool               cluster.NodePool
+	taskRegistry           queue.TaskRegistry
+	webauthn               *webauthn.WebAuthn
+	parser                 *uaparser.Parser
+	cron                   *cron.Cron
+	masterEncryptKeyVault  encrypt.MasterEncryptKeyVault
+	eventHub               eventhub.EventHub
+	searchIndexer          searcher.SearchIndexer
+	textExtractor          searcher.TextExtractor
 
 	configPath        string
 	isPro             bool
@@ -674,32 +678,33 @@ func (d *dependency) ThumbQueue(ctx context.Context) queue.Queue {
 	return d.thumbQueue
 }
 
-func (d *dependency) MediaMetaQueue(ctx context.Context) queue.Queue {
+func (d *dependency) ContentProcessingQueue(ctx context.Context) queue.Queue {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	_, reload := ctx.Value(ReloadCtx{}).(bool)
-	if d.mediaMetaQueue != nil && !reload {
-		return d.mediaMetaQueue
+	if d.contentProcessingQueue != nil && !reload {
+		return d.contentProcessingQueue
 	}
 
-	if d.mediaMetaQueue != nil {
-		d.mediaMetaQueue.Shutdown()
+	if d.contentProcessingQueue != nil {
+		d.contentProcessingQueue.Shutdown()
 	}
 
 	settings := d.SettingProvider()
-	queueSetting := settings.Queue(context.Background(), setting.QueueTypeMediaMeta)
+	queueSetting := settings.Queue(context.Background(), setting.QueueTypeContentProcessing)
 
-	d.mediaMetaQueue = queue.New(d.Logger(), d.TaskClient(), d.TaskRegistry(), d,
+	d.contentProcessingQueue = queue.New(d.Logger(), d.TaskClient(), d.TaskRegistry(), d,
 		queue.WithBackoffFactor(queueSetting.BackoffFactor),
 		queue.WithMaxRetry(queueSetting.MaxRetry),
 		queue.WithBackoffMaxDuration(queueSetting.BackoffMaxDuration),
 		queue.WithRetryDelay(queueSetting.RetryDelay),
 		queue.WithWorkerCount(queueSetting.WorkerNum),
-		queue.WithName("MediaMetadataQueue"),
+		queue.WithName("ContentProcessingQueue"),
 		queue.WithMaxTaskExecution(queueSetting.MaxExecution),
 		queue.WithResumeTaskType(
 			queue.MediaMetaTaskType,
+			queue.DocumentInspectTaskType,
 			queue.FullTextIndexTaskType,
 			queue.FullTextDeleteTaskType,
 			queue.FullTextRebuildTaskType,
@@ -707,7 +712,11 @@ func (d *dependency) MediaMetaQueue(ctx context.Context) queue.Queue {
 			queue.FullTextChangeOwnerTaskType,
 		),
 	)
-	return d.mediaMetaQueue
+	return d.contentProcessingQueue
+}
+
+func (d *dependency) MediaMetaQueue(ctx context.Context) queue.Queue {
+	return d.ContentProcessingQueue(ctx)
 }
 
 func (d *dependency) IoIntenseQueue(ctx context.Context) queue.Queue {
@@ -987,10 +996,10 @@ func (d *dependency) Shutdown(ctx context.Context) error {
 
 	wg := sync.WaitGroup{}
 
-	if d.mediaMetaQueue != nil {
+	if d.contentProcessingQueue != nil {
 		wg.Add(1)
 		go func() {
-			d.mediaMetaQueue.Shutdown()
+			d.contentProcessingQueue.Shutdown()
 			defer wg.Done()
 		}()
 	}

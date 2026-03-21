@@ -98,6 +98,7 @@ var (
 
 const (
 	MediaMetaTaskType             = "media_meta"
+	DocumentInspectTaskType       = "document_inspect"
 	EntityRecycleRoutineTaskType  = "entity_recycle_routine"
 	ExplicitEntityRecycleTaskType = "explicit_entity_recycle"
 	UploadSentinelCheckTaskType   = "upload_sentinel_check"

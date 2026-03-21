@@ -494,7 +494,7 @@ func (service *RebuildFTSIndexWorkflowService) CreateRebuildFTSIndexTask(c *gin.
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to create task", err)
 	}
 
-	if err := dep.MediaMetaQueue(c).QueueTask(c, t); err != nil {
+	if err := dep.ContentProcessingQueue(c).QueueTask(c, t); err != nil {
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to queue task", err)
 	}
 

@@ -147,6 +147,10 @@ NodeCapabilityContentProcessing
 4. 没有节点级 Tika 配置
 5. 没有主站与从节点之间用于传递全文抽取摘要的标准 state 结构
 
+备注：
+
+- 上述问题已在当前代码主干实现中完成收口，本文这一节保留为最初评估背景
+
 ### 3.3 当前各类任务状态
 
 #### 压缩 / 解压
@@ -398,6 +402,20 @@ NodeCapabilityContentProcessing
 目标：
 
 - 后续扩展 Tika 文档识别、分类、能力探测
+
+当前状态：
+
+- 已完成
+- 当前实现采用统一 `slave_content_processing` 任务类型，内部通过 `document_inspect` kind 区分
+- 上传新版本后可异步触发文档识别任务，主站负责调度/回写，内容处理节点负责执行 Tika `rmeta` 检测
+- 当前回写字段包括：
+  - `sys:doc_mime`
+  - `sys:doc_parser`
+  - `sys:doc_language`
+  - `sys:doc_title`
+  - `sys:doc_author`
+  - `sys:doc_entity_id`
+- 回写后会继续触发全文索引同步，便于后续在 ES 中利用文档识别结果
 
 工作项：
 
@@ -654,8 +672,9 @@ QueueTypeContentProcessing
 
 截至当前代码状态：
 
-- 1-8 已完成主体实现
-- 尚未完成的是文档识别 / MIME 识别能力下放，以及是否引入独立 `ContentProcessingQueue`
+- 1-9 已完成主体实现
+- `ContentProcessingQueue` 已落地，现有全文抽取、媒体元数据、文档识别共享同一内容处理队列
+- 缩略图仍保留独立 `ThumbQueue` 作为 fallback，本地直跑与统一内容处理节点并存
 
 ## 12. 最终推荐
 

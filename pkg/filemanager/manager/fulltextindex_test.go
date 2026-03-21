@@ -1403,6 +1403,7 @@ type testDep struct {
 	dependency.Dep
 	settings      setting.Provider
 	taskClient    inventory.TaskClient
+	contentQueue  queue.Queue
 	mediaMeta     queue.Queue
 	registry      queue.TaskRegistry
 	config        conf.ConfigProvider
@@ -1424,8 +1425,18 @@ func (d testDep) TaskClient() inventory.TaskClient {
 	return d.taskClient
 }
 
-func (d testDep) MediaMetaQueue(ctx context.Context) queue.Queue {
+func (d testDep) ContentProcessingQueue(ctx context.Context) queue.Queue {
+	if d.contentQueue != nil {
+		return d.contentQueue
+	}
 	return d.mediaMeta
+}
+
+func (d testDep) MediaMetaQueue(ctx context.Context) queue.Queue {
+	if d.mediaMeta != nil {
+		return d.mediaMeta
+	}
+	return d.contentQueue
 }
 
 func (d testDep) TaskRegistry() queue.TaskRegistry {

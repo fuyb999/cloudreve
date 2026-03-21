@@ -476,6 +476,8 @@ func (m *manager) onNewEntityUploaded(ctx context.Context, session *fs.UploadSes
 
 		// Submit media meta task for new entity
 		m.mediaMetaForNewEntity(ctx, session, d)
+		// Submit document inspection task for new entity
+		m.documentInspectForNewEntity(ctx, session)
 		// Submit full text index task for new entity
 		m.fullTextIndexForNewEntity(ctx, session, owner)
 	}

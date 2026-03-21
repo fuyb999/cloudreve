@@ -106,7 +106,7 @@ func (s *server) Start() error {
 		_ = s.dep.EmailClient(context.Background())
 
 		// Start all queues
-		s.dep.MediaMetaQueue(context.Background()).Start()
+		s.dep.ContentProcessingQueue(context.Background()).Start()
 		s.dep.EntityRecycleQueue(context.Background()).Start()
 		s.dep.IoIntenseQueue(context.Background()).Start()
 		s.dep.RemoteDownloadQueue(context.Background()).Start()

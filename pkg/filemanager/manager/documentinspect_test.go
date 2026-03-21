@@ -1,0 +1,227 @@
+package manager
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/cloudreve/Cloudreve/v4/application/dependency"
+	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/task"
+	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+)
+
+func TestDocumentInspectTaskDispatchesSlaveContentProcessing(t *testing.T) {
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			Exts:        []string{"pdf"},
+			MaxFileSize: 1024,
+		},
+	}
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			801: {
+				ID:            801,
+				OwnerID:       701,
+				Name:          "dispatch.pdf",
+				Size:          512,
+				PrimaryEntity: 901,
+				Edges: ent.FileEdges{
+					Owner: &ent.User{ID: 701},
+					Entities: []*ent.Entity{
+						{
+							ID:                    901,
+							Type:                  int(inventorytypes.EntityTypeVersion),
+							StoragePolicyEntities: 9,
+						},
+					},
+				},
+			},
+		},
+	}
+	node := &testClusterNode{id: 21, isMaster: false, createID: 314}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		fileClient:    fileClient,
+		policyClient:  &testPolicyClient{policyByID: map[int]*ent.StoragePolicy{9: {ID: 9, Type: inventorytypes.PolicyTypeLocal, Settings: &inventorytypes.PolicySetting{}}}},
+		nodePool:      &testNodePool{node: node},
+		textExtractor: tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	inspectTask, err := NewDocumentInspectTask(ctx, mustURI(t, "cloudreve:///inspect/dispatch.pdf"), 801, 701, 901, nil)
+	if err != nil {
+		t.Fatalf("failed to create document inspect task: %v", err)
+	}
+
+	status, err := inspectTask.Do(ctx)
+	if err != nil {
+		t.Fatalf("unexpected document inspect task error: %v", err)
+	}
+	if status != task.StatusSuspending {
+		t.Fatalf("unexpected document inspect status: got %s want %s", status, task.StatusSuspending)
+	}
+	if node.createdTaskType != queue.SlaveContentProcessingTaskType {
+		t.Fatalf("unexpected created task type: got %s want %s", node.createdTaskType, queue.SlaveContentProcessingTaskType)
+	}
+
+	state := &DocumentInspectTaskState{}
+	if err := json.Unmarshal([]byte(inspectTask.State()), state); err != nil {
+		t.Fatalf("failed to parse document inspect state: %v", err)
+	}
+	if state.Phase != DocumentInspectTaskPhaseAwaitSlave || state.NodeID != 21 || state.SlaveID != 314 {
+		t.Fatalf("unexpected dispatch state: %+v", state)
+	}
+
+	wrapper, err := parseSlaveContentProcessingState(node.createdState)
+	if err != nil {
+		t.Fatalf("failed to parse slave state: %v", err)
+	}
+	if wrapper.Kind != slaveContentProcessingKindDocumentInspect {
+		t.Fatalf("unexpected content processing kind: got %s want %s", wrapper.Kind, slaveContentProcessingKindDocumentInspect)
+	}
+
+	payload := &SlaveDocumentInspectPayload{}
+	if err := json.Unmarshal(wrapper.Payload, payload); err != nil {
+		t.Fatalf("failed to unmarshal payload: %v", err)
+	}
+	if payload.FileName != "dispatch.pdf" || payload.FileSize != 512 || payload.Entity == nil || payload.Entity.ID != 901 {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.Policy == nil || payload.Policy.ID != 9 {
+		t.Fatalf("unexpected payload policy: %+v", payload.Policy)
+	}
+}
+
+func TestDocumentInspectTaskAwaitSlaveInspectionAppliesMetadata(t *testing.T) {
+	resultRaw, err := json.Marshal(&DocumentInspection{
+		EntityID: 901,
+		MimeType: "application/pdf",
+		Parser:   "org.apache.tika.parser.pdf.PDFParser",
+		Language: "zh",
+		Title:    "设计文档",
+		Author:   "alice",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal result: %v", err)
+	}
+
+	stateRaw, err := json.Marshal(&SlaveContentProcessingTaskState{
+		Kind:   slaveContentProcessingKindDocumentInspect,
+		Result: resultRaw,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal wrapper: %v", err)
+	}
+
+	node := &testClusterNode{
+		id:       22,
+		isMaster: false,
+		slaveTask: &cluster.SlaveTaskSummary{
+			Status:       task.StatusCompleted,
+			PrivateState: string(stateRaw),
+		},
+	}
+	metaFS := &testMetadataFS{}
+	manager := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       metaFS,
+		settings: testSettingProvider{enabled: false},
+		dep: testDep{
+			settings: testSettingProvider{enabled: false},
+			nodePool: &testNodePool{node: node},
+		},
+	}
+	inspectTask := &DocumentInspectTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:        queue.DocumentInspectTaskType,
+				PublicState: &inventorytypes.TaskPublicState{},
+			},
+		},
+	}
+	state := &DocumentInspectTaskState{
+		Uri:      mustURI(t, "cloudreve:///inspect/design.pdf"),
+		FileID:   801,
+		OwnerID:  701,
+		EntityID: 901,
+		Phase:    DocumentInspectTaskPhaseAwaitSlave,
+		NodeID:   22,
+		SlaveID:  315,
+	}
+
+	status, err := inspectTask.awaitSlaveInspection(context.Background(), manager, state)
+	if err != nil {
+		t.Fatalf("unexpected await slave error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected await slave status: got %s want %s", status, task.StatusCompleted)
+	}
+	if state.Phase != DocumentInspectTaskPhasePending || state.NodeID != 0 || state.SlaveID != 0 {
+		t.Fatalf("expected state reset after apply, got %+v", state)
+	}
+	if len(metaFS.paths) != 1 || metaFS.paths[0].String() != "cloudreve:///inspect/design.pdf" {
+		t.Fatalf("unexpected metadata patch target: %+v", metaFS.paths)
+	}
+
+	patchMap := map[string]fs.MetadataPatch{}
+	for _, patch := range metaFS.patches {
+		patchMap[patch.Key] = patch
+	}
+	if patchMap[dbfs.DocInspectMimeKey].Value != "application/pdf" {
+		t.Fatalf("unexpected mime patch: %+v", patchMap[dbfs.DocInspectMimeKey])
+	}
+	if patchMap[dbfs.DocInspectParserKey].Value != "org.apache.tika.parser.pdf.PDFParser" {
+		t.Fatalf("unexpected parser patch: %+v", patchMap[dbfs.DocInspectParserKey])
+	}
+	if patchMap[dbfs.DocInspectLanguageKey].Value != "zh" {
+		t.Fatalf("unexpected language patch: %+v", patchMap[dbfs.DocInspectLanguageKey])
+	}
+	if patchMap[dbfs.DocInspectTitleKey].Value != "设计文档" {
+		t.Fatalf("unexpected title patch: %+v", patchMap[dbfs.DocInspectTitleKey])
+	}
+	if patchMap[dbfs.DocInspectAuthorKey].Value != "alice" {
+		t.Fatalf("unexpected author patch: %+v", patchMap[dbfs.DocInspectAuthorKey])
+	}
+	if patchMap[dbfs.DocInspectEntityIDKey].Value != "901" {
+		t.Fatalf("unexpected entity patch: %+v", patchMap[dbfs.DocInspectEntityIDKey])
+	}
+}
+
+func TestExecuteSlaveDocumentInspectSkipsUnsupportedExt(t *testing.T) {
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			Exts:        []string{"pdf"},
+			MaxFileSize: 1024,
+		},
+	}
+	dep := testDep{
+		settings:      settings,
+		textExtractor: tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	result, err := ExecuteSlaveDocumentInspect(ctx, dep, &SlaveDocumentInspectPayload{
+		FileName: "sample.bin",
+		FileSize: 128,
+		Entity:   &ent.Entity{ID: 902},
+	})
+	if err != nil {
+		t.Fatalf("expected unsupported ext to short-circuit without error, got %v", err)
+	}
+	if result == nil || result.EntityID != 902 || result.MimeType != "" || result.Parser != "" {
+		t.Fatalf("unexpected document inspect result: %+v", result)
+	}
+}

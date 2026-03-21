@@ -400,7 +400,7 @@ func emailPostProcessor(ctx context.Context, settings map[string]string) error {
 
 func mediaMetaQueuePostProcessor(ctx context.Context, settings map[string]string) error {
 	dep := dependency.FromContext(ctx)
-	dep.MediaMetaQueue(context.WithValue(ctx, dependency.ReloadCtx{}, true)).Start()
+	dep.ContentProcessingQueue(context.WithValue(ctx, dependency.ReloadCtx{}, true)).Start()
 	return nil
 }
 

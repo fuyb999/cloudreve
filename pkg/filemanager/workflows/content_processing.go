@@ -36,6 +36,7 @@ const (
 	ContentProcessingTaskKindFullTextExtract   ContentProcessingTaskKind = "full_text_extract"
 	ContentProcessingTaskKindMediaMetaExtract  ContentProcessingTaskKind = "media_meta_extract"
 	ContentProcessingTaskKindThumbnailGenerate ContentProcessingTaskKind = "thumbnail_generate"
+	ContentProcessingTaskKindDocumentInspect   ContentProcessingTaskKind = "document_inspect"
 )
 
 // NewSlaveContentProcessingTask creates a new generic content processing task on slave.
@@ -138,6 +139,32 @@ func (t *SlaveContentProcessingTask) Do(ctx context.Context) (task.Status, error
 		resultRaw, err := json.Marshal(result)
 		if err != nil {
 			return task.StatusError, fmt.Errorf("failed to marshal thumbnail generate result: %w", err)
+		}
+		t.state.Result = resultRaw
+
+		newState, err := json.Marshal(t.state)
+		if err != nil {
+			return task.StatusError, fmt.Errorf("failed to marshal content processing state: %w", err)
+		}
+
+		t.Lock()
+		t.Task.PrivateState = string(newState)
+		t.Unlock()
+		return task.StatusCompleted, nil
+	case ContentProcessingTaskKindDocumentInspect:
+		payload := &manager.SlaveDocumentInspectPayload{}
+		if err := json.Unmarshal(t.state.Payload, payload); err != nil {
+			return task.StatusError, fmt.Errorf("failed to unmarshal document inspect payload: %w", err)
+		}
+
+		result, err := manager.ExecuteSlaveDocumentInspect(ctx, dep, payload)
+		if err != nil {
+			return task.StatusError, err
+		}
+
+		resultRaw, err := json.Marshal(result)
+		if err != nil {
+			return task.StatusError, fmt.Errorf("failed to marshal document inspect result: %w", err)
 		}
 		t.state.Result = resultRaw
 

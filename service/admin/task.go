@@ -22,19 +22,19 @@ func GetQueueMetrics(c *gin.Context) ([]QueueMetric, error) {
 	res := []QueueMetric{}
 	dep := dependency.FromContext(c)
 
-	mediaMeta := dep.MediaMetaQueue(c)
+	contentProcessing := dep.ContentProcessingQueue(c)
 	entityRecycle := dep.EntityRecycleQueue(c)
 	ioIntense := dep.IoIntenseQueue(c)
 	remoteDownload := dep.RemoteDownloadQueue(c)
 	thumb := dep.ThumbQueue(c)
 
 	res = append(res, QueueMetric{
-		Name:            setting.QueueTypeMediaMeta,
-		BusyWorkers:     mediaMeta.BusyWorkers(),
-		SuccessTasks:    mediaMeta.SuccessTasks(),
-		FailureTasks:    mediaMeta.FailureTasks(),
-		SubmittedTasks:  mediaMeta.SubmittedTasks(),
-		SuspendingTasks: mediaMeta.SuspendingTasks(),
+		Name:            setting.QueueTypeContentProcessing,
+		BusyWorkers:     contentProcessing.BusyWorkers(),
+		SuccessTasks:    contentProcessing.SuccessTasks(),
+		FailureTasks:    contentProcessing.FailureTasks(),
+		SubmittedTasks:  contentProcessing.SubmittedTasks(),
+		SuspendingTasks: contentProcessing.SuspendingTasks(),
 	})
 	res = append(res, QueueMetric{
 		Name:            setting.QueueTypeEntityRecycle,

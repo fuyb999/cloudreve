@@ -1034,7 +1034,7 @@ func (m *manager) queueFullTextReconcile(ctx context.Context, uri *fs.URI, fileI
 		return
 	}
 
-	if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
+	if err := m.dep.ContentProcessingQueue(ctx).QueueTask(ctx, t); err != nil {
 		m.l.Warning("Failed to queue full text reconcile task: %s", err)
 		return
 	}
