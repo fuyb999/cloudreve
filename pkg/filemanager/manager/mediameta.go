@@ -13,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -76,6 +77,28 @@ func NewMediaMetaTaskFromModel(task *ent.Task) queue.Task {
 		DBTask: &queue.DBTask{
 			Task: task,
 		},
+	}
+}
+
+func (m *MediaMetaTask) Summarize(hasher hashid.Encoder) *queue.Summary {
+	var state MediaMetaTaskState
+	if err := json.Unmarshal([]byte(m.State()), &state); err != nil {
+		return nil
+	}
+
+	props := map[string]any{
+		"file_id":   state.FileID,
+		"owner_id":  state.OwnerID,
+		"entity_id": state.EntityID,
+	}
+	if state.Uri != nil {
+		props["src"] = state.Uri.String()
+	}
+
+	return &queue.Summary{
+		NodeID: state.NodeID,
+		Phase:  string(state.Phase),
+		Props:  props,
 	}
 }
 

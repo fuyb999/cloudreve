@@ -13,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
@@ -83,6 +84,28 @@ func NewDocumentInspectTask(ctx context.Context, uri *fs.URI, fileID, ownerID, e
 func NewDocumentInspectTaskFromModel(task *ent.Task) queue.Task {
 	return &DocumentInspectTask{
 		DBTask: &queue.DBTask{Task: task},
+	}
+}
+
+func (t *DocumentInspectTask) Summarize(hasher hashid.Encoder) *queue.Summary {
+	var state DocumentInspectTaskState
+	if err := json.Unmarshal([]byte(t.State()), &state); err != nil {
+		return nil
+	}
+
+	props := map[string]any{
+		"file_id":   state.FileID,
+		"owner_id":  state.OwnerID,
+		"entity_id": state.EntityID,
+	}
+	if state.Uri != nil {
+		props["src"] = state.Uri.String()
+	}
+
+	return &queue.Summary{
+		NodeID: state.NodeID,
+		Phase:  string(state.Phase),
+		Props:  props,
 	}
 }
 
