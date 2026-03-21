@@ -173,6 +173,27 @@ func FileURL(c *gin.Context) {
 	}
 }
 
+func GetFullTextSidecar(c *gin.Context) {
+	service := ParametersFromContext[*explorer.FullTextSidecarService](c, explorer.FullTextSidecarParameterCtx{})
+	resp, err := service.Get(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: resp})
+}
+
+func DownloadFullTextSidecar(c *gin.Context) {
+	service := ParametersFromContext[*explorer.FullTextSidecarContentService](c, explorer.FullTextSidecarContentParameterCtx{})
+	if err := service.Serve(c); err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+}
+
 // ServeEntity download entity content
 func ServeEntity(c *gin.Context) {
 	service := ParametersFromContext[*explorer.EntityDownloadService](c, explorer.EntityDownloadParameterCtx{})

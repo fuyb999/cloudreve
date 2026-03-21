@@ -94,6 +94,11 @@ var (
 					return nil
 				}
 
+				if patch.Key == dbfs.FTSSidecarManifestKey || patch.Key == dbfs.FTSSidecarEntityIDKey {
+					patch.UpdateModifiedAt = false
+					return nil
+				}
+
 				return fmt.Errorf("unsupported system metadata key: %s", patch.Key)
 			},
 		},

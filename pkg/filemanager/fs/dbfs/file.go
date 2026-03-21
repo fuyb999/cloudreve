@@ -60,7 +60,9 @@ const (
 	ThumbMetadataPrefix = "thumb:"
 	ThumbDisabledKey    = ThumbMetadataPrefix + "disabled"
 
-	FullTextIndexKey = MetadataSysPrefix + "fulltext_index"
+	FullTextIndexKey      = MetadataSysPrefix + "fulltext_index"
+	FTSSidecarManifestKey = MetadataSysPrefix + "fts_sidecar_manifest"
+	FTSSidecarEntityIDKey = MetadataSysPrefix + "fts_sidecar_entity_id"
 
 	pathIndexRoot = 0
 	pathIndexUser = 1

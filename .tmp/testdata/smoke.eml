@@ -1,0 +1,22 @@
+From: alice@example.com
+To: bob@example.com
+Subject: EML smoke subject
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============0013118175690412568=="
+
+--===============0013118175690412568==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+EML smoke body line 1
+EML smoke body line 2
+
+--===============0013118175690412568==
+Content-Type: text/plain
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="eml-attachment.txt"
+MIME-Version: 1.0
+
+RU1MIGF0dGFjaG1lbnQgcGF5bG9hZAo=
+
+--===============0013118175690412568==--

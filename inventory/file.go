@@ -487,9 +487,8 @@ func (f *fileClient) StaleEntities(ctx context.Context, ids ...int) ([]*ent.Enti
 		// If explicit IDs are given, we can query them directly
 		groups, _ := f.batchInConditionEntityID(intsets.MaxInt, 10, 1, ids)
 		for _, group := range groups {
-			entities, err := f.client.Entity.Query().
-				Where(group).
-				All(ctx)
+			query := f.client.Entity.Query().Where(group)
+			entities, err := withEntityEagerLoading(ctx, query).All(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to query entities %v: %w", group, err)
 			}
@@ -500,11 +499,11 @@ func (f *fileClient) StaleEntities(ctx context.Context, ids ...int) ([]*ent.Enti
 	}
 
 	// No explicit IDs are given, we need to query all entities
-	entities, err := f.client.Entity.Query().
+	query := f.client.Entity.Query().
 		Where(entity.Or(
 			entity.ReferenceCountLTE(0),
-		)).
-		All(ctx)
+		))
+	entities, err := withEntityEagerLoading(ctx, query).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query stale entities: %w", err)
 	}

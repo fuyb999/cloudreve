@@ -190,6 +190,7 @@ func (m *EntityRecycleRoutineTask) Do(ctx context.Context) (task.Status, error) 
 // all stale entities in DB.
 func (m *manager) RecycleEntities(ctx context.Context, force bool, entityIDs ...int) error {
 	ae := serializer.NewAggregateError()
+	ctx = context.WithValue(ctx, inventory.LoadEntityFile{}, true)
 	entities, err := m.fs.StaleEntities(ctx, entityIDs...)
 	if err != nil {
 		return fmt.Errorf("failed to get entities: %w", err)
@@ -218,6 +219,12 @@ func (m *manager) RecycleEntities(ctx context.Context, force bool, entityIDs ...
 
 			for _, entity := range chunk {
 				mapSrcToId[entity.Source()] = entity.ID()
+			}
+
+			for _, entity := range chunk {
+				if err := cleanupFTSSidecarsForEntity(ctx, d, entity); err != nil {
+					m.l.Warning("Failed to cleanup FTS sidecars for stale entity %d: %s", entity.ID(), err)
+				}
 			}
 
 			toBeDeletedSrc := lo.Map(lo.Filter(chunk, func(item fs.Entity, index int) bool {

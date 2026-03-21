@@ -76,7 +76,10 @@ services:
       - elasticsearch_data:/usr/share/elasticsearch/data
 
   tika:
-    image: apache/tika:3.2.3.0-full
+    build:
+      context: .
+      dockerfile: docker/tika-unrar/Dockerfile
+    image: cloudreve/tika:3.2.3.0-full-unrar
     container_name: tika
     restart: unless-stopped
     ports:

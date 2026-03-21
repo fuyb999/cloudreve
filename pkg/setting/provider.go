@@ -264,6 +264,29 @@ const (
 
 var defaultBoolSet = &boolset.BooleanSet{}
 
+var (
+	defaultFTSTikaDocumentExts = []string{
+		"pdf", "txt", "text", "md", "markdown", "csv", "tsv", "html", "htm", "xhtml", "xml", "rtf", "epub", "fb2", "chm", "mif",
+		"doc", "dot", "docx", "docm", "dotx", "dotm", "wps", "wks", "wri", "hwp", "one", "wpd",
+		"xls", "xlt", "xla", "xlc", "xlm", "xlw", "xlsx", "xlsm", "xltx", "xltm", "xlsb", "xlam", "qpw",
+		"ppt", "pps", "pot", "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "sldx", "sldm", "ppam",
+		"vsd", "vst", "vss", "vsdx", "vstx", "vssx", "vsdm", "vstm", "vssm", "pub", "mpp", "xps", "dwfx",
+		"odt", "fodt", "ott", "odm", "oth",
+		"ods", "fods", "ots",
+		"odp", "fodp", "otp",
+		"odg", "fodg", "otg",
+		"odc", "odf", "odb", "odi",
+		"sxw", "stw", "sxg", "sxc", "stc", "sxi", "sti", "sxd", "std", "sxm",
+		"pages", "numbers", "key",
+		"eml", "mht", "mhtml", "nws", "msg", "pst", "mbox", "tnef",
+	}
+	defaultFTSTikaArchiveExts = []string{
+		"zip", "tar", "tgz", "tbz", "tbz2", "txz", "tlz", "7z", "rar", "ar",
+		"gz", "z", "bz", "bz2", "xz", "lzma", "lz4", "br", "snappy", "sz",
+		"pack200", "cpio", "arj", "dump", "jar", "war", "ear",
+	}
+)
+
 type (
 	SiteHostAllowListGetter interface {
 		AllowedHost() []string
@@ -715,15 +738,59 @@ func (s *settingProvider) FTSIndexElasticsearch(ctx context.Context) *FTSIndexEl
 }
 
 func (s *settingProvider) FTSTikaExtractor(ctx context.Context) *FTSTikaExtractorSetting {
+	docExts := normalizeTikaExts(s.getStringList(ctx, "fts_tika_document_exts", defaultFTSTikaDocumentExts))
+	archiveExts := normalizeTikaExts(s.getStringList(ctx, "fts_tika_archive_exts", defaultFTSTikaArchiveExts))
+	docEnabled := s.getBoolean(ctx, "fts_tika_document_enabled", true)
+	archiveEnabled := s.getBoolean(ctx, "fts_tika_archive_enabled", true)
+
 	return &FTSTikaExtractorSetting{
-		Endpoint:    s.getString(ctx, "fts_tika_endpoint", ""),
-		Exts:        s.getStringList(ctx, "fts_tika_exts", []string{}),
-		MaxFileSize: s.getInt64(ctx, "fts_tika_max_file_size_remote", 52428800),
+		Endpoint:             s.getString(ctx, "fts_tika_endpoint", ""),
+		Exts:                 activeTikaExts(docEnabled, docExts, archiveEnabled, archiveExts),
+		DocumentEnabled:      docEnabled,
+		DocumentExts:         docExts,
+		ArchiveEnabled:       archiveEnabled,
+		ArchiveExts:          archiveExts,
+		MaxFileSize:          s.getInt64(ctx, "fts_tika_max_file_size", 52428800),
+		SidecarEnabled:       s.getBoolean(ctx, "fts_tika_sidecar_enabled", false),
+		SidecarTextEnabled:   s.getBoolean(ctx, "fts_tika_sidecar_text_enabled", true),
+		SidecarAssetsEnabled: s.getBoolean(ctx, "fts_tika_sidecar_assets_enabled", true),
+		ExtractInlineImages:  s.getBoolean(ctx, "fts_tika_extract_inline_images", false),
 	}
 }
 
 func (s *settingProvider) FTSChunkSize(ctx context.Context) int {
 	return s.getInt(ctx, "fts_chunk_size", 2000)
+}
+
+func normalizeTikaExts(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	res := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.ToLower(strings.TrimSpace(item))
+		item = strings.TrimPrefix(item, ".")
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		res = append(res, item)
+	}
+
+	return res
+}
+
+func activeTikaExts(docEnabled bool, docExts []string, archiveEnabled bool, archiveExts []string) []string {
+	active := make([]string, 0, len(docExts)+len(archiveExts))
+	if docEnabled {
+		active = append(active, docExts...)
+	}
+	if archiveEnabled {
+		active = append(active, archiveExts...)
+	}
+
+	return normalizeTikaExts(active)
 }
 
 func (s *settingProvider) Queue(ctx context.Context, queueType QueueType) *QueueSetting {

@@ -653,6 +653,14 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				middleware.ValidateBatchFileCount(dep, explorer.FileURLParameterCtx{}),
 				controllers.FileURL,
 			)
+			file.GET("fulltext/sidecar",
+				controllers.FromQuery[explorer.FullTextSidecarService](explorer.FullTextSidecarParameterCtx{}),
+				controllers.GetFullTextSidecar,
+			)
+			file.GET("fulltext/sidecar/content",
+				controllers.FromQuery[explorer.FullTextSidecarContentService](explorer.FullTextSidecarContentParameterCtx{}),
+				controllers.DownloadFullTextSidecar,
+			)
 			// Update file content
 			file.PUT("content",
 				middleware.RequiredScopes(types.ScopeFilesWrite),

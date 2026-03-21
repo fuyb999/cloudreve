@@ -8,8 +8,6 @@ import (
 )
 
 func TestSettingClientSetUpsertsMissingSetting(t *testing.T) {
-	t.Parallel()
-
 	client, err := ent.Open("sqlite3", "file:setting-upsert?mode=memory&cache=shared&_fk=1")
 	if err != nil {
 		t.Fatalf("failed to open sqlite client: %v", err)

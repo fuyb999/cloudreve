@@ -1,12 +1,15 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"mime"
+	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,8 +17,10 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/samber/lo"
 )
@@ -63,8 +68,22 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 			break
 		}
 	}
+	var primaryFTSEntity fs.Entity
+	if primaryEntity != nil {
+		primaryFTSEntity = fs.NewEntity(primaryEntity)
+	}
 
-	content, _ := extractFTSContent(ctx, m.dep.TextExtractor(ctx), ownerManager, fileModel, primaryEntity)
+	content, embeddedAttachments, extractErr := extractFTSContent(
+		ctx,
+		m.dep.TextExtractor(ctx),
+		ownerManager,
+		fileModel,
+		primaryFTSEntity,
+		uri,
+	)
+	if extractErr != nil {
+		m.l.Warning("Failed to extract FTS content for file %d name=%q: %s", fileModel.ID, fileModel.Name, extractErr)
+	}
 	metadata := lo.Associate(fileModel.Edges.Metadata, func(item *ent.Metadata) (string, string) {
 		return item.Name, item.Value
 	})
@@ -84,6 +103,7 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 		pathDoc.Bucket = latestVersion.Bucket
 		pathDoc.VersionID = latestVersion.EntityID
 	}
+	attachments = append(attachments, embeddedAttachments...)
 
 	doc := &searcher.SearchFileDocument{
 		ID:              fmt.Sprintf("%d", fileModel.ID),
@@ -167,27 +187,203 @@ func (m *manager) storagePolicyFromID(ctx context.Context, id int) (*ent.Storage
 	return policy, nil
 }
 
-func extractFTSContent(ctx context.Context, extractor searcher.TextExtractor, ownerManager FileManager, fileModel *ent.File, primaryEntity *ent.Entity) (string, error) {
+func extractFTSContent(
+	ctx context.Context,
+	extractor searcher.TextExtractor,
+	ownerManager FileManager,
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	uri *fs.URI,
+) (string, []searcher.SearchAttachmentDocument, error) {
 	if primaryEntity == nil {
-		return "", nil
+		return "", nil, nil
 	}
 
-	if !ShouldExtractText(extractor, fileModel.Name, fileModel.Size) {
-		return "", nil
+	var (
+		sidecarContent     string
+		sidecarAttachments []searcher.SearchAttachmentDocument
+		hasCurrentSidecar  bool
+		internal           *manager
+		sidecarCfg         = struct {
+			textEnabled   bool
+			assetsEnabled bool
+		}{}
+	)
+	if loaded, ok := ownerManager.(*manager); ok {
+		internal = loaded
+		cfg := internal.settings.FTSTikaExtractor(ctx)
+		sidecarCfg.textEnabled = cfg.SidecarTextEnabled
+		sidecarCfg.assetsEnabled = cfg.SidecarAssetsEnabled
+		sidecarContent, sidecarAttachments, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri)
+		if hasCurrentSidecar && sidecarCfg.textEnabled && sidecarContent != "" {
+			if !sidecarCfg.assetsEnabled {
+				sidecarAttachments = nil
+			}
+			return sidecarContent, sidecarAttachments, nil
+		}
 	}
 
-	source, err := ownerManager.GetEntitySource(ctx, primaryEntity.ID)
+	source, err := ownerManager.GetEntitySource(ctx, primaryEntity.ID())
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer source.Close()
 
-	text, err := extractor.Extract(ctx, source)
-	if err != nil {
-		return "", err
+	text := ""
+	if sidecarCfg.textEnabled {
+		text = sidecarContent
+	}
+	if text == "" && ShouldExtractText(extractor, fileModel.Name, fileModel.Size) {
+		var err error
+		if tika, ok := extractor.(*tikaextractor.TikaExtractor); ok {
+			text, err = tika.ExtractFile(ctx, source, fileModel.Name)
+		} else {
+			text, err = extractor.Extract(ctx, source)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+
+		text = strings.TrimSpace(text)
 	}
 
-	return strings.TrimSpace(text), nil
+	var attachments []searcher.SearchAttachmentDocument
+	if sidecarCfg.assetsEnabled {
+		attachments = sidecarAttachments
+	}
+	if len(attachments) == 0 && (!hasCurrentSidecar || sidecarCfg.assetsEnabled) {
+		attachments = extractFTSEmbeddedAttachments(ctx, extractor, ownerManager, fileModel, primaryEntity, uri, source)
+	}
+	if !hasCurrentSidecar ||
+		(sidecarCfg.textEnabled && sidecarContent == "" && text != "") ||
+		(sidecarCfg.assetsEnabled && len(sidecarAttachments) == 0 && len(attachments) > 0) {
+		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, uri, primaryEntity, source, text)
+		if internal != nil && sidecarCfg.assetsEnabled && len(attachments) > 0 {
+			if refreshedText, refreshedAttachments, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri); ok {
+				if sidecarCfg.textEnabled && text == "" {
+					text = refreshedText
+				}
+				if len(refreshedAttachments) > 0 {
+					attachments = refreshedAttachments
+				}
+			}
+		}
+	}
+	return text, attachments, nil
+}
+
+func (m *manager) loadFTSContentFromSidecar(
+	ctx context.Context,
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	uri *fs.URI,
+) (string, []searcher.SearchAttachmentDocument, bool) {
+	if m == nil || fileModel == nil || primaryEntity == nil || uri == nil {
+		return "", nil, false
+	}
+
+	_, manifest, handler, _, err := m.loadFTSSidecarManifest(ctx, uri)
+	if err != nil || manifest == nil || manifest.EntityID != primaryEntity.ID() {
+		return "", nil, false
+	}
+
+	var (
+		content  string
+		rmetaRaw []byte
+	)
+
+	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "content.txt"); ok {
+		content = strings.TrimSpace(string(raw))
+	}
+	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "rmeta.json"); ok {
+		rmetaRaw = raw
+	}
+
+	return content, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw), true
+}
+
+func (m *manager) readFTSSidecarObject(
+	ctx context.Context,
+	handler driver.Handler,
+	manifest *FTSSidecarManifest,
+	name string,
+) ([]byte, bool) {
+	if manifest == nil || handler == nil {
+		return nil, false
+	}
+
+	object, ok := manifest.ObjectByName(name)
+	if !ok {
+		return nil, false
+	}
+
+	raw, err := readFTSSidecarBytes(ctx, m.dep.RequestClient(), handler, object.Path)
+	if err != nil {
+		return nil, false
+	}
+
+	return raw, true
+}
+
+func extractFTSEmbeddedAttachments(
+	ctx context.Context,
+	extractor searcher.TextExtractor,
+	ownerManager FileManager,
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	uri *fs.URI,
+	source sidecarSource,
+) []searcher.SearchAttachmentDocument {
+	internal, ok := ownerManager.(*manager)
+	if !ok || fileModel == nil || uri == nil || primaryEntity == nil || source == nil {
+		return nil
+	}
+
+	tika, ok := extractor.(*tikaextractor.TikaExtractor)
+	if !ok {
+		return nil
+	}
+
+	cfg := internal.settings.FTSTikaExtractor(ctx)
+	if !cfg.SidecarEnabled || !cfg.SidecarAssetsEnabled {
+		return nil
+	}
+
+	artifactOpts := tikaextractor.ArtifactOptions{
+		ExtractInlineImages: cfg.ExtractInlineImages,
+	}
+
+	var (
+		rmetaRaw  []byte
+		unpackRaw []byte
+		docxRaw   []byte
+	)
+
+	if rewindSidecarSource(internal, source) {
+		if raw, err := tika.RMetaFile(ctx, source, fileModel.Name, artifactOpts); err != nil {
+			internal.l.Warning("Failed to extract Tika rmeta for file %d when building FTS attachments: %s", fileModel.ID, err)
+		} else {
+			rmetaRaw = raw
+		}
+	}
+
+	if rewindSidecarSource(internal, source) {
+		if raw, err := unpackTikaAssets(ctx, tika, fileModel.Name, source, artifactOpts); err != nil {
+			internal.l.Warning("Failed to unpack Tika embedded resources for file %d when building FTS attachments: %s", fileModel.ID, err)
+		} else {
+			unpackRaw = raw
+		}
+	}
+
+	if strings.EqualFold(filepath.Ext(fileModel.Name), ".docx") {
+		if raw, err := buildDocxMediaArchive(source, primaryEntity.Size()); err != nil {
+			internal.l.Warning("Failed to collect DOCX media for file %d when building FTS attachments: %s", fileModel.ID, err)
+		} else {
+			docxRaw = raw
+		}
+	}
+
+	return buildEmbeddedSearchAttachments(fileModel, uri, primaryEntity, rmetaRaw, unpackRaw, docxRaw)
 }
 
 func buildSearchEntities(fileModel *ent.File, uri *fs.URI, fallbackPolicy *ent.StoragePolicy) ([]searcher.SearchFileVersionDocument, []searcher.SearchAttachmentDocument) {
@@ -238,6 +434,339 @@ func buildSearchEntities(fileModel *ent.File, uri *fs.URI, fallbackPolicy *ent.S
 	})
 
 	return versions, attachments
+}
+
+type embeddedAttachmentAccumulator struct {
+	doc *searcher.SearchAttachmentDocument
+}
+
+func buildEmbeddedSearchAttachments(
+	fileModel *ent.File,
+	uri *fs.URI,
+	primaryEntity fs.Entity,
+	rmetaRaw, unpackRaw, docxRaw []byte,
+) []searcher.SearchAttachmentDocument {
+	if fileModel == nil || uri == nil || primaryEntity == nil {
+		return nil
+	}
+
+	prefix := ftsSidecarPrefix(fileModel.OwnerID, fileModel.ID, primaryEntity.ID())
+	items := map[string]*embeddedAttachmentAccumulator{}
+	order := make([]string, 0)
+
+	upsert := func(key string, update func(*searcher.SearchAttachmentDocument)) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+
+		acc, ok := items[key]
+		if !ok {
+			doc := &searcher.SearchAttachmentDocument{
+				ID:       fmt.Sprintf("%d:embedded:%s", fileModel.ID, key),
+				ParentID: fileModel.ID,
+				EntityID: primaryEntity.ID(),
+				Type:     "embedded",
+				Path:     key,
+			}
+			acc = &embeddedAttachmentAccumulator{doc: doc}
+			items[key] = acc
+			order = append(order, key)
+		}
+
+		update(acc.doc)
+		if acc.doc.Name == "" {
+			acc.doc.Name = filepath.Base(acc.doc.Path)
+		}
+		if acc.doc.MimeType == "" {
+			acc.doc.MimeType = mime.TypeByExtension(filepath.Ext(acc.doc.Name))
+		}
+		if acc.doc.Source == "" {
+			acc.doc.Source = acc.doc.Path
+		}
+	}
+
+	if len(rmetaRaw) > 0 {
+		for index, item := range parseTikaRMetaAttachments(rmetaRaw) {
+			relativeName := firstNonEmpty(item.Path, item.Name)
+			if normalized, ok := normalizeFTSSidecarRelativePath(relativeName); ok {
+				relativeName = normalized
+			} else {
+				relativeName = fmt.Sprintf("embedded_%d", index)
+			}
+			key := path.Join(prefix, ftsSidecarEmbeddedDir, relativeName)
+
+			upsert(key, func(doc *searcher.SearchAttachmentDocument) {
+				if item.Type != "" {
+					doc.Type = item.Type
+				}
+				doc.Name = firstNonEmpty(doc.Name, item.Name)
+				doc.Path = firstNonEmpty(doc.Path, key)
+				doc.MimeType = firstNonEmpty(doc.MimeType, item.MimeType)
+				if item.Size > 0 {
+					doc.Size = item.Size
+				}
+				doc.Content = firstNonEmpty(doc.Content, item.Content)
+				if len(item.Metadata) > 0 {
+					if doc.Metadata == nil {
+						doc.Metadata = map[string]string{}
+					}
+					for mk, mv := range item.Metadata {
+						if _, ok := doc.Metadata[mk]; !ok {
+							doc.Metadata[mk] = mv
+						}
+					}
+				}
+				if item.Path != "" {
+					if doc.Metadata == nil {
+						doc.Metadata = map[string]string{}
+					}
+					doc.Metadata["embedded_path"] = item.Path
+				}
+			})
+		}
+	}
+
+	addArchiveEntriesToAttachments(unpackRaw, prefix, ftsSidecarEmbeddedDir, "embedded", upsert)
+	addArchiveEntriesToAttachments(docxRaw, prefix, ftsSidecarDocxDir, "docx_media", upsert)
+
+	attachments := make([]searcher.SearchAttachmentDocument, 0, len(order))
+	for _, key := range order {
+		item := items[key].doc
+		item.Name = firstNonEmpty(item.Name, filepath.Base(item.Path))
+		item.Path = firstNonEmpty(item.Path, item.Name)
+		item.Source = firstNonEmpty(item.Source, item.Path)
+		attachments = append(attachments, *item)
+	}
+
+	return attachments
+}
+
+func buildEmbeddedSearchAttachmentsFromManifest(
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	manifest *FTSSidecarManifest,
+	rmetaRaw []byte,
+) []searcher.SearchAttachmentDocument {
+	if fileModel == nil || primaryEntity == nil || manifest == nil {
+		return nil
+	}
+
+	rmetaByName := map[string]tikaRMetaAttachment{}
+	for _, item := range parseTikaRMetaAttachments(rmetaRaw) {
+		relativeName := firstNonEmpty(item.Path, item.Name)
+		relativeName, ok := normalizeFTSSidecarRelativePath(relativeName)
+		if !ok {
+			continue
+		}
+
+		key := path.Join(ftsSidecarEmbeddedDir, relativeName)
+		if _, exists := rmetaByName[key]; !exists {
+			rmetaByName[key] = item
+		}
+	}
+
+	attachments := make([]searcher.SearchAttachmentDocument, 0, len(manifest.Objects))
+	for _, object := range manifest.Objects {
+		objectName := firstNonEmpty(object.ID, object.Name)
+		if objectName == "" {
+			continue
+		}
+		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" {
+			continue
+		}
+
+		docType := ""
+		switch {
+		case object.Kind == "archive":
+			docType = "archive"
+		case object.Kind != "":
+			docType = object.Kind
+		case strings.HasPrefix(objectName, ftsSidecarEmbeddedDir+"/"):
+			docType = "embedded"
+		case strings.HasPrefix(objectName, ftsSidecarDocxDir+"/"):
+			docType = "docx_media"
+		default:
+			continue
+		}
+
+		doc := searcher.SearchAttachmentDocument{
+			ID:                 fmt.Sprintf("%d:embedded:%s", fileModel.ID, objectName),
+			ParentID:           fileModel.ID,
+			ParentAttachmentID: object.ParentID,
+			Depth:              object.Depth,
+			EntityID:           primaryEntity.ID(),
+			Type:               docType,
+			Name:               path.Base(objectName),
+			Path:               object.Path,
+			Size:               object.Size,
+			MimeType:           object.MimeType,
+			Source:             object.Path,
+			CreatedAt:          primaryEntity.CreatedAt(),
+			UpdatedAt:          primaryEntity.UpdatedAt(),
+		}
+
+		if doc.MimeType == "" {
+			doc.MimeType = mime.TypeByExtension(filepath.Ext(doc.Name))
+		}
+
+		if item, ok := rmetaByName[objectName]; ok {
+			doc.Name = firstNonEmpty(doc.Name, item.Name)
+			doc.MimeType = firstNonEmpty(doc.MimeType, item.MimeType)
+			if item.Size > 0 {
+				doc.Size = item.Size
+			}
+			doc.Content = firstNonEmpty(doc.Content, item.Content)
+			if len(item.Metadata) > 0 {
+				doc.Metadata = cloneStringMap(item.Metadata)
+			}
+			if item.Path != "" {
+				if doc.Metadata == nil {
+					doc.Metadata = map[string]string{}
+				}
+				doc.Metadata["embedded_path"] = item.Path
+			}
+		}
+
+		attachments = append(attachments, doc)
+	}
+
+	return attachments
+}
+
+type tikaRMetaAttachment struct {
+	Type     string
+	Name     string
+	Path     string
+	MimeType string
+	Size     int64
+	Content  string
+	Metadata map[string]string
+}
+
+func parseTikaRMetaAttachments(raw []byte) []tikaRMetaAttachment {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+
+	var payload []map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+
+	res := make([]tikaRMetaAttachment, 0, len(payload))
+	for index, item := range payload {
+		path := firstNonEmpty(
+			stringValue(item["X-TIKA:embedded_resource_path"]),
+			stringValue(item["embedded_resource_path"]),
+			stringValue(item["embeddedResourcePath"]),
+		)
+		name := firstNonEmpty(
+			stringValue(item["resourceName"]),
+			stringValue(item["resource_name"]),
+			filepath.Base(path),
+		)
+
+		// The first rmeta item is typically the parent document. Keep only embedded items.
+		if index == 0 && path == "" {
+			continue
+		}
+		if path == "" && name == "" {
+			continue
+		}
+
+		content := strings.TrimSpace(firstNonEmpty(
+			stringValue(item["X-TIKA:content"]),
+			stringValue(item["content"]),
+		))
+		mimeType := firstNonEmpty(
+			stringValue(item["Content-Type"]),
+			stringValue(item["dc:format"]),
+			mime.TypeByExtension(filepath.Ext(name)),
+		)
+		size := firstNonZeroInt64(
+			int64Value(item["Content-Length"]),
+			int64Value(item["content_length"]),
+		)
+
+		metadata := map[string]string{}
+		for key, value := range item {
+			if value == nil || strings.EqualFold(key, "X-TIKA:content") || strings.EqualFold(key, "content") {
+				continue
+			}
+			if text := strings.TrimSpace(stringValue(value)); text != "" {
+				metadata[key] = text
+			}
+		}
+
+		res = append(res, tikaRMetaAttachment{
+			Type:     "embedded",
+			Name:     name,
+			Path:     firstNonEmpty(path, name),
+			MimeType: mimeType,
+			Size:     size,
+			Content:  content,
+			Metadata: metadata,
+		})
+	}
+
+	return res
+}
+
+func addArchiveEntriesToAttachments(
+	raw []byte,
+	prefix string,
+	storageDir string,
+	defaultType string,
+	upsert func(key string, update func(*searcher.SearchAttachmentDocument)),
+) {
+	if len(raw) == 0 {
+		return
+	}
+
+	entries, ok := readArchiveEntries(raw)
+	if !ok {
+		return
+	}
+
+	for _, entry := range entries {
+		relativeName, ok := normalizeFTSSidecarRelativePath(entry.Name)
+		if !ok {
+			continue
+		}
+		entryName := entry.Name
+		key := path.Join(prefix, storageDir, relativeName)
+		upsert(key, func(doc *searcher.SearchAttachmentDocument) {
+			if doc.Type == "" || doc.Type == "embedded" {
+				doc.Type = defaultType
+			}
+			doc.Name = firstNonEmpty(doc.Name, filepath.Base(relativeName))
+			doc.Path = firstNonEmpty(doc.Path, key)
+			doc.MimeType = firstNonEmpty(doc.MimeType, mime.TypeByExtension(filepath.Ext(relativeName)))
+			if entry.Data != nil {
+				doc.Size = int64(len(entry.Data))
+			}
+			if doc.Metadata == nil {
+				doc.Metadata = map[string]string{}
+			}
+			if _, ok := doc.Metadata["archive_entry"]; !ok {
+				doc.Metadata["archive_entry"] = entryName
+			}
+		})
+	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+
+	return cloned
 }
 
 func buildSearchVersion(entity *ent.Entity, fileName string, policy *ent.StoragePolicy) *searcher.SearchFileVersionDocument {
@@ -383,4 +912,102 @@ func firstNonEmpty(values ...string) string {
 	}
 
 	return ""
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+
+	return 0
+}
+
+func stringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []string:
+		return strings.Join(typed, ", ")
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(stringValue(item)); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, ", ")
+	case json.Number:
+		return typed.String()
+	case fmt.Stringer:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int16:
+		return strconv.FormatInt(int64(typed), 10)
+	case int8:
+		return strconv.FormatInt(int64(typed), 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		return ""
+	}
+}
+
+func int64Value(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int16:
+		return int64(typed)
+	case int8:
+		return int64(typed)
+	case uint64:
+		return int64(typed)
+	case uint:
+		return int64(typed)
+	case uint32:
+		return int64(typed)
+	case uint16:
+		return int64(typed)
+	case uint8:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil {
+			return parsed
+		}
+	}
+
+	return 0
 }

@@ -213,6 +213,11 @@ func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option)
 		opt.Apply(o)
 	}
 
+	var softDeleteIDs []int
+	if !o.SkipSoftDelete && !o.SysSkipSoftDelete && m.settings.FTSEnabled(ctx) {
+		softDeleteIDs = m.collectFTSRecursiveFileIDs(ctx, path...)
+	}
+
 	targets := make([]fs.File, 0, len(path))
 	for _, item := range path {
 		if file := m.getAuditFile(ctx, item); file != nil {
@@ -220,9 +225,26 @@ func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option)
 		}
 	}
 
+	sidecarTargets := make([]fs.File, 0, len(path))
+	if o.SkipSoftDelete || o.SysSkipSoftDelete {
+		loadCtx := context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
+		for _, item := range path {
+			file, err := m.fs.Get(loadCtx, item, dbfs.WithFileEntities(), dbfs.WithNotRoot())
+			if err != nil {
+				continue
+			}
+
+			sidecarTargets = append(sidecarTargets, file)
+		}
+	}
+
 	if !o.SkipSoftDelete && !o.SysSkipSoftDelete {
 		if err := m.SoftDelete(ctx, path...); err != nil {
 			return err
+		}
+
+		for _, fileID := range softDeleteIDs {
+			m.queueFullTextDelete(ctx, fileID)
 		}
 
 		for _, file := range targets {
@@ -266,6 +288,12 @@ func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option)
 			"name":        file.DisplayName(),
 			"unlink_only": o.UnlinkOnly,
 		}, file, nil)
+	}
+
+	for _, file := range sidecarTargets {
+		if err := cleanupFTSSidecarsForFile(ctx, m, file); err != nil {
+			m.l.Warning("Failed to cleanup FTS sidecars for deleted file %d: %s", file.ID(), err)
+		}
 	}
 
 	return nil
@@ -316,7 +344,58 @@ func (l *manager) Refresh(ctx context.Context, d time.Duration, token string) (l
 }
 
 func (l *manager) Restore(ctx context.Context, path ...*fs.URI) error {
-	return l.fs.Restore(ctx, path...)
+	var restoreIDs []int
+	if l.settings.FTSEnabled(ctx) {
+		restoreIDs = l.collectFTSRecursiveFileIDs(ctx, path...)
+	}
+	if err := l.fs.Restore(ctx, path...); err != nil {
+		return err
+	}
+
+	if l.settings.FTSEnabled(ctx) {
+		for _, fileID := range restoreIDs {
+			l.queueFullTextReconcile(ctx, nil, fileID, 0, 0)
+		}
+	}
+
+	return nil
+}
+
+func collectFTSRecursiveFileIDs(
+	ctx context.Context,
+	walkFn func(context.Context, *fs.URI, int, fs.WalkFunc, ...fs.Option) error,
+	paths ...*fs.URI,
+) []int {
+	if walkFn == nil || len(paths) == 0 {
+		return nil
+	}
+
+	seen := map[int]struct{}{}
+	collected := make([]int, 0, len(paths))
+	for _, item := range paths {
+		if item == nil {
+			continue
+		}
+
+		_ = walkFn(ctx, item, -1, func(file fs.File, level int) error {
+			if file == nil || file.ID() <= 0 {
+				return nil
+			}
+			if _, ok := seen[file.ID()]; ok {
+				return nil
+			}
+
+			seen[file.ID()] = struct{}{}
+			collected = append(collected, file.ID())
+			return nil
+		})
+	}
+
+	return collected
+}
+
+func (m *manager) collectFTSRecursiveFileIDs(ctx context.Context, paths ...*fs.URI) []int {
+	return collectFTSRecursiveFileIDs(ctx, m.Walk, paths...)
 }
 
 func (l *manager) CreateOrUpdateShare(ctx context.Context, path *fs.URI, args *CreateShareArgs) (*ent.Share, error) {

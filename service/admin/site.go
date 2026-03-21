@@ -277,8 +277,15 @@ var (
 		"fts_elasticsearch_page_size":                meilisearchPostProcessor,
 		"fts_elasticsearch_skip_tls_verify":          meilisearchPostProcessor,
 		"fts_tika_endpoint":                          tikaPostProcessor,
-		"fts_tika_exts":                              tikaPostProcessor,
+		"fts_tika_document_enabled":                  tikaPostProcessor,
+		"fts_tika_document_exts":                     tikaPostProcessor,
+		"fts_tika_archive_enabled":                   tikaPostProcessor,
+		"fts_tika_archive_exts":                      tikaPostProcessor,
 		"fts_tika_max_file_size":                     tikaPostProcessor,
+		"fts_tika_sidecar_enabled":                   tikaPostProcessor,
+		"fts_tika_sidecar_text_enabled":              tikaPostProcessor,
+		"fts_tika_sidecar_assets_enabled":            tikaPostProcessor,
+		"fts_tika_extract_inline_images":             tikaPostProcessor,
 	}
 )
 

@@ -443,6 +443,16 @@ func (m *manager) updateStateless(ctx context.Context, req *fs.UploadRequest, o 
 
 func (m *manager) onNewEntityUploaded(ctx context.Context, session *fs.UploadSession, d driver.Handler, owner int) {
 	if !m.stateless {
+		m.l.Debug(
+			"Processing post-upload hooks for file %d entity %d uri %s owner %d importing=%t entity_type=%v.",
+			session.FileID,
+			session.EntityID,
+			session.Props.Uri,
+			owner,
+			session.Importing,
+			session.Props.EntityType,
+		)
+
 		eventType := audit.EntityUploaded
 		if session.Importing {
 			eventType = audit.FileImported

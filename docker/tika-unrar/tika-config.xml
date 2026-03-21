@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<properties>
+  <parsers>
+    <parser class="org.apache.tika.parser.DefaultParser">
+      <parser-exclude class="org.apache.tika.parser.pkg.RarParser"/>
+    </parser>
+    <parser class="org.apache.tika.parser.pkg.UnrarParser">
+      <mime>application/x-rar-compressed</mime>
+      <mime>application/vnd.rar</mime>
+    </parser>
+  </parsers>
+</properties>

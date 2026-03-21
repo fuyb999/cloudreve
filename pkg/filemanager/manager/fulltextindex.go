@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
@@ -573,7 +575,29 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	l := dep.Logger()
 	indexer := dep.SearchIndexer(ctx)
 
-	doc, uri, err := fm.buildFTSFileDocument(ctx, fileID)
+	uri, err := fm.resolveFTSFileURI(ctx, fileID)
+	if err != nil {
+		if shouldIgnoreFTSSyncError(err) {
+			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
+			}
+
+			l.Debug("File %d disappeared before full text sync finished, removed stale index entry.", fileID)
+			return task.StatusCompleted, nil
+		}
+		return task.StatusError, fmt.Errorf("failed to resolve search uri for file %d: %w", fileID, err)
+	}
+
+	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
+		if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
+		}
+
+		l.Debug("File %d is in trash, removed full text index entry.", fileID)
+		return task.StatusCompleted, nil
+	}
+
+	doc, _, err := fm.buildFTSFileDocument(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
@@ -603,6 +627,31 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	return task.StatusCompleted, nil
 }
 
+func (m *manager) resolveFTSFileURI(ctx context.Context, fileID int) (*fs.URI, error) {
+	fileModel, err := m.loadFTSFileModel(ctx, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load file model: %w", err)
+	}
+
+	ownerManager, err := m.fileManagerForOwner(ctx, fileModel.OwnerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load file owner context: %w", err)
+	}
+	defer ownerManager.Recycle()
+
+	traversed, err := ownerManager.TraverseFile(ctx, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve file uri: %w", err)
+	}
+
+	uri := traversed.Uri(true)
+	if uri == nil {
+		return nil, fmt.Errorf("failed to resolve file uri")
+	}
+
+	return uri, nil
+}
+
 func shouldIgnoreFTSSyncError(err error) bool {
 	var notFound *ent.NotFoundError
 	return errors.As(err, &notFound)
@@ -612,7 +661,20 @@ func shouldIgnoreFTSSyncError(err error) bool {
 // the extractor's supported extensions and max file size. This is exported for
 // use by the rebuild index workflow.
 func ShouldExtractText(extractor searcher.TextExtractor, fileName string, size int64) bool {
-	return util.IsInExtensionList(extractor.Exts(), fileName) && extractor.MaxFileSize() > size
+	if extractor.MaxFileSize() <= size {
+		return false
+	}
+
+	if util.IsInExtensionList(extractor.Exts(), fileName) {
+		return true
+	}
+
+	return supportsTNEFWinmailDAT(extractor.Exts(), fileName)
+}
+
+func supportsTNEFWinmailDAT(exts []string, fileName string) bool {
+	return strings.EqualFold(filepath.Base(strings.TrimSpace(fileName)), "winmail.dat") &&
+		util.ContainsString(exts, "tnef")
 }
 
 // shouldIndexFullText checks if a file should be indexed for full-text search.
@@ -628,13 +690,22 @@ func (m *manager) shouldIndexFullText(ctx context.Context, fileName string, size
 // fullTextIndexForNewEntity creates and queues a full text index task for a newly uploaded entity.
 func (m *manager) fullTextIndexForNewEntity(ctx context.Context, session *fs.UploadSession, owner int) {
 	if session.Props.EntityType != nil && *session.Props.EntityType != types.EntityTypeVersion {
+		m.l.Debug("Skipping full text queue for file %d: entity type %v is not version.", session.FileID, session.Props.EntityType)
 		return
 	}
 
 	if !m.settings.FTSEnabled(ctx) {
+		m.l.Debug("Skipping full text queue for file %d: FTS disabled.", session.FileID)
 		return
 	}
 
+	m.l.Debug(
+		"Queueing full text reconcile for new entity file %d entity %d owner %d uri %s.",
+		session.FileID,
+		session.EntityID,
+		owner,
+		session.Props.Uri,
+	)
 	m.queueFullTextReconcile(ctx, session.Props.Uri, session.FileID, owner, session.EntityID)
 }
 
@@ -672,7 +743,16 @@ func (m *manager) queueFullTextReconcile(ctx context.Context, uri *fs.URI, fileI
 
 	if err := m.dep.MediaMetaQueue(ctx).QueueTask(ctx, t); err != nil {
 		m.l.Warning("Failed to queue full text reconcile task: %s", err)
+		return
 	}
+
+	m.l.Debug(
+		"Queued new full text reconcile task for file %d entity %d owner %d uri %v.",
+		fileID,
+		entityID,
+		ownerID,
+		uri,
+	)
 }
 
 func (m *manager) mergePendingFullTextTask(ctx context.Context, state *FullTextIndexTaskState) (bool, error) {

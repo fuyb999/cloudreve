@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/textproto"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -555,6 +556,9 @@ func (f *entitySource) Seek(offset int64, whence int) (int64, error) {
 
 		if f.pos != offset {
 			err = f.rsc.Close()
+			if errors.Is(err, os.ErrClosed) {
+				err = nil
+			}
 			f.rsc = nil
 		}
 	}
@@ -564,7 +568,12 @@ func (f *entitySource) Seek(offset int64, whence int) (int64, error) {
 
 func (f *entitySource) Close() error {
 	if f.rsc != nil {
-		return f.rsc.Close()
+		err := f.rsc.Close()
+		f.rsc = nil
+		if errors.Is(err, os.ErrClosed) {
+			return nil
+		}
+		return err
 	}
 	return nil
 }

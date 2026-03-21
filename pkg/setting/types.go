@@ -281,9 +281,17 @@ type FTSIndexElasticsearchSetting struct {
 }
 
 type FTSTikaExtractorSetting struct {
-	Endpoint    string
-	Exts        []string
-	MaxFileSize int64
+	Endpoint             string
+	Exts                 []string
+	DocumentEnabled      bool
+	DocumentExts         []string
+	ArchiveEnabled       bool
+	ArchiveExts          []string
+	MaxFileSize          int64
+	SidecarEnabled       bool
+	SidecarTextEnabled   bool
+	SidecarAssetsEnabled bool
+	ExtractInlineImages  bool
 }
 
 type MasterEncryptKeyVaultType string

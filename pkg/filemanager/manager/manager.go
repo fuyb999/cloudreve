@@ -32,6 +32,13 @@ const (
 )
 
 type (
+	FTSSidecarManagement interface {
+		// GetFTSSidecar returns persisted full-text sidecar manifest for given file.
+		GetFTSSidecar(ctx context.Context, uri *fs.URI) (*FTSSidecarManifest, error)
+		// GetFTSSidecarContent resolves a full-text sidecar object for serving or redirecting.
+		GetFTSSidecarContent(ctx context.Context, uri *fs.URI, name string, download bool, expire *time.Time) (*FTSSidecarContent, error)
+	}
+
 	FileOperation interface {
 		// Get gets file object by given path
 		Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.File, error)
@@ -97,6 +104,7 @@ type (
 		fs.LockSystem
 		FileOperation
 		EntityManagement
+		FTSSidecarManagement
 		UploadManagement
 		FsManagement
 		ShareManagement

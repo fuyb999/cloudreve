@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
@@ -223,6 +224,12 @@ func (f *DBFS) Rename(ctx context.Context, path *fs.URI, newName string) (fs.Fil
 		return nil, nil, serializer.NewError(serializer.CodeDBError, "Failed to start transaction", err)
 	}
 
+	indexDiff, err := f.buildRenameIndexDiff(ctx, target, newName)
+	if err != nil {
+		_ = inventory.Rollback(tx)
+		return nil, nil, err
+	}
+
 	updated, err := fc.Rename(ctx, target.Model, newName)
 	if err != nil {
 		_ = inventory.Rollback(tx)
@@ -248,20 +255,29 @@ func (f *DBFS) Rename(ctx context.Context, path *fs.URI, newName string) (fs.Fil
 
 	originalMetadata := target.Metadata()
 	newFile := target.Replace(updated)
-	var diff *fs.IndexDiff
-	if _, ok := originalMetadata[FullTextIndexKey]; ok {
-		diff = &fs.IndexDiff{
-			IndexToRename: []fs.IndexDiffRenameDetails{
-				{
-					Uri:      *newFile.Uri(false),
-					FileID:   newFile.ID(),
-					EntityID: newFile.PrimaryEntityID(),
+	if indexDiff == nil {
+		var diff *fs.IndexDiff
+		if _, ok := originalMetadata[FullTextIndexKey]; ok {
+			diff = &fs.IndexDiff{
+				IndexToRename: []fs.IndexDiffRenameDetails{
+					{
+						Uri:      *newFile.Uri(false),
+						FileID:   newFile.ID(),
+						EntityID: newFile.PrimaryEntityID(),
+					},
 				},
-			},
+			}
+			return newFile, diff, nil
 		}
+
+		return newFile, nil, nil
 	}
 
-	return newFile, diff, nil
+	if len(indexDiff.IndexToRename) == 1 {
+		indexDiff.IndexToRename[0].Uri = *newFile.Uri(false)
+	}
+
+	return newFile, indexDiff, nil
 }
 
 func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
@@ -610,8 +626,13 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 	ctx = context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
 
 	for _, p := range path {
+		pathSourceCapability := sourceCapability
+		if !isCopy && p != nil && p.FileSystem() == constants.FileSystemTrash {
+			pathSourceCapability = NavigatorCapabilityRestore
+		}
+
 		// Get navigator
-		navigator, err := f.getNavigator(ctx, p, NavigatorCapabilityLockFile, sourceCapability)
+		navigator, err := f.getNavigator(ctx, p, NavigatorCapabilityLockFile, pathSourceCapability)
 		if err != nil {
 			ae.Add(p.String(), err)
 			continue
@@ -629,7 +650,7 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 			ae.Add(p.String(), fmt.Errorf("failed to get file: %w", err))
 			continue
 		}
-		if err := ensureCapability(target, sourceCapability); err != nil {
+		if err := ensureCapability(target, pathSourceCapability); err != nil {
 			ae.Add(p.String(), err)
 			continue
 		}
@@ -1024,8 +1045,12 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 				Files: lo.Map(targets, func(item *File, index int) *ent.File {
 					return item.Model
 				}),
-				ExcludedMetadataKeys: []string{FullTextIndexKey},
-				DstMap:               initialDstMap,
+				ExcludedMetadataKeys: []string{
+					FullTextIndexKey,
+					FTSSidecarManifestKey,
+					FTSSidecarEntityIDKey,
+				},
+				DstMap: initialDstMap,
 			})
 			if err != nil {
 				if ent.IsConstraintError(err) {
@@ -1091,7 +1116,12 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 	return newTargetsMap, storageDiff, indexDiff, nil
 }
 
-func (f *DBFS) moveFiles(ctx context.Context, targets []*File, destination *File, fc inventory.FileClient, n Navigator) (inventory.StorageDiff, *fs.IndexDiff, error) {
+func (f *DBFS) moveFiles(ctx context.Context, targets []*File, destination *File, fc inventory.FileClient, _ Navigator) (inventory.StorageDiff, *fs.IndexDiff, error) {
+	indexDiff, err := f.buildMoveIndexDiff(ctx, targets, destination)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	models := lo.Map(targets, func(value *File, key int) *ent.File {
 		return value.Model
 	})
@@ -1130,5 +1160,139 @@ func (f *DBFS) moveFiles(ctx context.Context, targets []*File, destination *File
 		}
 	}
 
-	return storageDiff, nil, nil
+	return storageDiff, indexDiff, nil
+}
+
+func (f *DBFS) buildMoveIndexDiff(ctx context.Context, targets []*File, destination *File) (*fs.IndexDiff, error) {
+	if len(targets) == 0 || destination == nil {
+		return nil, nil
+	}
+
+	defaultUID := hashid.EncodeUserID(f.hasher, f.user.ID)
+	diff := &fs.IndexDiff{}
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+
+		oldRoot := target.Uri(false)
+		newBase := destination.Uri(false)
+		if oldRoot == nil || newBase == nil {
+			continue
+		}
+
+		newRoot := newBase.Join(target.Name())
+		if _, ok := target.Metadata()[MetadataRestoreUri]; ok {
+			newRoot = newBase.Join(target.DisplayName())
+		}
+
+		if err := f.Walk(ctx, target.Uri(true), -1, func(file fs.File, level int) error {
+			dbFile, ok := file.(*File)
+			if !ok || dbFile == nil {
+				return nil
+			}
+
+			if _, ok := dbFile.Metadata()[FullTextIndexKey]; !ok {
+				return nil
+			}
+
+			oldURI := dbFile.Uri(false)
+			if oldURI == nil {
+				return nil
+			}
+
+			nextURI := newRoot
+			if !oldURI.IsSame(oldRoot, defaultUID) {
+				nextURI = newRoot.Rebase(oldURI, oldRoot)
+			}
+
+			diff.IndexToRename = append(diff.IndexToRename, fs.IndexDiffRenameDetails{
+				Uri:      *nextURI,
+				FileID:   dbFile.ID(),
+				EntityID: dbFile.PrimaryEntityID(),
+			})
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(diff.IndexToRename) == 0 {
+		return nil, nil
+	}
+
+	return diff, nil
+}
+
+func (f *DBFS) buildRenameIndexDiff(ctx context.Context, target *File, newName string) (*fs.IndexDiff, error) {
+	if target == nil || target.Parent == nil {
+		return nil, nil
+	}
+
+	oldRoot := target.Uri(false)
+	parentURI := target.Parent.Uri(false)
+	if oldRoot == nil || parentURI == nil {
+		return nil, nil
+	}
+
+	newRoot := parentURI.Join(newName)
+	return f.buildRebasedIndexDiff(ctx, []*File{target}, func(current *File, oldRootURI *fs.URI) *fs.URI {
+		oldURI := current.Uri(false)
+		if oldURI == nil {
+			return nil
+		}
+		if oldURI.IsSame(oldRootURI, hashid.EncodeUserID(f.hasher, f.user.ID)) {
+			return newRoot
+		}
+		return newRoot.Rebase(oldURI, oldRootURI)
+	})
+}
+
+func (f *DBFS) buildRebasedIndexDiff(ctx context.Context, targets []*File, rebase func(current *File, oldRoot *fs.URI) *fs.URI) (*fs.IndexDiff, error) {
+	if len(targets) == 0 || rebase == nil {
+		return nil, nil
+	}
+
+	diff := &fs.IndexDiff{}
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+
+		oldRoot := target.Uri(false)
+		if oldRoot == nil {
+			continue
+		}
+
+		if err := f.Walk(ctx, target.Uri(true), -1, func(file fs.File, level int) error {
+			dbFile, ok := file.(*File)
+			if !ok || dbFile == nil {
+				return nil
+			}
+
+			if _, ok := dbFile.Metadata()[FullTextIndexKey]; !ok {
+				return nil
+			}
+
+			nextURI := rebase(dbFile, oldRoot)
+			if nextURI == nil {
+				return nil
+			}
+
+			diff.IndexToRename = append(diff.IndexToRename, fs.IndexDiffRenameDetails{
+				Uri:      *nextURI,
+				FileID:   dbFile.ID(),
+				EntityID: dbFile.PrimaryEntityID(),
+			})
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(diff.IndexToRename) == 0 {
+		return nil, nil
+	}
+
+	return diff, nil
 }

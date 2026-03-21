@@ -100,6 +100,26 @@ func MasterArchiveDownloadUrl(base *url.URL, sessionID string) *url.URL {
 	return base.ResolveReference(routes)
 }
 
+func MasterFTSSidecarUrl(base *url.URL, uri string) *url.URL {
+	route, _ := url.Parse(path.Join(constants.APIPrefix, "file", "fulltext", "sidecar"))
+	values := route.Query()
+	values.Set("uri", uri)
+	route.RawQuery = values.Encode()
+	return base.ResolveReference(route)
+}
+
+func MasterFTSSidecarContentUrl(base *url.URL, uri, name string, download bool) *url.URL {
+	route, _ := url.Parse(path.Join(constants.APIPrefix, "file", "fulltext", "sidecar", "content"))
+	values := route.Query()
+	values.Set("uri", uri)
+	values.Set("name", name)
+	if download {
+		values.Set(IsDownloadQuery, "true")
+	}
+	route.RawQuery = values.Encode()
+	return base.ResolveReference(route)
+}
+
 func MasterPolicyOAuthCallback(base *url.URL) *url.URL {
 	if base.Scheme != "https" {
 		base.Scheme = "https"

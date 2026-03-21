@@ -19,20 +19,22 @@ type SearchPathDocument struct {
 }
 
 type SearchAttachmentDocument struct {
-	ID        string            `json:"id"`
-	ParentID  int               `json:"parent_id"`
-	EntityID  int               `json:"entity_id,omitempty"`
-	Type      string            `json:"type,omitempty"`
-	Name      string            `json:"name,omitempty"`
-	Path      string            `json:"path,omitempty"`
-	Bucket    string            `json:"bucket,omitempty"`
-	Size      int64             `json:"size,omitempty"`
-	MimeType  string            `json:"mime_type,omitempty"`
-	Source    string            `json:"source,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Content   string            `json:"content,omitempty"`
-	CreatedAt time.Time         `json:"created_at,omitempty"`
-	UpdatedAt time.Time         `json:"updated_at,omitempty"`
+	ID                 string            `json:"id"`
+	ParentID           int               `json:"parent_id"`
+	ParentAttachmentID string            `json:"parent_attachment_id,omitempty"`
+	Depth              int               `json:"depth,omitempty"`
+	EntityID           int               `json:"entity_id,omitempty"`
+	Type               string            `json:"type,omitempty"`
+	Name               string            `json:"name,omitempty"`
+	Path               string            `json:"path,omitempty"`
+	Bucket             string            `json:"bucket,omitempty"`
+	Size               int64             `json:"size,omitempty"`
+	MimeType           string            `json:"mime_type,omitempty"`
+	Source             string            `json:"source,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
+	Content            string            `json:"content,omitempty"`
+	CreatedAt          time.Time         `json:"created_at,omitempty"`
+	UpdatedAt          time.Time         `json:"updated_at,omitempty"`
 }
 
 type SearchFileVersionDocument struct {
