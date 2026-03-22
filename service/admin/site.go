@@ -232,18 +232,18 @@ var (
 		"replyTo":                                 emailPostProcessor,
 		"fromName":                                emailPostProcessor,
 		"fromAdress":                              emailPostProcessor,
-		"queue_media_meta_worker_num":             mediaMetaQueuePostProcessor,
-		"queue_media_meta_max_execution":          mediaMetaQueuePostProcessor,
-		"queue_media_meta_backoff_factor":         mediaMetaQueuePostProcessor,
-		"queue_media_meta_backoff_max_duration":   mediaMetaQueuePostProcessor,
-		"queue_media_meta_max_retry":              mediaMetaQueuePostProcessor,
-		"queue_media_meta_retry_delay":            mediaMetaQueuePostProcessor,
-		"queue_content_processing_worker_num":     mediaMetaQueuePostProcessor,
-		"queue_content_processing_max_execution":  mediaMetaQueuePostProcessor,
-		"queue_content_processing_backoff_factor": mediaMetaQueuePostProcessor,
-		"queue_content_processing_backoff_max_duration": mediaMetaQueuePostProcessor,
-		"queue_content_processing_max_retry":            mediaMetaQueuePostProcessor,
-		"queue_content_processing_retry_delay":          mediaMetaQueuePostProcessor,
+		"queue_media_meta_worker_num":             contentProcessingQueuePostProcessor,
+		"queue_media_meta_max_execution":          contentProcessingQueuePostProcessor,
+		"queue_media_meta_backoff_factor":         contentProcessingQueuePostProcessor,
+		"queue_media_meta_backoff_max_duration":   contentProcessingQueuePostProcessor,
+		"queue_media_meta_max_retry":              contentProcessingQueuePostProcessor,
+		"queue_media_meta_retry_delay":            contentProcessingQueuePostProcessor,
+		"queue_content_processing_worker_num":     contentProcessingQueuePostProcessor,
+		"queue_content_processing_max_execution":  contentProcessingQueuePostProcessor,
+		"queue_content_processing_backoff_factor": contentProcessingQueuePostProcessor,
+		"queue_content_processing_backoff_max_duration": contentProcessingQueuePostProcessor,
+		"queue_content_processing_max_retry":            contentProcessingQueuePostProcessor,
+		"queue_content_processing_retry_delay":          contentProcessingQueuePostProcessor,
 		"queue_thumb_worker_num":                        thumbQueuePostProcessor,
 		"queue_thumb_max_execution":                     thumbQueuePostProcessor,
 		"queue_thumb_backoff_factor":                    thumbQueuePostProcessor,
@@ -404,7 +404,7 @@ func emailPostProcessor(ctx context.Context, settings map[string]string) error {
 	return nil
 }
 
-func mediaMetaQueuePostProcessor(ctx context.Context, settings map[string]string) error {
+func contentProcessingQueuePostProcessor(ctx context.Context, settings map[string]string) error {
 	dep := dependency.FromContext(ctx)
 	dep.ContentProcessingQueue(context.WithValue(ctx, dependency.ReloadCtx{}, true)).Start()
 	return nil
