@@ -293,6 +293,18 @@ func (s *CleanupTaskService) CleanupTask(c *gin.Context) error {
 
 func resolveAdminTaskTypeFilter(taskType string) ([]string, []inventory.TaskTypeFilter) {
 	switch taskType {
+	case "content_processing":
+		return []string{
+				queue.FullTextIndexTaskType,
+				queue.FullTextDeleteTaskType,
+				queue.MediaMetaTaskType,
+				queue.DocumentInspectTaskType,
+			}, []inventory.TaskTypeFilter{
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindFullTextExtract},
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindMediaMetaExtract},
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindDocumentInspect},
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindThumbnailGenerate},
+			}
 	case queue.FullTextIndexTaskType:
 		return []string{queue.FullTextIndexTaskType, queue.FullTextDeleteTaskType}, []inventory.TaskTypeFilter{
 			{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindFullTextExtract},

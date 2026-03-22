@@ -15,6 +15,17 @@ func TestResolveAdminTaskTypeFilter(t *testing.T) {
 		wantFilters []inventory.TaskTypeFilter
 	}{
 		{
+			name:      "content processing aggregate",
+			taskType:  "content_processing",
+			wantTypes: []string{queue.FullTextIndexTaskType, queue.FullTextDeleteTaskType, queue.MediaMetaTaskType, queue.DocumentInspectTaskType},
+			wantFilters: []inventory.TaskTypeFilter{
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindFullTextExtract},
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindMediaMetaExtract},
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindDocumentInspect},
+				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindThumbnailGenerate},
+			},
+		},
+		{
 			name:      "full text index",
 			taskType:  queue.FullTextIndexTaskType,
 			wantTypes: []string{queue.FullTextIndexTaskType, queue.FullTextDeleteTaskType},
@@ -78,9 +89,7 @@ func TestResolveAdminTaskTypeFilter(t *testing.T) {
 
 func TestExpandCleanupTaskTypesAndFilters(t *testing.T) {
 	taskTypes := []string{
-		queue.FullTextIndexTaskType,
-		queue.DocumentInspectTaskType,
-		"thumbnail_generate",
+		"content_processing",
 		queue.RemoteDownloadTaskType,
 	}
 
@@ -88,6 +97,7 @@ func TestExpandCleanupTaskTypesAndFilters(t *testing.T) {
 	wantTypes := []string{
 		queue.FullTextIndexTaskType,
 		queue.FullTextDeleteTaskType,
+		queue.MediaMetaTaskType,
 		queue.DocumentInspectTaskType,
 		queue.RemoteDownloadTaskType,
 	}
@@ -103,6 +113,7 @@ func TestExpandCleanupTaskTypesAndFilters(t *testing.T) {
 	gotFilters := expandCleanupTaskTypeFilters(taskTypes)
 	wantFilters := []inventory.TaskTypeFilter{
 		{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindFullTextExtract},
+		{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindMediaMetaExtract},
 		{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindDocumentInspect},
 		{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindThumbnailGenerate},
 	}
