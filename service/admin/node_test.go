@@ -14,7 +14,7 @@ func TestParseNodeCapabilityCondition(t *testing.T) {
 	}{
 		{
 			name: "content processing alias",
-			raw:  "content_processing",
+			raw:  contentProcessingFilterValue,
 			want: capabilityPtr(inventorytypes.NodeCapabilityContentProcessing),
 		},
 		{

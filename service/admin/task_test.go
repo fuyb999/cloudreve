@@ -16,7 +16,7 @@ func TestResolveAdminTaskTypeFilter(t *testing.T) {
 	}{
 		{
 			name:      "content processing aggregate",
-			taskType:  "content_processing",
+			taskType:  contentProcessingFilterValue,
 			wantTypes: []string{queue.FullTextIndexTaskType, queue.FullTextDeleteTaskType, queue.MediaMetaTaskType, queue.DocumentInspectTaskType},
 			wantFilters: []inventory.TaskTypeFilter{
 				{Type: queue.SlaveContentProcessingTaskType, PrivateStateContains: contentProcessingKindFullTextExtract},
@@ -89,7 +89,7 @@ func TestResolveAdminTaskTypeFilter(t *testing.T) {
 
 func TestExpandCleanupTaskTypesAndFilters(t *testing.T) {
 	taskTypes := []string{
-		"content_processing",
+		contentProcessingFilterValue,
 		queue.RemoteDownloadTaskType,
 	}
 

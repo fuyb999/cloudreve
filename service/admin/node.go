@@ -68,7 +68,7 @@ func parseNodeCapabilityCondition(raw string) *inventorytypes.NodeCapability {
 	case "remote_download":
 		capability := inventorytypes.NodeCapabilityRemoteDownload
 		return &capability
-	case "content_processing":
+	case contentProcessingFilterValue:
 		capability := inventorytypes.NodeCapabilityContentProcessing
 		return &capability
 	default:

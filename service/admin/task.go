@@ -293,7 +293,7 @@ func (s *CleanupTaskService) CleanupTask(c *gin.Context) error {
 
 func resolveAdminTaskTypeFilter(taskType string) ([]string, []inventory.TaskTypeFilter) {
 	switch taskType {
-	case "content_processing":
+	case contentProcessingFilterValue:
 		return []string{
 				queue.FullTextIndexTaskType,
 				queue.FullTextDeleteTaskType,
