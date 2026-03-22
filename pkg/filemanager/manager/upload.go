@@ -87,7 +87,21 @@ func (m *manager) CreateUploadSession(ctx context.Context, req *fs.UploadRequest
 		}
 	}
 
-	d, err := m.GetStorageDriver(ctx, m.CastStoragePolicyOnSlave(ctx, uploadSession.Policy))
+	effectivePolicy := m.CastStoragePolicyOnSlave(ctx, uploadSession.Policy)
+	if m.stateless && uploadSession != nil && uploadSession.Policy != nil {
+		m.l.Info(
+			"CreateUploadSession stateless mode=%s ctx_node=%d origin_policy_type=%s origin_policy_node=%d effective_policy_type=%s effective_policy_node=%d save_path=%q",
+			m.config.System().Mode,
+			cluster.NodeIdFromContext(ctx),
+			uploadSession.Policy.Type,
+			uploadSession.Policy.NodeID,
+			effectivePolicy.Type,
+			effectivePolicy.NodeID,
+			req.Props.SavePath,
+		)
+	}
+
+	d, err := m.GetStorageDriver(ctx, effectivePolicy)
 	if err != nil {
 		m.OnUploadFailed(ctx, uploadSession)
 		return nil, err

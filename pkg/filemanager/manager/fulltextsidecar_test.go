@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -271,6 +272,48 @@ func TestBuildEmbeddedSearchAttachmentsFromManifestKeepsHierarchy(t *testing.T) 
 	}
 	if nested.Type != "embedded" {
 		t.Fatalf("unexpected nested type: %q", nested.Type)
+	}
+}
+
+func TestFTSSidecarCleanupDirectoriesIncludesNestedParents(t *testing.T) {
+	manifest := &FTSSidecarManifest{
+		Objects: []FTSSidecarArtifact{
+			{
+				ID:   "attachments/archive.zip",
+				Path: "cloudreve/fts-sidecar/1/42/7/attachments/archive.zip/__self__",
+			},
+			{
+				ID:   "attachments/archive.zip/nested.txt",
+				Path: "cloudreve/fts-sidecar/1/42/7/attachments/archive.zip/nested.txt",
+			},
+			{
+				ID:   "docx-media/image1.png",
+				Path: "cloudreve/fts-sidecar/1/42/7/docx-media/image1.png",
+			},
+		},
+	}
+
+	got := ftsSidecarCleanupDirectories("cloudreve/fts-sidecar/1/42/7/manifest.json", manifest)
+	want := []string{
+		"cloudreve/fts-sidecar/1/42/7/attachments/archive.zip",
+		"cloudreve/fts-sidecar/1/42/7/attachments",
+		"cloudreve/fts-sidecar/1/42/7/docx-media",
+		"cloudreve/fts-sidecar/1/42/7",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("unexpected cleanup directories: got %#v want %#v", got, want)
+	}
+}
+
+func TestFTSSidecarCleanupDirectoriesFallsBackToBaseDirs(t *testing.T) {
+	got := ftsSidecarCleanupDirectories("cloudreve/fts-sidecar/1/42/7/manifest.json", nil)
+	want := []string{
+		"cloudreve/fts-sidecar/1/42/7/attachments",
+		"cloudreve/fts-sidecar/1/42/7/docx-media",
+		"cloudreve/fts-sidecar/1/42/7",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("unexpected cleanup directories without manifest: got %#v want %#v", got, want)
 	}
 }
 

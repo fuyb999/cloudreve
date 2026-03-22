@@ -11,7 +11,9 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/encrypt"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
 
 const slaveContentProcessingKindFullTextExtract = "full_text_extract"
@@ -23,12 +25,13 @@ type SlaveContentProcessingTaskState struct {
 }
 
 type SlaveFullTextExtractPayload struct {
-	FileID   int                `json:"file_id"`
-	OwnerID  int                `json:"owner_id"`
-	FileName string             `json:"file_name"`
-	FileSize int64              `json:"file_size"`
-	Entity   *ent.Entity        `json:"entity"`
-	Policy   *ent.StoragePolicy `json:"policy"`
+	FileID     int                              `json:"file_id"`
+	OwnerID    int                              `json:"owner_id"`
+	FileName   string                           `json:"file_name"`
+	FileSize   int64                            `json:"file_size"`
+	Entity     *ent.Entity                      `json:"entity"`
+	Policy     *ent.StoragePolicy               `json:"policy"`
+	TikaConfig *setting.FTSTikaExtractorSetting `json:"tika_config,omitempty"`
 }
 
 type SlaveFullTextExtractResult struct {
@@ -64,12 +67,13 @@ func (m *manager) buildSlaveFullTextExtractPayload(ctx context.Context, fileID i
 	}
 
 	return &SlaveFullTextExtractPayload{
-		FileID:   fileModel.ID,
-		OwnerID:  fileModel.OwnerID,
-		FileName: fileModel.Name,
-		FileSize: fileModel.Size,
-		Entity:   decodedEntity,
-		Policy:   policy,
+		FileID:     fileModel.ID,
+		OwnerID:    fileModel.OwnerID,
+		FileName:   fileModel.Name,
+		FileSize:   fileModel.Size,
+		Entity:     decodedEntity,
+		Policy:     policy,
+		TikaConfig: cloneFTSTikaExtractorSetting(m.settings.FTSTikaExtractor(ctx)),
 	}, nil
 }
 
@@ -78,10 +82,30 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 		return nil, fmt.Errorf("invalid slave full text payload")
 	}
 
-	extractor := dep.TextExtractor(ctx)
-	tika, ok := extractor.(*tikaextractor.TikaExtractor)
-	if !ok {
-		return nil, fmt.Errorf("slave full text extraction requires tika extractor")
+	logFailure := func(step string, err error) (*SlaveFullTextExtractResult, error) {
+		if err != nil && dep != nil {
+			dep.Logger().Warning(
+				"Slave full text extract failed at %s for file=%d entity=%d policy=%d name=%q: %v",
+				step,
+				payload.FileID,
+				payload.Entity.ID,
+				func() int {
+					if payload.Policy == nil {
+						return 0
+					}
+					return payload.Policy.ID
+				}(),
+				payload.FileName,
+				err,
+			)
+		}
+		return nil, err
+	}
+
+	cfg := resolveSlaveFTSTikaConfig(payload.TikaConfig, dep.SettingProvider().FTSTikaExtractor(ctx))
+	tika, err := buildSlaveTikaExtractor(dep, cfg)
+	if err != nil {
+		return logFailure("build_tika", err)
 	}
 
 	if !ShouldExtractText(tika, payload.FileName, payload.FileSize) {
@@ -90,9 +114,8 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 		}, nil
 	}
 
-	cfg := dep.SettingProvider().FTSTikaExtractor(ctx)
 	if !cfg.SidecarEnabled || (!cfg.SidecarTextEnabled && !cfg.SidecarAssetsEnabled) {
-		return nil, fmt.Errorf("slave full text extraction requires text or assets sidecar to be enabled")
+		return logFailure("validate_sidecar_setting", fmt.Errorf("slave full text extraction requires text or assets sidecar to be enabled"))
 	}
 
 	fm := NewFileManager(dep, nil)
@@ -100,14 +123,14 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 
 	internal, ok := fm.(*manager)
 	if !ok {
-		return nil, fmt.Errorf("failed to construct stateless file manager")
+		return logFailure("construct_file_manager", fmt.Errorf("failed to construct stateless file manager"))
 	}
 
 	primaryEntity := fs.NewEntity(payload.Entity)
 	policy := internal.CastStoragePolicyOnSlave(ctx, payload.Policy)
 	source, err := internal.GetEntitySource(ctx, 0, fs.WithEntity(primaryEntity), fs.WithPolicy(policy))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get entity source: %w", err)
+		return logFailure("get_entity_source", fmt.Errorf("failed to get entity source: %w", err))
 	}
 	defer source.Close()
 
@@ -120,14 +143,15 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 
 	manifest, manifestPath, err := internal.persistFTSSidecarsForSlave(
 		ctx,
-		extractor,
+		tika,
+		cfg,
 		fileModel,
 		primaryEntity,
 		policy,
 		source,
 	)
 	if err != nil {
-		return nil, err
+		return logFailure("persist_sidecars", err)
 	}
 
 	result := &SlaveFullTextExtractResult{
@@ -138,6 +162,51 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 	}
 
 	return result, nil
+}
+
+func cloneFTSTikaExtractorSetting(cfg *setting.FTSTikaExtractorSetting) *setting.FTSTikaExtractorSetting {
+	if cfg == nil {
+		return nil
+	}
+
+	clone := *cfg
+	clone.Exts = append([]string(nil), cfg.Exts...)
+	clone.DocumentExts = append([]string(nil), cfg.DocumentExts...)
+	clone.ArchiveExts = append([]string(nil), cfg.ArchiveExts...)
+	return &clone
+}
+
+func resolveSlaveFTSTikaConfig(taskCfg *setting.FTSTikaExtractorSetting, fallback *setting.FTSTikaExtractorSetting) *setting.FTSTikaExtractorSetting {
+	if taskCfg != nil {
+		return cloneFTSTikaExtractorSetting(taskCfg)
+	}
+	return cloneFTSTikaExtractorSetting(fallback)
+}
+
+func buildSlaveTikaExtractor(dep dependency.Dep, cfg *setting.FTSTikaExtractorSetting) (*tikaextractor.TikaExtractor, error) {
+	if cfg == nil || cfg.Endpoint == "" {
+		return nil, fmt.Errorf("slave full text extraction requires tika extractor")
+	}
+
+	return tikaextractor.NewTikaExtractor(slaveRequestClient(dep), dep.SettingProvider(), dep.Logger(), cfg), nil
+}
+
+func slaveRequestClient(dep dependency.Dep) (client request.Client) {
+	client = request.GeneralClient
+	defer func() {
+		if recover() != nil || client == nil {
+			client = request.GeneralClient
+		}
+	}()
+
+	if dep == nil {
+		return client
+	}
+
+	if c := dep.RequestClient(); c != nil {
+		client = c
+	}
+	return client
 }
 
 func decryptFTSEntityKeyIfNeeded(ctx context.Context, dep dependency.Dep, entity *ent.Entity) (*ent.Entity, error) {

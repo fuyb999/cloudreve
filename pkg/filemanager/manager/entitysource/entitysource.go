@@ -518,22 +518,70 @@ func (f *entitySource) Read(p []byte) (n int, err error) {
 }
 
 func (f *entitySource) ReadAt(p []byte, off int64) (n int, err error) {
-	if f.rsc == nil {
-		err = f.resetRequest()
-		if err != nil {
-			return 0, err
-		}
+	if len(p) == 0 {
+		return 0, nil
 	}
-	if readAt, ok := f.rsc.(io.ReaderAt); ok {
+	if off < 0 {
+		return 0, fmt.Errorf("negative offset: %d", off)
+	}
+
+	size := f.e.Size()
+	if off >= size {
+		return 0, io.EOF
+	}
+
+	// Only reuse/reset the sequential reader for local sources where the
+	// underlying file natively supports ReaderAt. Remote sources must read at
+	// the requested offset directly instead of reopening at the current seek
+	// position, otherwise prior sequential reads can push resetRequest() to EOF.
+	if f.IsLocal() {
+		if f.rsc == nil {
+			err = f.resetRequest()
+			if err != nil {
+				return 0, err
+			}
+		}
+		if readAt, ok := f.rsc.(io.ReaderAt); ok {
+			return readAt.ReadAt(p, off)
+		}
+	} else if readAt, ok := f.rsc.(io.ReaderAt); ok {
 		return readAt.ReadAt(p, off)
 	}
 
 	// For non-local sources, use HTTP range request to read at specific offset
+	requested := len(p)
+	target := p
+	short := false
+	if remaining := size - off; int64(len(target)) > remaining {
+		target = target[:remaining]
+		short = true
+	}
+
 	rsc, err := f.getRsc(off)
 	if err != nil {
+		f.l.Warning(
+			"EntitySource ReadAt failed entity=%d source=%q off=%d requested=%d actual=%d size=%d err=%s",
+			f.e.ID(),
+			f.e.Source(),
+			off,
+			requested,
+			len(target),
+			size,
+			err,
+		)
 		return 0, err
 	}
-	return io.ReadFull(rsc, p)
+	defer rsc.Close()
+
+	n, err = io.ReadFull(rsc, target)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		err = io.EOF
+	}
+	if short && err == nil {
+		err = io.EOF
+	}
+
+	return n, err
 }
 
 func (f *entitySource) Seek(offset int64, whence int) (int64, error) {
@@ -734,14 +782,25 @@ func (f *entitySource) getRsc(pos int64) (io.ReadCloser, error) {
 			urlStr = u.Url
 		}
 
+		rangeHeader := fmt.Sprintf("bytes=%d-", pos)
 		h := http.Header{}
-		h.Set("Range", fmt.Sprintf("bytes=%d-", pos))
+		h.Set("Range", rangeHeader)
 		resp := f.c.Request(http.MethodGet, urlStr, nil,
 			request.WithContext(f.o.Ctx),
 			request.WithLogger(f.l),
 			request.WithHeader(h),
 		).CheckHTTPResponse(http.StatusOK, http.StatusPartialContent)
 		if resp.Err != nil {
+			f.l.Warning(
+				"EntitySource remote getRsc failed entity=%d source=%q size=%d pos=%d range=%q url=%q err=%s",
+				f.e.ID(),
+				f.e.Source(),
+				f.e.Size(),
+				pos,
+				rangeHeader,
+				urlStr,
+				resp.Err,
+			)
 			return nil, fmt.Errorf("failed to request download url: %w", resp.Err)
 		}
 

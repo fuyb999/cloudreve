@@ -228,14 +228,7 @@ func (m *manager) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option)
 	sidecarTargets := make([]fs.File, 0, len(path))
 	if o.SkipSoftDelete || o.SysSkipSoftDelete {
 		loadCtx := context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
-		for _, item := range path {
-			file, err := m.fs.Get(loadCtx, item, dbfs.WithFileEntities(), dbfs.WithNotRoot())
-			if err != nil {
-				continue
-			}
-
-			sidecarTargets = append(sidecarTargets, file)
-		}
+		sidecarTargets = collectFTSRecursiveFiles(loadCtx, m.Walk, path...)
 	}
 
 	if !o.SkipSoftDelete && !o.SysSkipSoftDelete {
@@ -396,6 +389,39 @@ func collectFTSRecursiveFileIDs(
 
 func (m *manager) collectFTSRecursiveFileIDs(ctx context.Context, paths ...*fs.URI) []int {
 	return collectFTSRecursiveFileIDs(ctx, m.Walk, paths...)
+}
+
+func collectFTSRecursiveFiles(
+	ctx context.Context,
+	walkFn func(context.Context, *fs.URI, int, fs.WalkFunc, ...fs.Option) error,
+	paths ...*fs.URI,
+) []fs.File {
+	if walkFn == nil || len(paths) == 0 {
+		return nil
+	}
+
+	seen := map[int]struct{}{}
+	collected := make([]fs.File, 0, len(paths))
+	for _, item := range paths {
+		if item == nil {
+			continue
+		}
+
+		_ = walkFn(ctx, item, -1, func(file fs.File, level int) error {
+			if file == nil || file.ID() <= 0 {
+				return nil
+			}
+			if _, ok := seen[file.ID()]; ok {
+				return nil
+			}
+
+			seen[file.ID()] = struct{}{}
+			collected = append(collected, file)
+			return nil
+		}, dbfs.WithFileEntities())
+	}
+
+	return collected
 }
 
 func (l *manager) CreateOrUpdateShare(ctx context.Context, path *fs.URI, args *CreateShareArgs) (*ent.Share, error) {

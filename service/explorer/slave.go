@@ -98,8 +98,34 @@ func (service *SlaveCreateUploadSessionService) Create(c *gin.Context) error {
 
 	dep := dependency.FromContext(c)
 	m := manager.NewFileManager(dep, nil)
+	if service.Session.Policy != nil {
+		dep.Logger().Info(
+			"SlaveCreateUploadSession policy_type=%s policy_node=%d save_path=%q overwrite=%t",
+			service.Session.Policy.Type,
+			service.Session.Policy.NodeID,
+			service.Session.Props.SavePath,
+			service.Overwrite,
+		)
+	}
 	_, err := m.CreateUploadSession(c, req, fs.WithUploadSession(&service.Session))
 	if err != nil {
+		dep.Logger().Warning(
+			"SlaveCreateUploadSession failed policy_type=%s policy_node=%d save_path=%q: %v",
+			func() string {
+				if service.Session.Policy == nil {
+					return ""
+				}
+				return service.Session.Policy.Type
+			}(),
+			func() int {
+				if service.Session.Policy == nil {
+					return 0
+				}
+				return service.Session.Policy.NodeID
+			}(),
+			service.Session.Props.SavePath,
+			err,
+		)
 		return serializer.NewError(serializer.CodeCacheOperation, "Failed to create upload session in slave node", err)
 	}
 

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/gofrs/uuid"
 )
 
@@ -175,7 +177,7 @@ func persistFTSSidecars(
 		return
 	}
 
-	manifest, savePath, err := internal.persistFTSSidecarsToHandler(ctx, extractor, fileModel, uri.String(), primaryEntity, handler, source, text)
+	manifest, savePath, err := internal.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, uri.String(), primaryEntity, handler, source, text)
 	if err != nil {
 		internal.l.Warning("Failed to persist Tika sidecars for file %d: %s", fileModel.ID, err)
 		return
@@ -223,6 +225,7 @@ func persistFTSSidecars(
 func (m *manager) persistFTSSidecarsForSlave(
 	ctx context.Context,
 	extractor searcher.TextExtractor,
+	cfg *setting.FTSTikaExtractorSetting,
 	fileModel *ent.File,
 	primaryEntity fs.Entity,
 	policy *ent.StoragePolicy,
@@ -240,12 +243,13 @@ func (m *manager) persistFTSSidecarsForSlave(
 		return nil, "", fmt.Errorf("failed to resolve storage driver for slave Tika sidecar: %w", err)
 	}
 
-	return m.persistFTSSidecarsToHandler(ctx, extractor, fileModel, "", primaryEntity, handler, source, "")
+	return m.persistFTSSidecarsToHandler(ctx, extractor, cfg, fileModel, "", primaryEntity, handler, source, "")
 }
 
 func (m *manager) persistFTSSidecarsToHandler(
 	ctx context.Context,
 	extractor searcher.TextExtractor,
+	cfg *setting.FTSTikaExtractorSetting,
 	fileModel *ent.File,
 	sourcePath string,
 	primaryEntity fs.Entity,
@@ -262,7 +266,7 @@ func (m *manager) persistFTSSidecarsToHandler(
 		return nil, "", nil
 	}
 
-	cfg := m.settings.FTSTikaExtractor(ctx)
+	cfg = resolveSlaveFTSTikaConfig(cfg, m.settings.FTSTikaExtractor(ctx))
 	if !cfg.SidecarEnabled || (!cfg.SidecarTextEnabled && !cfg.SidecarAssetsEnabled) {
 		return nil, "", nil
 	}
@@ -627,9 +631,24 @@ func readFTSSidecarBytes(ctx context.Context, client request.Client, handler dri
 }
 
 func cleanupSidecarFiles(ctx context.Context, handler driver.Handler, manifestPath string) ([]string, error) {
-	targets := ftsSidecarCleanupTargets(manifestPath, loadFTSSidecarManifestByPath(ctx, handler, manifestPath))
+	manifest := loadFTSSidecarManifestByPath(ctx, handler, manifestPath)
+	targets := ftsSidecarCleanupTargets(manifestPath, manifest)
+	failed, err := handler.Delete(ctx, targets...)
+	if err != nil {
+		return failed, err
+	}
 
-	return handler.Delete(ctx, targets...)
+	directories := ftsSidecarCleanupDirectories(manifestPath, manifest)
+	if len(directories) == 0 {
+		return cleanupFTSSidecarFileDir(ctx, handler, manifestPath)
+	}
+
+	failed, err = handler.Delete(ctx, directories...)
+	if err != nil {
+		return failed, err
+	}
+
+	return cleanupFTSSidecarFileDir(ctx, handler, manifestPath)
 }
 
 func cleanupFTSSidecarsByMetadata(ctx context.Context, m *manager, manifestPath, entityID string, fallback fs.Entity) error {
@@ -763,6 +782,67 @@ func ftsSidecarCleanupTargets(manifestPath string, manifest *FTSSidecarManifest)
 	}
 
 	return targets
+}
+
+func ftsSidecarCleanupDirectories(manifestPath string, manifest *FTSSidecarManifest) []string {
+	baseDir := path.Dir(manifestPath)
+	seen := map[string]struct{}{}
+	directories := make([]string, 0, 4)
+	add := func(item string) {
+		item = strings.TrimSpace(item)
+		if item == "" || item == "." || item == "/" {
+			return
+		}
+		if item != baseDir && !strings.HasPrefix(item, baseDir+"/") {
+			return
+		}
+		if _, ok := seen[item]; ok {
+			return
+		}
+		seen[item] = struct{}{}
+		directories = append(directories, item)
+	}
+
+	add(path.Join(baseDir, ftsSidecarEmbeddedDir))
+	add(path.Join(baseDir, ftsSidecarDocxDir))
+	add(baseDir)
+
+	if manifest != nil {
+		for _, object := range manifest.Objects {
+			dir := path.Dir(strings.TrimSpace(object.Path))
+			for dir != "." && dir != "/" {
+				add(dir)
+				if dir == baseDir {
+					break
+				}
+				dir = path.Dir(dir)
+			}
+		}
+	}
+
+	sort.SliceStable(directories, func(i, j int) bool {
+		if len(directories[i]) == len(directories[j]) {
+			return directories[i] > directories[j]
+		}
+		return len(directories[i]) > len(directories[j])
+	})
+
+	return directories
+}
+
+func cleanupFTSSidecarFileDir(ctx context.Context, handler driver.Handler, manifestPath string) ([]string, error) {
+	fileDir := path.Dir(path.Dir(manifestPath))
+	if strings.TrimSpace(fileDir) == "" || fileDir == "." || fileDir == "/" {
+		return nil, nil
+	}
+
+	// Best-effort cleanup for the per-file container directory. It may still
+	// contain sidecars for other entities, so ignore a non-empty directory.
+	if _, err := handler.Delete(ctx, fileDir); err != nil {
+		return nil, nil
+	}
+
+	return nil, nil
 }
 
 func saveSidecarArchive(

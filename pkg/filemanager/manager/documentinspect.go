@@ -317,6 +317,14 @@ func (m *manager) inspectDocumentEntity(ctx context.Context, fileName string, en
 		return nil, nil
 	}
 
+	return m.inspectDocumentEntityWithExtractor(ctx, tika, fileName, entity, policyOverride)
+}
+
+func (m *manager) inspectDocumentEntityWithExtractor(ctx context.Context, tika *tikaextractor.TikaExtractor, fileName string, entity fs.Entity, policyOverride *ent.StoragePolicy) (*DocumentInspection, error) {
+	if tika == nil {
+		return nil, nil
+	}
+
 	source, err := m.GetEntitySource(ctx, 0, fs.WithEntity(entity), fs.WithPolicy(policyOverride))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entity source: %w", err)

@@ -6,6 +6,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
+	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver/cos"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver/ks3"
@@ -42,7 +43,13 @@ func (m *manager) CastStoragePolicyOnSlave(ctx context.Context, policy *ent.Stor
 		policyCopy := *policy
 		policyCopy.Type = types.PolicyTypeLocal
 		return &policyCopy
-	} else if policy.Type == types.PolicyTypeLocal {
+	}
+
+	if m.config.System().Mode != conf.SlaveMode {
+		return policy
+	}
+
+	if policy.Type == types.PolicyTypeLocal {
 		policyCopy := *policy
 		policyCopy.NodeID = nodeId
 		policyCopy.Type = types.PolicyTypeRemote

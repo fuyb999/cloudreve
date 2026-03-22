@@ -303,6 +303,7 @@ func (s *FullTextIndexTaskState) Remove(fileID int) bool {
 		return false
 	}
 
+	removedActive := s.Active != nil && s.Active.FileID == fileID
 	filtered := s.Files[:0]
 	removed := false
 	for _, item := range s.Files {
@@ -318,6 +319,12 @@ func (s *FullTextIndexTaskState) Remove(fileID int) bool {
 	}
 
 	s.Files = append([]FullTextIndexTaskItem(nil), filtered...)
+	if removedActive {
+		s.Active = nil
+		s.Phase = fullTextIndexPhasePending
+		s.SlaveID = 0
+		s.NodeID = 0
+	}
 	s.normalize()
 	return true
 }
@@ -330,6 +337,11 @@ func (s *FullTextIndexTaskState) Contains(fileID int) bool {
 		}
 	}
 	return false
+}
+
+func (s *FullTextIndexTaskState) Mergeable() bool {
+	s.normalize()
+	return s.Active == nil && s.Phase == fullTextIndexPhasePending && s.NodeID == 0 && s.SlaveID == 0
 }
 
 func (s *FullTextIndexTaskState) Items() []FullTextIndexTaskItem {
@@ -369,12 +381,28 @@ func (s *FullTextIndexTaskState) ActivateNext() bool {
 func (s *FullTextIndexTaskState) CompleteActive() {
 	s.normalize()
 	if s.Active != nil {
-		s.Remove(s.Active.FileID)
+		filtered := make([]FullTextIndexTaskItem, 0, len(s.Files))
+		for _, item := range s.Files {
+			if item.FileID == s.Active.FileID {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		s.Files = filtered
 	}
+
+	// Clear legacy head fields before normalize() so a completed active item
+	// won't be synthesized back from the deprecated single-file fields.
+	s.Uri = nil
+	s.EntityID = 0
+	s.FileID = 0
+	s.OwnerID = 0
+	s.FileIDs = nil
 	s.Active = nil
 	s.Phase = fullTextIndexPhasePending
 	s.SlaveID = 0
 	s.NodeID = 0
+	s.normalize()
 }
 
 type (
@@ -663,7 +691,7 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 		}
 
 		state.CompleteActive()
-		return task.StatusProcessing, nil
+		return t.persistAndContinue(state)
 	}
 
 	payload, err := fm.buildSlaveFullTextExtractPayload(ctx, item.FileID)
@@ -673,7 +701,7 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 			return status, fmt.Errorf("failed to build slave full text payload for file %d: %v; local fallback failed: %w", item.FileID, err, localErr)
 		}
 		state.CompleteActive()
-		return task.StatusProcessing, nil
+		return t.persistAndContinue(state)
 	}
 	if payload.Policy == nil {
 		status, err := performIndexing(ctx, fm, item.FileID)
@@ -681,7 +709,7 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 			return status, err
 		}
 		state.CompleteActive()
-		return task.StatusProcessing, nil
+		return t.persistAndContinue(state)
 	}
 
 	stateRaw, err := marshalSlaveContentProcessingState(slaveContentProcessingKindFullTextExtract, payload)
@@ -742,8 +770,22 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 			return status, err
 		}
 
+		fm.l.Info(
+			"Full text await finalize before complete file=%d len=%d phase=%s active=%+v",
+			item.FileID,
+			state.Len(),
+			state.Phase,
+			state.Active,
+		)
 		state.CompleteActive()
-		return task.StatusProcessing, nil
+		fm.l.Info(
+			"Full text await finalize after complete file=%d len=%d phase=%s active=%+v",
+			item.FileID,
+			state.Len(),
+			state.Phase,
+			state.Active,
+		)
+		return t.persistAndContinue(state)
 	case task.StatusError:
 		t.Lock()
 		t.progress = summary.Progress
@@ -771,6 +813,16 @@ func (t *FullTextIndexTask) persistAndSuspend(state *FullTextIndexTaskState) (ta
 
 	t.UpdateState(string(stateBytes))
 	return task.StatusSuspending, nil
+}
+
+func (t *FullTextIndexTask) persistAndContinue(state *FullTextIndexTaskState) (task.Status, error) {
+	stateBytes, err := marshalFullTextIndexTaskState(state)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to marshal state: %w", err)
+	}
+
+	t.UpdateState(string(stateBytes))
+	return task.StatusProcessing, nil
 }
 
 func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
@@ -1089,6 +1141,9 @@ func (m *manager) mergePendingFullTextTask(ctx context.Context, state *FullTextI
 
 	targetIndex := -1
 	for i := range pending {
+		if !pending[i].state.Mergeable() {
+			continue
+		}
 		if !pending[i].state.Contains(item.FileID) {
 			continue
 		}
@@ -1099,6 +1154,9 @@ func (m *manager) mergePendingFullTextTask(ctx context.Context, state *FullTextI
 
 	if targetIndex == -1 {
 		for i := range pending {
+			if !pending[i].state.Mergeable() {
+				continue
+			}
 			if pending[i].state.Len() >= fullTextMaxFilesPerTask {
 				continue
 			}

@@ -498,6 +498,66 @@ func TestQueueFullTextReconcileQueuesNewTaskWhenPendingTaskAtCapacity(t *testing
 	}
 }
 
+func TestQueueFullTextReconcileDoesNotMergeIntoAwaitingSlaveTask(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettingProvider{enabled: true}
+	activeURI := mustURI(t, "cloudreve:///await/active.rar")
+	newURI := mustURI(t, "cloudreve:///await/new.txt")
+
+	pending := newPendingFTSTask(t, 1, time.Now(), FullTextIndexTaskItem{
+		FileID:   701,
+		OwnerID:  801,
+		EntityID: 901,
+		Uri:      activeURI,
+	})
+	activeState := mustParseState(t, pending.PrivateState)
+	activeState.Active = &FullTextIndexTaskItem{
+		FileID:   701,
+		OwnerID:  801,
+		EntityID: 901,
+		Uri:      activeURI,
+	}
+	activeState.Phase = fullTextIndexPhaseAwaitSlave
+	activeState.NodeID = 3
+	activeState.SlaveID = 15
+	stateBytes, err := marshalFullTextIndexTaskState(activeState)
+	if err != nil {
+		t.Fatalf("failed to marshal awaiting-slave state: %v", err)
+	}
+	pending.Status = taskModel.StatusSuspending
+	pending.PrivateState = string(stateBytes)
+
+	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
+	tasks := &testQueue{}
+	dep := testDep{
+		settings:   settings,
+		taskClient: taskClient,
+		mediaMeta:  tasks,
+		registry:   queue.NewTaskRegistry(),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		settings: settings,
+		dep:      dep,
+	}
+
+	m.queueFullTextReconcile(ctx, newURI, 702, 802, 902)
+
+	if len(tasks.tasks) != 1 {
+		t.Fatalf("expected awaiting-slave task to be skipped for merge, got %d new task(s)", len(tasks.tasks))
+	}
+	assertQueuedState(t, tasks.tasks[0], 702, 802, 902, newURI.String())
+
+	originalState := mustParseState(t, pending.PrivateState)
+	if originalState.Len() != 1 || !originalState.Contains(701) || originalState.Contains(702) {
+		t.Fatalf("expected original awaiting-slave task to stay unchanged, got %+v", originalState.Items())
+	}
+	if originalState.Phase != fullTextIndexPhaseAwaitSlave || originalState.Active == nil || originalState.SlaveID != 15 {
+		t.Fatalf("expected awaiting-slave markers to stay intact, got %+v", originalState)
+	}
+}
+
 func TestProcessIndexDiffSequenceLastOperationWinsForSameFile(t *testing.T) {
 	ctx := context.Background()
 	settings := testSettingProvider{enabled: true}

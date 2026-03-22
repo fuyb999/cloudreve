@@ -22,9 +22,11 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	entnode "github.com/cloudreve/Cloudreve/v4/ent/node"
 	taskmodel "github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
@@ -43,6 +45,7 @@ const (
 )
 
 var esIndex = "cloudreve_files"
+var smokePreferredContentNodeID int
 
 type esDoc struct {
 	Found  bool `json:"found"`
@@ -68,7 +71,28 @@ type esDoc struct {
 	} `json:"_source"`
 }
 
+type smokeFullTextIndexTaskItem struct {
+	Uri      *fs.URI `json:"uri,omitempty"`
+	EntityID int     `json:"entity_id,omitempty"`
+	FileID   int     `json:"file_id"`
+	OwnerID  int     `json:"owner_id,omitempty"`
+}
+
+type smokeFullTextIndexTaskState struct {
+	Uri      *fs.URI                      `json:"uri,omitempty"`
+	EntityID int                          `json:"entity_id,omitempty"`
+	FileID   int                          `json:"file_id,omitempty"`
+	OwnerID  int                          `json:"owner_id,omitempty"`
+	FileIDs  []int                        `json:"file_ids,omitempty"`
+	Files    []smokeFullTextIndexTaskItem `json:"files,omitempty"`
+	Phase    string                       `json:"phase,omitempty"`
+	NodeID   int                          `json:"node_id,omitempty"`
+	SlaveID  int                          `json:"slave_id,omitempty"`
+	Active   *smokeFullTextIndexTaskItem  `json:"active,omitempty"`
+}
+
 func main() {
+	util.UseWorkingDir = true
 	logger := logging.NewConsoleLogger(logging.LevelDebug)
 	dep := dependency.NewDependency(
 		dependency.WithConfigPath(".tmp/fts_real_smoke.ini"),
@@ -85,7 +109,18 @@ func main() {
 	baseCtx = context.WithValue(baseCtx, inventory.UserCtx{}, user)
 	baseCtx = context.WithValue(baseCtx, inventory.UserIDCtx{}, user.ID)
 	must(ensureSmokeFTSSettings(baseCtx, dep), "prepare smoke fts settings")
+	if node, err := ensureSmokeContentProcessingSlave(baseCtx, dep); err != nil {
+		panic(fmt.Sprintf("prepare slave content processing node: %v", err))
+	} else if node != nil {
+		smokePreferredContentNodeID = node.ID
+		fmt.Printf("content processing slave enabled node_id=%d server=%s\n", node.ID, node.Server)
+	}
 	reloadCtx := context.WithValue(baseCtx, dependency.ReloadCtx{}, true)
+	if strings.TrimSpace(os.Getenv("FTS_SMOKE_EXTERNAL_MASTER")) != "" {
+		contentQueue := dep.ContentProcessingQueue(reloadCtx)
+		contentQueue.Start()
+		defer contentQueue.Shutdown()
+	}
 	fmt.Printf("fts_enabled=%t index_type=%s extractor_type=%s es_endpoint=%s es_index=%s\n",
 		dep.SettingProvider().FTSEnabled(reloadCtx),
 		dep.SettingProvider().FTSIndexType(reloadCtx),
@@ -823,8 +858,11 @@ func drainFTSTasksForFiles(ctx context.Context, dep dependency.Dep, user *ent.Us
 	if len(fileIDs) == 0 {
 		return nil
 	}
+	if strings.TrimSpace(os.Getenv("FTS_SMOKE_EXTERNAL_MASTER")) != "" {
+		return waitFTSTasksForFiles(ctx, dep, fileIDs...)
+	}
 
-	for round := 0; round < 12; round++ {
+	for round := 0; round < 40; round++ {
 		taskMap := map[int]*ent.Task{}
 		for _, fileID := range fileIDs {
 			matches, err := dep.TaskClient().FindPendingByPrivateStateContains(
@@ -857,6 +895,12 @@ func drainFTSTasksForFiles(ctx context.Context, dep dependency.Dep, user *ent.Us
 		fmt.Printf("drain round=%d files=%v task_ids=%v\n", round+1, fileIDs, taskIDs(tasks))
 
 		for _, model := range tasks {
+			if smokePreferredContentNodeID > 0 && model.Type == queue.FullTextIndexTaskType {
+				if err := forcePreferredContentProcessingNode(dep, model, smokePreferredContentNodeID); err != nil {
+					return fmt.Errorf("force preferred content processing node for task %d: %w", model.ID, err)
+				}
+			}
+
 			taskExec, err := queue.NewTaskFromModel(model)
 			if err != nil {
 				return fmt.Errorf("new task from model %d: %w", model.ID, err)
@@ -870,16 +914,142 @@ func drainFTSTasksForFiles(ctx context.Context, dep dependency.Dep, user *ent.Us
 			if err != nil {
 				return fmt.Errorf("task %d (%s): %w", model.ID, model.Type, err)
 			}
-			if status != taskmodel.StatusCompleted {
-				return fmt.Errorf("task %d (%s) finished with status %s", model.ID, model.Type, status)
-			}
-			if err := dep.TaskClient().SetCompleteByID(execCtx, model.ID); err != nil {
-				return fmt.Errorf("complete task %d: %w", model.ID, err)
+
+			switch status {
+			case taskmodel.StatusCompleted:
+				if err := dep.TaskClient().SetCompleteByID(execCtx, model.ID); err != nil {
+					return fmt.Errorf("complete task %d: %w", model.ID, err)
+				}
+			case taskmodel.StatusSuspending, taskmodel.StatusProcessing, taskmodel.StatusQueued:
+				if err := persistTaskState(execCtx, dep, taskExec.Model(), status); err != nil {
+					return fmt.Errorf("persist task %d (%s) status=%s: %w", model.ID, model.Type, status, err)
+				}
+				logSlaveAwaitState(taskExec.Model())
+			default:
+				return fmt.Errorf("task %d (%s) finished with unexpected status %s", model.ID, model.Type, status)
 			}
 		}
+
+		time.Sleep(2 * time.Second)
 	}
 
 	return fmt.Errorf("pending FTS tasks remained after max drain rounds for files %v", fileIDs)
+}
+
+func waitFTSTasksForFiles(ctx context.Context, dep dependency.Dep, fileIDs ...int) error {
+	for round := 0; round < 120; round++ {
+		pendingMap := map[int]*ent.Task{}
+		errorMap := map[int]*ent.Task{}
+		for _, fileID := range fileIDs {
+			matches, err := dep.DBClient().Task.Query().
+				Where(
+					taskmodel.PrivateStateContains(strconv.Itoa(fileID)),
+					taskmodel.TypeIn(
+						queue.FullTextIndexTaskType,
+						queue.FullTextDeleteTaskType,
+						queue.FullTextCopyTaskType,
+						queue.FullTextChangeOwnerTaskType,
+						queue.DocumentInspectTaskType,
+					),
+				).
+				All(ctx)
+			if err != nil {
+				return fmt.Errorf("query tasks for file %d: %w", fileID, err)
+			}
+
+			for _, model := range matches {
+				switch model.Status {
+				case taskmodel.StatusQueued, taskmodel.StatusProcessing, taskmodel.StatusSuspending:
+					pendingMap[model.ID] = model
+				case taskmodel.StatusError:
+					errorMap[model.ID] = model
+				}
+			}
+		}
+
+		if len(errorMap) > 0 {
+			tasks := make([]*ent.Task, 0, len(errorMap))
+			for _, model := range errorMap {
+				tasks = append(tasks, model)
+			}
+			sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+			model := tasks[0]
+			return fmt.Errorf("task %d (%s) failed: %s", model.ID, model.Type, model.PublicState.Error)
+		}
+
+		if len(pendingMap) == 0 {
+			return nil
+		}
+
+		tasks := make([]*ent.Task, 0, len(pendingMap))
+		for _, model := range pendingMap {
+			tasks = append(tasks, model)
+		}
+		sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+		fmt.Printf("wait round=%d files=%v task_ids=%v\n", round+1, fileIDs, taskIDs(tasks))
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("pending FTS tasks remained after max wait rounds for files %v", fileIDs)
+}
+
+func forcePreferredContentProcessingNode(dep dependency.Dep, model *ent.Task, preferredNodeID int) error {
+	state, err := parseSmokeFullTextIndexTaskState(model.PrivateState)
+	if err != nil {
+		return nil
+	}
+	if state.NodeID == preferredNodeID {
+		return nil
+	}
+	state.NodeID = preferredNodeID
+	stateBytes, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if _, err := dep.TaskClient().UpdatePrivateState(context.Background(), model, string(stateBytes)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func persistTaskState(ctx context.Context, dep dependency.Dep, taskModel *ent.Task, status taskmodel.Status) error {
+	if taskModel == nil {
+		return fmt.Errorf("missing task model")
+	}
+	_, err := dep.DBClient().Task.UpdateOneID(taskModel.ID).
+		SetStatus(status).
+		SetPublicState(taskModel.PublicState).
+		SetPrivateState(taskModel.PrivateState).
+		Save(ctx)
+	return err
+}
+
+func logSlaveAwaitState(taskModel *ent.Task) {
+	if taskModel == nil || taskModel.Type != queue.FullTextIndexTaskType {
+		return
+	}
+	state, err := parseSmokeFullTextIndexTaskState(taskModel.PrivateState)
+	if err != nil {
+		return
+	}
+	if state.Phase != "await_slave_extract" {
+		return
+	}
+	fmt.Printf(
+		"await slave extract task_id=%d node_id=%d slave_task_id=%d resume_time=%d\n",
+		taskModel.ID,
+		state.NodeID,
+		state.SlaveID,
+		taskModel.PublicState.ResumeTime,
+	)
+}
+
+func parseSmokeFullTextIndexTaskState(raw string) (*smokeFullTextIndexTaskState, error) {
+	state := &smokeFullTextIndexTaskState{}
+	if err := json.Unmarshal([]byte(raw), state); err != nil {
+		return nil, err
+	}
+	return state, nil
 }
 
 func refreshES() error {
@@ -1278,9 +1448,11 @@ func assertManifestHierarchy(
 
 func ensureSmokeFTSSettings(ctx context.Context, dep dependency.Dep) error {
 	settings := map[string]string{
+		"siteURL":                         "http://127.0.0.1:5212",
 		"fts_enabled":                     "1",
 		"fts_index_type":                  "elasticsearch",
 		"fts_extractor_type":              "tika",
+		"fts_tika_endpoint":               "http://127.0.0.1:9998",
 		"fts_tika_document_enabled":       "1",
 		"fts_tika_archive_enabled":        "1",
 		"fts_tika_sidecar_enabled":        "1",
@@ -1303,6 +1475,53 @@ func ensureSmokeFTSSettings(ctx context.Context, dep dependency.Dep) error {
 	}
 
 	return nil
+}
+
+func ensureSmokeContentProcessingSlave(ctx context.Context, dep dependency.Dep) (*ent.Node, error) {
+	server := strings.TrimSpace(os.Getenv("FTS_SMOKE_SLAVE_URL"))
+	if server == "" {
+		return nil, nil
+	}
+	secret := strings.TrimSpace(os.Getenv("FTS_SMOKE_SLAVE_KEY"))
+	if secret == "" {
+		secret = "1234567890123456789012345678901234567890123456789012345678901234"
+	}
+
+	capabilities := &boolset.BooleanSet{}
+	boolset.Set(types.NodeCapabilityContentProcessing, true, capabilities)
+
+	existing, err := dep.DBClient().Node.Query().
+		Where(entnode.ServerEQ(server)).
+		First(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return nil, err
+	}
+
+	model := &ent.Node{
+		Name:         "__fts_slave_smoke__",
+		Server:       server,
+		SlaveKey:     secret,
+		Status:       entnode.StatusActive,
+		Type:         entnode.TypeSlave,
+		Capabilities: capabilities,
+		Settings:     &types.NodeSetting{},
+		Weight:       100,
+	}
+	if existing != nil {
+		model.ID = existing.ID
+	}
+
+	nodeModel, err := dep.NodeClient().Upsert(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+
+	np, err := dep.NodePool(ctx)
+	if err == nil {
+		np.Upsert(ctx, nodeModel)
+	}
+
+	return nodeModel, nil
 }
 
 func smokeSidecarToggle(ctx context.Context, dep dependency.Dep, fm manager.FileManager, user *ent.User, docsDir *fs.URI, suffix string) (int, error) {

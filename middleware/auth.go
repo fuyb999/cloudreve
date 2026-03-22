@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -50,6 +51,7 @@ func SignRequired(authInstance auth.Auth) gin.HandlerFunc {
 func CurrentUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dep := dependency.FromContext(c)
+		isHMACAuth := strings.HasPrefix(c.GetHeader(auth.AuthorizationHeader), auth.TokenHeaderPrefixCr)
 		shouldContinue, err := dep.TokenAuth().VerifyAndRetrieveUser(c)
 		if err != nil {
 			c.JSON(200, serializer.Err(c, err))
@@ -57,7 +59,7 @@ func CurrentUser() gin.HandlerFunc {
 			return
 		}
 
-		if shouldContinue {
+		if shouldContinue && !isHMACAuth {
 			if _, err := usersvc.TryVerifyOIDCAccessToken(c); err != nil {
 				c.JSON(200, serializer.Err(c, err))
 				c.Abort()
@@ -66,7 +68,7 @@ func CurrentUser() gin.HandlerFunc {
 		}
 
 		uid := inventory.UserIDFromContext(c)
-		if uid == 0 && dep.SettingProvider().OIDCEnabled(c) {
+		if uid == 0 && dep.SettingProvider().OIDCEnabled(c) && !isHMACAuth {
 			if _, err := usersvc.TryVerifyOIDCAccessToken(c); err != nil {
 				c.JSON(200, serializer.Err(c, err))
 				c.Abort()

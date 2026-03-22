@@ -15,16 +15,17 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
-	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
 
 const slaveContentProcessingKindDocumentInspect = "document_inspect"
 
 type SlaveDocumentInspectPayload struct {
-	FileName string             `json:"file_name"`
-	FileSize int64              `json:"file_size"`
-	Entity   *ent.Entity        `json:"entity"`
-	Policy   *ent.StoragePolicy `json:"policy"`
+	FileName   string                           `json:"file_name"`
+	FileSize   int64                            `json:"file_size"`
+	Entity     *ent.Entity                      `json:"entity"`
+	Policy     *ent.StoragePolicy               `json:"policy"`
+	TikaConfig *setting.FTSTikaExtractorSetting `json:"tika_config,omitempty"`
 }
 
 func (m *manager) buildSlaveDocumentInspectPayload(ctx context.Context, uri *fs.URI, fileID, entityID int) (*SlaveDocumentInspectPayload, error) {
@@ -52,10 +53,11 @@ func (m *manager) buildSlaveDocumentInspectPayload(ctx context.Context, uri *fs.
 	}
 
 	return &SlaveDocumentInspectPayload{
-		FileName: file.Name(),
-		FileSize: file.Size(),
-		Entity:   decodedEntity,
-		Policy:   policy,
+		FileName:   file.Name(),
+		FileSize:   file.Size(),
+		Entity:     decodedEntity,
+		Policy:     policy,
+		TikaConfig: cloneFTSTikaExtractorSetting(m.settings.FTSTikaExtractor(ctx)),
 	}, nil
 }
 
@@ -64,9 +66,9 @@ func ExecuteSlaveDocumentInspect(ctx context.Context, dep dependency.Dep, payloa
 		return nil, fmt.Errorf("invalid slave document inspect payload")
 	}
 
-	extractor := dep.TextExtractor(ctx)
-	tika, ok := extractor.(*tikaextractor.TikaExtractor)
-	if !ok {
+	cfg := resolveSlaveFTSTikaConfig(payload.TikaConfig, dep.SettingProvider().FTSTikaExtractor(ctx))
+	tika, err := buildSlaveTikaExtractor(dep, cfg)
+	if err != nil {
 		return nil, fmt.Errorf("slave document inspection requires tika extractor")
 	}
 	if !ShouldExtractText(tika, payload.FileName, payload.FileSize) {
@@ -83,7 +85,7 @@ func ExecuteSlaveDocumentInspect(ctx context.Context, dep dependency.Dep, payloa
 
 	entity := fs.NewEntity(payload.Entity)
 	policy := internal.CastStoragePolicyOnSlave(ctx, payload.Policy)
-	result, err := internal.inspectDocumentEntity(ctx, payload.FileName, entity, policy)
+	result, err := internal.inspectDocumentEntityWithExtractor(ctx, tika, payload.FileName, entity, policy)
 	if err != nil {
 		return nil, err
 	}
