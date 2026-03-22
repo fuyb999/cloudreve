@@ -5,6 +5,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
+	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 )
 
 type (
@@ -26,7 +27,8 @@ type (
 	}
 	ListNodeParameters struct {
 		*PaginationArgs
-		Status node.Status
+		Status     node.Status
+		Capability *types.NodeCapability
 	}
 	ListNodeResult struct {
 		*PaginationResults
@@ -79,9 +81,36 @@ func (c *nodeClient) ListNodes(ctx context.Context, args *ListNodeParameters) (*
 	}
 	query.Order(getNodeOrderOption(args)...)
 
+	if args.Capability != nil {
+		nodes, err := withNodeEagerLoading(ctx, query).All(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		filtered := filterNodesByCapability(nodes, *args.Capability)
+		total := len(filtered)
+		start := args.Page * args.PageSize
+		if start > total {
+			start = total
+		}
+
+		end := start + args.PageSize
+		if end > total {
+			end = total
+		}
+
+		return &ListNodeResult{
+			PaginationResults: &PaginationResults{
+				TotalItems: total,
+				Page:       args.Page,
+				PageSize:   args.PageSize,
+			},
+			Nodes: filtered[start:end],
+		}, nil
+	}
+
 	// Count total items
-	total, err := query.Clone().
-		Count(ctx)
+	total, err := query.Clone().Count(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +128,17 @@ func (c *nodeClient) ListNodes(ctx context.Context, args *ListNodeParameters) (*
 		},
 		Nodes: nodes,
 	}, nil
+}
+
+func filterNodesByCapability(nodes []*ent.Node, capability types.NodeCapability) []*ent.Node {
+	filtered := make([]*ent.Node, 0, len(nodes))
+	for _, current := range nodes {
+		if current.Capabilities != nil && current.Capabilities.Enabled(int(capability)) {
+			filtered = append(filtered, current)
+		}
+	}
+
+	return filtered
 }
 
 func (c *nodeClient) Upsert(ctx context.Context, n *ent.Node) (*ent.Node, error) {

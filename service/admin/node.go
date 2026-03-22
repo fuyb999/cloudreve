@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
@@ -26,7 +28,8 @@ import (
 )
 
 const (
-	nodeStatusCondition = "node_status"
+	nodeStatusCondition     = "node_status"
+	nodeCapabilityCondition = "node_capability"
 )
 
 func (service *AdminListService) Nodes(c *gin.Context) (*ListNodeResponse, error) {
@@ -41,7 +44,8 @@ func (service *AdminListService) Nodes(c *gin.Context) (*ListNodeResponse, error
 			OrderBy:  service.OrderBy,
 			Order:    inventory.OrderDirection(service.OrderDirection),
 		},
-		Status: node.Status(service.Conditions[nodeStatusCondition]),
+		Status:     node.Status(service.Conditions[nodeStatusCondition]),
+		Capability: parseNodeCapabilityCondition(service.Conditions[nodeCapabilityCondition]),
 	})
 
 	if err != nil {
@@ -49,6 +53,33 @@ func (service *AdminListService) Nodes(c *gin.Context) (*ListNodeResponse, error
 	}
 
 	return &ListNodeResponse{Nodes: res.Nodes, Pagination: res.PaginationResults}, nil
+}
+
+func parseNodeCapabilityCondition(raw string) *inventorytypes.NodeCapability {
+	switch strings.TrimSpace(raw) {
+	case "":
+		return nil
+	case "create_archive":
+		capability := inventorytypes.NodeCapabilityCreateArchive
+		return &capability
+	case "extract_archive":
+		capability := inventorytypes.NodeCapabilityExtractArchive
+		return &capability
+	case "remote_download":
+		capability := inventorytypes.NodeCapabilityRemoteDownload
+		return &capability
+	case "content_processing":
+		capability := inventorytypes.NodeCapabilityContentProcessing
+		return &capability
+	default:
+		capability, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil
+		}
+
+		parsed := inventorytypes.NodeCapability(capability)
+		return &parsed
+	}
 }
 
 type (
