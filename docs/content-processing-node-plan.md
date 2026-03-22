@@ -683,6 +683,7 @@ QueueTypeContentProcessing
 - 用户任务详情页与管理后台任务详情页已支持展示 `file_id`、`entity_id`、`policy_id`、`manifest_path`、`save_path`、`meta_count` 等结构化诊断字段
 - 队列关键日志已补充统一诊断串，日志聚合可直接看到 `task_type`、`display_type` 与结构化 `summary`
 - 队列页已联动展示内容处理从节点概况，节点页也已展示内容处理节点总览，便于从“队列负载”和“节点准备度”两个入口排障
+- 内容处理队列卡片已能直接提示活跃从节点数与配置 worker 数，并在节点或 worker 配置不足时给出显式风险提示
 
 ## 12.1 当前剩余增强项
 
