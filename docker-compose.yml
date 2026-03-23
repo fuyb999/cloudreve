@@ -34,7 +34,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - /data/cloudreve_postgresql_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
 
   redis:
@@ -44,7 +44,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - /data/cloudreve_redis_data:/data
+      - redis_data:/data
 
   minio:
     image: bitnami/minio:2024
@@ -88,3 +88,5 @@ services:
 volumes:
   minio_data:
   elasticsearch_data:
+  pg_data:
+  redis_data:

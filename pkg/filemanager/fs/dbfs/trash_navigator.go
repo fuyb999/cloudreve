@@ -3,9 +3,13 @@ package dbfs
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/file"
+	"github.com/cloudreve/Cloudreve/v4/ent/metadata"
+	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
@@ -14,6 +18,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+	"github.com/samber/lo"
 )
 
 var (
@@ -86,14 +91,15 @@ func (t *trashNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 		return nil, nil
 	}
 
-	current, err := t.walkNext(ctx, nil, elements[0], true)
+	current, err := t.findVisibleTrashFileByName(ctx, elements[0])
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk into %q: %w", elements[0], err)
 	}
 
 	current.Path[pathIndexUser] = newTrashUri(current.Model.Name)
 	current.Path[pathIndexRoot] = current.Path[pathIndexUser]
-	current.OwnerModel = t.user
+	current.OwnerModel = &ent.User{ID: current.Model.OwnerID}
+	current.CapabilitiesBs = trashNavigatorCapability
 	return current, nil
 }
 
@@ -102,7 +108,7 @@ func (t *trashNavigator) Children(ctx context.Context, parent *File, args *ListA
 		return nil, fs.ErrPathNotExist
 	}
 
-	res, err := t.baseNavigator.children(ctx, nil, args)
+	res, err := t.listVisibleTrashFiles(ctx, args, "")
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +116,98 @@ func (t *trashNavigator) Children(ctx context.Context, parent *File, args *ListA
 	// Adding user uri for each file.
 	for i := 0; i < len(res.Files); i++ {
 		res.Files[i].Path[pathIndexUser] = newTrashUri(res.Files[i].Model.Name)
+		res.Files[i].Path[pathIndexRoot] = res.Files[i].Path[pathIndexUser]
+		res.Files[i].CapabilitiesBs = trashNavigatorCapability
 	}
 
 	return res, nil
+}
+
+func (t *trashNavigator) currentUserHash() string {
+	if t == nil || t.user == nil {
+		return ""
+	}
+
+	return hashid.EncodeUserID(t.hasher, t.user.ID)
+}
+
+func (t *trashNavigator) visiblePredicate() predicate.File {
+	predicates := []predicate.File{file.OwnerIDEQ(t.user.ID)}
+	if userHash := strings.TrimSpace(t.currentUserHash()); userHash != "" {
+		predicates = append(predicates, file.HasMetadataWith(
+			metadata.Name(MetadataTrashVisibility),
+			metadata.Value(userHash),
+		))
+	}
+
+	return file.Or(predicates...)
+}
+
+func (t *trashNavigator) listVisibleTrashFiles(ctx context.Context, args *ListArgs, exactName string) (*ListResult, error) {
+	if args == nil {
+		args = &ListArgs{}
+	}
+
+	page := args.Page
+	if page == nil {
+		page = &inventory.PaginationArgs{
+			PageSize:            defaultPageSize,
+			UseCursorPagination: true,
+		}
+	}
+
+	ctx = context.WithValue(ctx, inventory.LoadFilePublicMetadata{}, true)
+
+	extraPredicate := t.visiblePredicate()
+	if exactName != "" {
+		extraPredicate = file.And(extraPredicate, file.Name(exactName))
+	}
+	if args.ExtraPredicate != nil {
+		extraPredicate = file.And(extraPredicate, args.ExtraPredicate)
+	}
+
+	params := &inventory.ListFileParameters{
+		PaginationArgs: page,
+		ExtraPredicate: extraPredicate,
+	}
+	if args.Search != nil {
+		params.Search = args.Search
+		params.MixedType = true
+	}
+
+	res, err := t.fileClient.GetChildFiles(ctx, params, 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get children: %w", err)
+	}
+
+	return &ListResult{
+		Files: lo.Map(res.Files, func(model *ent.File, _ int) *File {
+			materialized := newFile(nil, model)
+			materialized.Path[pathIndexUser] = newTrashUri(model.Name)
+			materialized.Path[pathIndexRoot] = materialized.Path[pathIndexUser]
+			materialized.CapabilitiesBs = trashNavigatorCapability
+			return materialized
+		}),
+		MixedType:  res.MixedType,
+		Pagination: res.PaginationResults,
+	}, nil
+}
+
+func (t *trashNavigator) findVisibleTrashFileByName(ctx context.Context, name string) (*File, error) {
+	res, err := t.listVisibleTrashFiles(ctx, &ListArgs{
+		Page: &inventory.PaginationArgs{
+			PageSize:            1,
+			UseCursorPagination: true,
+		},
+	}, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Files) == 0 {
+		return nil, fs.ErrPathNotExist.WithError(fmt.Errorf("trash file %q not found", name))
+	}
+
+	return res.Files[0], nil
 }
 
 func (t *trashNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {

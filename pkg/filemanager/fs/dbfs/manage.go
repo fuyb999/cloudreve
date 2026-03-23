@@ -26,6 +26,22 @@ type navigatorFileTarget struct {
 	navigator Navigator
 }
 
+func (f *DBFS) currentUserHash() string {
+	if f == nil || f.user == nil {
+		return ""
+	}
+
+	return hashid.EncodeUserID(f.hasher, f.user.ID)
+}
+
+func (f *DBFS) canManageSharedTrash(target *File) bool {
+	if f == nil || f.user == nil || target == nil || target.IsNil() {
+		return false
+	}
+
+	return strings.TrimSpace(target.Metadata()[MetadataTrashVisibility]) == f.currentUserHash()
+}
+
 func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType, opts ...fs.Option) (fs.File, error) {
 	o := newDbfsOption()
 	for _, opt := range opts {
@@ -283,6 +299,7 @@ func (f *DBFS) Rename(ctx context.Context, path *fs.URI, newName string) (fs.Fil
 func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 	ae := serializer.NewAggregateError()
 	targets := make([]*File, 0, len(path))
+	sourceURIByID := make(map[int]*fs.URI, len(path))
 	for _, p := range path {
 		// Get navigator
 		navigator, err := f.getNavigator(ctx, p, NavigatorCapabilitySoftDelete)
@@ -315,6 +332,9 @@ func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 		}
 
 		targets = append(targets, target)
+		if _, ok := sourceURIByID[target.ID()]; !ok {
+			sourceURIByID[target.ID()] = p
+		}
 	}
 
 	targets = topLevelDBFSTargets(targets, hashid.EncodeUserID(f.hasher, f.user.ID))
@@ -351,12 +371,17 @@ func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 			return serializer.NewError(serializer.CodeInternalSetting, "failed to load file owner group", ownerErr)
 		}
 
-		if err := fc.UpsertMetadata(ctx, target.Model, map[string]string{
+		metadataToUpsert := map[string]string{
 			MetadataRestoreUri: target.Uri(true).String(),
 			MetadataExpectedCollectTime: strconv.FormatInt(
 				time.Now().Add(time.Duration(owner.Edges.Group.Settings.TrashRetention)*time.Second).Unix(),
 				10),
-		}, nil); err != nil {
+		}
+		if sourceURI := sourceURIByID[target.ID()]; sourceURI != nil && sourceURI.FileSystem() == constants.FileSystemPublic {
+			metadataToUpsert[MetadataTrashVisibility] = f.currentUserHash()
+		}
+
+		if err := fc.UpsertMetadata(ctx, target.Model, metadataToUpsert, nil); err != nil {
 			_ = inventory.Rollback(tx)
 			return serializer.NewError(serializer.CodeDBError, "failed to update metadata", err)
 		}
@@ -409,7 +434,8 @@ func (f *DBFS) Delete(ctx context.Context, path []*fs.URI, opts ...fs.Option) ([
 			continue
 		}
 
-		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !o.SysSkipSoftDelete && !ok && target.Owner().ID != f.user.ID {
+		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !o.SysSkipSoftDelete && !ok &&
+			target.Owner().ID != f.user.ID && !f.canManageSharedTrash(target) {
 			ae.Add(p.String(), fs.ErrOwnerOnly)
 			continue
 		}
@@ -562,26 +588,35 @@ func (f *DBFS) Restore(ctx context.Context, path ...*fs.URI) error {
 		return ae.Aggregate()
 	}
 
-	allTrashUriStr := lo.FilterMap(targets, func(t *File, key int) ([]*fs.URI, bool) {
+	type restoreTask struct {
+		target *File
+		uris   []*fs.URI
+	}
+	restoreTasks := lo.FilterMap(targets, func(t *File, key int) (restoreTask, bool) {
 		if restoreUri, ok := t.Metadata()[MetadataRestoreUri]; ok {
 			srcUrl, err := fs.NewUriFromString(restoreUri)
 			if err != nil {
 				ae.Add(t.Uri(false).String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("invalid restore uri: %w", err)))
-				return nil, false
+				return restoreTask{}, false
 			}
 
-			return []*fs.URI{t.Uri(false), srcUrl.DirUri()}, true
+			return restoreTask{target: t, uris: []*fs.URI{t.Uri(false), srcUrl.DirUri()}}, true
 		}
 
 		ae.Add(t.Uri(false).String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot restore file without required metadata mark")))
-		return nil, false
+		return restoreTask{}, false
 	})
 
 	// Copy each file to its original location
-	for _, uris := range allTrashUriStr {
-		if _, err := f.MoveOrCopy(ctx, []*fs.URI{uris[0]}, uris[1], false); err != nil {
+	for _, task := range restoreTasks {
+		restoreCtx := ctx
+		if f.canManageSharedTrash(task.target) {
+			restoreCtx = WithBypassOwnerCheck(ctx)
+		}
+
+		if _, err := f.MoveOrCopy(restoreCtx, []*fs.URI{task.uris[0]}, task.uris[1], false); err != nil {
 			if !ae.Merge(err) {
-				ae.Add(uris[0].String(), err)
+				ae.Add(task.uris[0].String(), err)
 			}
 		}
 	}
@@ -1155,7 +1190,8 @@ func (f *DBFS) moveFiles(ctx context.Context, targets []*File, destination *File
 		}
 
 		// Remove trash bin metadata
-		if err := fc.RemoveMetadata(ctx, file.Model, MetadataRestoreUri, MetadataExpectedCollectTime); err != nil {
+		if err := fc.RemoveMetadata(ctx, file.Model,
+			MetadataRestoreUri, MetadataExpectedCollectTime, MetadataTrashVisibility); err != nil {
 			return storageDiff, nil, serializer.NewError(serializer.CodeDBError, "Failed to remove trash related metadata", err)
 		}
 	}

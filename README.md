@@ -74,3 +74,14 @@ If you're interested in contributing to Cloudreve, please refer to [Contributing
 ## :scroll: License
 
 GPL V3
+
+
+
+网盘面板首页：上传情况（具体到人）
+
+
+codex resume  019d0bf5-5102-7b82-a52f-843ad730e8e2 --ask-for-approval never --sandbox danger-full-access -c model_reasoning_effort=xhigh
+
+codex --ask-for-approval never --sandbox danger-full-access -c model_reasoning_effort=xhigh
+
+
