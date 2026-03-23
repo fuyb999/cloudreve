@@ -9,6 +9,10 @@
 - 统一检索：`search-frontend`（前端）+ `authverse-backend/yudao-module-search`（后端）
 - 网盘同步客户端：`syncthing`
 
+补充说明：
+
+- 统一认证仓库已在当前项目目录内，直接使用本地 `authverse/` 与 `authverse-backend/` 联调，不依赖外部仓库。
+
 ---
 
 ## 1. 目标与边界
@@ -509,4 +513,3 @@ Gate-10 通过标准：`G10-*` 全部 Pass。
 - `search-demo-es-seed.sh`：统一检索中文演示数据写入/清理
 
 建议在阶段 6 和阶段 7 之前执行一次，作为基础健康检查。
-
