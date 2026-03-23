@@ -85,3 +85,21 @@ codex resume  019d0bf5-5102-7b82-a52f-843ad730e8e2 --ask-for-approval never --sa
 codex --ask-for-approval never --sandbox danger-full-access -c model_reasoning_effort=xhigh
 
 
+> 注意：此文件为旧记录与待修复清单。最新的、可直接照着执行的联调测试计划已迁移至：`docs/browser-integration-test-plan.md`。  
+> 后续建议在 `docs/browser-integration-test-plan.md` 内持续更新“用例执行记录/回归结论/修复路径”，本文件仅保留历史参考。
+
+待修复bug：
+
+统一认证相关：
+1、网盘授权中是否个删除一级目录单独的权限标识是否可以去除了，不需要与cloudreve端绑定死，直接可以在统一授权就可以完全控制从根到任意层级的文件或目录的所有权限
+2、用户角色修改失败
+3、 前后端 带有yudao 芋道 芋道源码的文案都替换一下，如果是文案修改为统一认证
+4、岗位备注修改无效
+admin修改用户信息失败，提示岗位不存在
+5、进入统一认证主页：ReferenceError: isYudaoNavigation is not defined
+at http://localhost:5173/src/component/Frame/NavBar/PageNavigation.tsx?t=1774149412649:430:14
+
+网盘相关：
+1、回收站查不到公共文件删除的文件
+2、公共文件下文件夹授权的功能，刚刚新建的文件夹，右键没现实有操作权限的按钮，刷新后就有了
+3、网盘统一登录失败，报错

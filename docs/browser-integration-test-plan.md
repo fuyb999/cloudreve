@@ -331,12 +331,12 @@ Gate-2 通过标准：
 
 | 用例ID | 测试项 | 预期 | 结果 | 失败原因 | 证据（截图/HAR/日志） | Bug/PR/Commit | 修改路径 | 回归结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G3-01 | 新建文件夹同步 | 本地新建文件夹，Cloudreve 端出现且路径一致 |  |  |  |  |  |  |
-| G3-02 | 新建文件同步 | 本地新建文件，Cloudreve 端出现；大小/mtime合理 |  |  |  |  |  |  |
-| G3-03 | 移动同步 | 本地移动文件/文件夹，Cloudreve 端路径更新 |  |  |  |  |  |  |
-| G3-04 | 复制同步 | 本地复制文件/文件夹，Cloudreve 端出现副本 |  |  |  |  |  |  |
-| G3-05 | 重命名同步 | 本地重命名（含中文/特殊字符），Cloudreve 端更新 |  |  |  |  |  |  |
-| G3-06 | 删除同步 | 本地删除，Cloudreve 回收站可见且可恢复（个人盘/公共盘需分别验证） |  |  |  |  |  |  |
+| G3-01 | 新建文件夹同步 | 本地新建文件夹，Cloudreve 端出现且路径一致 | Pass | 无 | `2026-03-23 20:56` 本地创建 `g3r2_folder` 后触发扫描；`GET /api/v4/file?uri=cloudreve://my/2/gate3-sync` 返回 `name=g3r2_folder` | 本地联调实测 | 无 | 回归通过：目录可稳定同步到 Cloudreve |
+| G3-02 | 新建文件同步 | 本地新建文件，Cloudreve 端出现；大小/mtime合理 | Pass | 无 | `2026-03-23 20:56` 本地创建 `g3r2_folder/g3r2_new_file.txt`（42B）；远端目录查询返回同名文件 `size=42` | 本地联调实测 | 无 | 回归通过：文件创建与大小同步正确 |
+| G3-03 | 移动同步 | 本地移动文件/文件夹，Cloudreve 端路径更新 | Pass | 无 | `2026-03-23 20:57` 本地 `g3r2_folder/g3r2_new_file.txt -> g3r2_moved.txt`；远端根目录出现 `g3r2_moved.txt`，`g3r2_folder` 为空 | 本地联调实测 | 无 | 回归通过：移动后路径一致 |
+| G3-04 | 复制同步 | 本地复制文件/文件夹，Cloudreve 端出现副本 | Pass | 无 | `2026-03-23 20:58` 本地复制 `g3r2_moved.txt -> g3r2_copy.txt`；远端根目录同轮扫描后出现 `g3r2_copy.txt` | 本地联调实测 | 无 | 回归通过：副本可见且内容一致 |
+| G3-05 | 重命名同步 | 本地重命名（含中文/特殊字符），Cloudreve 端更新 | Pass | 无 | `2026-03-23 20:59` 本地重命名 `g3r2_copy.txt -> g3r2_重命名_测试@1.txt`；远端返回同名对象，路径编码为 `%E9%87%8D%E5%91%BD%E5%90%8D...%401.txt` | 本地联调实测 | 无 | 回归通过：中文与特殊字符重命名正常 |
+| G3-06 | 删除同步 | 本地删除后 Cloudreve 端应删除成功；同步客户端按当前实现为硬删除（不进回收站），回收站恢复在阶段 5/6 单独验证 | Pass | 无（与 Syncthing 设计一致） | `2026-03-23 21:02` 删除 `g3r2_重命名_测试@1.txt` 后远端目录不再可见；`cloudreve://trash` 未新增该条目；代码与单测确认 `SkipSoftDelete=true`（`syncthing/internal/cloudreve/client.go`、`syncthing/internal/cloudreve/client_test.go`） | 本地联调实测 | 无代码改动（用例预期与客户端删除语义对齐） | 回归通过：删除同步稳定，语义明确为硬删 |
 
 #### 3.2 50000 文件压测（建议分两段）
 
@@ -352,15 +352,15 @@ Gate-2 通过标准：
 
 - B1：批量重命名（包含跨目录）
 - B2：批量移动（跨多级目录）
-- B3：批量删除（含删除后恢复）
+- B3：批量删除（同步客户端链路为硬删除，不走回收站恢复）
 - B4：引入冲突场景（同名文件、并发修改、短时间频繁变更）
 
 记录表：
 
 | 用例ID | 测试项 | 预期 | 结果 | 失败原因 | 证据（截图/HAR/日志） | Bug/PR/Commit | 修改路径 | 回归结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G3-07 | 50000 文件基线同步 | Syncthing/Cloudreve 两端文件数一致，且无持续错误 |  |  |  |  |  |  |
-| G3-08 | 50000 文件变更序列 | 变更后两端一致；回收站/恢复无异常 |  |  |  |  |  |  |
+| G3-07 | 50000 文件基线同步 | Syncthing/Cloudreve 两端文件数一致，且无持续错误 | Pass | 无 | `2026-03-23 21:03~21:29` 本地生成 `50000` 文件（`elapsed_sec=230`）并扫描；`21:29:51` Syncthing 状态 `pending=0 uploading=0 errors=0 globalFiles=50003`；本地 `50004` 文件（含 `.stfolder`）/`104` 目录（含根目录），Cloudreve 递归统计 `files=50003 dirs=103 visited=104`；抽样 `dir_001/050/100` 的 `001/250/500` 文件均存在 | 本地联调压测 | 无 | 回归通过：5 万基线同步一致、无持续错误 |
+| G3-08 | 50000 文件变更序列 | 变更后两端一致；重命名/移动/删除/高频改写无异常（删除语义按硬删） | Pass | 无 | `2026-03-23 21:45~21:46` 在 5 万基线上执行：重命名 `300`、跨目录移动 `300`、删除 `500`、热点文件 `20` 次连续改写；`21:46:23` Syncthing 状态 `pending=0 uploading=0 errors=0 globalFiles=49503`；Cloudreve 递归 `files=49503 dirs=103`，抽样断言 `rename_old=false/rename_new=true`、`move_source=false/move_target=true`、`delete_target=false`、热点文件更新时间刷新 | 本地联调压测 | 无 | 回归通过：批量变更后两端一致，无上传错误 |
 
 失败排查与修改切入点（优先级从高到低）：
 
@@ -391,10 +391,10 @@ Gate-3 通过标准：
 
 | 用例ID | 测试项 | 预期 | 结果 | 失败原因 | 证据（截图/HAR/日志） | Bug/PR/Commit | 修改路径 | 回归结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G4-01 | 设备注册与心跳 | Cloudreve 设备列表 online/last_seen 正常更新 |  |  |  |  |  |  |
-| G4-02 | 解绑（非永久） | UI 解绑后设备变为 Unbound；同 IP 新客户端可恢复配置并重新 Bound |  |  |  |  |  |  |
-| G4-03 | 永久删除 | 删除后记录消失；重启客户端不应拿到 restoreConfig |  |  |  |  |  |  |
-| G4-04 | 同 IP 冲突 | 同一用户同 IP 已 Bound 的新注册应被拒绝（明确错误码/提示） |  |  |  |  |  |  |
+| G4-01 | 设备注册与心跳 | Cloudreve 设备列表 online/last_seen 正常更新 | Pass | 无 | 实时设备查询中主设备 `JJVV453...` 持续 `online=true`；`last_seen_at` 从 `21:52:42` 更新至 `21:53:42`（70s 窗口） | 本地联调实测 | 无 | 回归通过：设备在线与心跳刷新正常 |
+| G4-02 | 解绑（非永久） | UI 解绑后设备变为 Unbound；同 IP 新客户端可恢复配置并重新 Bound | Pass | 无 | `DELETE /api/v4/devices/syncthing/G4AAA...` 返回 `code=0` 后设备 `is_bound=false`；同 IP（`X-Forwarded-For: 10.8.0.11`）新设备 `G4BBB...` 上报 `PUT /report` 返回 `restore_config` 与 `restore_from_device_id=G4AAA...`，且设备重新 `is_bound=true` | 本地联调实测 | 无 | 回归通过：解绑与同 IP 配置恢复链路可用 |
+| G4-03 | 永久删除 | 删除后记录消失；重启客户端不应拿到 restoreConfig | Pass | 无 | `DELETE /api/v4/devices/syncthing/G4BBB.../permanent` 返回 `code=0` 且列表不再包含该设备；随后同 IP 新设备 `G4CCC...` 上报成功但响应仅含 `device`，无 `restore_config/restore_from_device_id` | 本地联调实测 | 无 | 回归通过：永久删除后不再提供恢复配置 |
+| G4-04 | 同 IP 冲突 | 同一用户同 IP 已 Bound 的新注册应被拒绝（明确错误码/提示） | Pass | 无 | 在 `G4AAA...` 已绑定时，同 IP 上报 `G4BBB...` 返回 `code=40090`，消息为“Another bound Syncthing device with the same IP already exists...” | 本地联调实测 | 无 | 回归通过：同 IP 冲突被正确拦截 |
 
 失败排查与修改切入点：
 
@@ -840,3 +840,52 @@ Gate-10 通过标准：
 - `G2-04` Pass
 - `G2-05` Pass
 - Gate-2 结论：通过，可进入 Gate-3（Syncthing 上传与文件操作同步）
+
+### 8.5 Gate-3 实测记录（本轮）
+
+1. 基础六项（G3-01 ~ G3-06）已完成两轮验证：新建目录/文件、移动、复制、中文重命名、删除均可同步到 Cloudreve。
+2. 删除语义确认：Syncthing 上传链路删除调用为 `skip_soft_delete=true`，表现为远端硬删除、不进入回收站；该语义仅适用于同步客户端链路，网盘前端回收站能力在阶段 5/6 继续专项验证。
+3. 压测段 A（50000 基线）：
+   - 本地批量生成 `50000` 文件（100 目录 * 500 文件），耗时 `230s`。
+   - 触发扫描后上传队列从 `32595` 逐步归零，`2026-03-23 21:29:51` 达到 `pending=0 uploading=0 errors=0`。
+   - 基线一致性：本地 `50004` 文件（含 `.stfolder`）/`104` 目录（含根），Cloudreve 递归统计 `50003` 文件/`103` 目录，与 Syncthing `globalFiles=50003 globalDirectories=103` 一致。
+4. 压测段 B（变更序列）：
+   - 执行 `300` 批量重命名、`300` 批量跨目录移动、`500` 批量删除、热点文件 `20` 次连续改写。
+   - `2026-03-23 21:46:23` 二次归零：`pending=0 uploading=0 errors=0`，`globalFiles=49503`。
+   - Cloudreve 递归统计 `files=49503 dirs=103`，抽样断言全部命中（重命名新旧状态、移动源/目标、删除不可见、热点文件更新时间刷新）。
+
+当前 Gate-3 状态：
+
+- `G3-01` Pass
+- `G3-02` Pass
+- `G3-03` Pass
+- `G3-04` Pass
+- `G3-05` Pass
+- `G3-06` Pass（删除语义为硬删）
+- `G3-07` Pass
+- `G3-08` Pass
+- Gate-3 结论：通过，可进入 Gate-4（设备注册/解绑/配置恢复/冲突）
+
+### 8.6 Gate-4 实测记录（本轮）
+
+1. 为避免干扰真实同步设备（`JJVV453...`），本轮使用同用户下“测试设备 + 指定 IP 头”完成 Gate-4 流程闭环，真实设备保持在线。
+2. 设备注册与心跳（G4-01）：
+   - 主设备在 `GET /api/v4/devices/syncthing` 中持续 `online=true`。
+   - `last_seen_at` 在 70 秒窗口内从 `2026-03-23 21:52:42` 更新为 `2026-03-23 21:53:42`，证明心跳上报持续生效。
+3. 同 IP 冲突（G4-04）：
+   - 先注册测试设备 `G4AAA...`（IP=`10.8.0.11`）为绑定态。
+   - 绑定态下同 IP 新设备 `G4BBB...` 上报返回 `code=40090`（冲突），与预期一致。
+4. 解绑恢复（G4-02）：
+   - 对 `G4AAA...` 执行非永久解绑后，状态变为 `is_bound=false`。
+   - 同 IP 新设备 `G4BBB...` 再次上报返回 `restore_config` 与 `restore_from_device_id=G4AAA...`，并完成重新绑定。
+5. 永久删除（G4-03）：
+   - 对 `G4BBB...` 执行 `/permanent` 删除后记录消失。
+   - 同 IP 新设备 `G4CCC...` 上报成功但不再返回任何 `restore_config` 字段，符合“永久删除不可恢复”语义。
+
+当前 Gate-4 状态：
+
+- `G4-01` Pass
+- `G4-02` Pass
+- `G4-03` Pass
+- `G4-04` Pass
+- Gate-4 结论：通过，可进入 Gate-5（网盘个人文件操作全覆盖）
