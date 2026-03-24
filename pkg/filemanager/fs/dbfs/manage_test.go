@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 )
@@ -54,6 +55,30 @@ func TestTopLevelDBFSTargets(t *testing.T) {
 
 	if filtered[0].ID() != 2 || filtered[1].ID() != 4 {
 		t.Fatalf("unexpected filtered ids: %d, %d", filtered[0].ID(), filtered[1].ID())
+	}
+}
+
+func TestCanMoveOrCopyToRestoreAllowsPublicDestination(t *testing.T) {
+	src, err := fs.NewUriFromString(fmt.Sprintf("%s://%s/%s", constants.CloudreveScheme, constants.FileSystemTrash, "dummy"))
+	if err != nil {
+		t.Fatalf("failed to parse source uri: %v", err)
+	}
+
+	dstPublic, err := fs.NewUriFromString(fmt.Sprintf("%s://%s/%s", constants.CloudreveScheme, constants.FileSystemPublic, "gate6"))
+	if err != nil {
+		t.Fatalf("failed to parse public destination uri: %v", err)
+	}
+
+	dstMy, err := fs.NewUriFromString(fmt.Sprintf("%s://%s/%s", constants.CloudreveScheme, constants.FileSystemMy, "gate6"))
+	if err != nil {
+		t.Fatalf("failed to parse my destination uri: %v", err)
+	}
+
+	if !canMoveOrCopyTo(src, dstPublic, false) {
+		t.Fatalf("expected restore from trash to public to be allowed")
+	}
+	if !canMoveOrCopyTo(src, dstMy, false) {
+		t.Fatalf("expected restore from trash to my to remain allowed")
 	}
 }
 

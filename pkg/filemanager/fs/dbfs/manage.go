@@ -371,13 +371,25 @@ func (f *DBFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
 			return serializer.NewError(serializer.CodeInternalSetting, "failed to load file owner group", ownerErr)
 		}
 
+		sourceURI := sourceURIByID[target.ID()]
+		restoreURI := target.Uri(true)
+		if sourceURI != nil {
+			// Preserve the caller-visible source URI (especially for projected public paths),
+			// so restore does not fall back to an inaccessible owner-only `my://<owner>` path.
+			restoreURI = sourceURI
+		}
+		if restoreURI == nil {
+			_ = inventory.Rollback(tx)
+			return serializer.NewError(serializer.CodeInternalSetting, "failed to resolve restore uri", nil)
+		}
+
 		metadataToUpsert := map[string]string{
-			MetadataRestoreUri: target.Uri(true).String(),
+			MetadataRestoreUri: restoreURI.String(),
 			MetadataExpectedCollectTime: strconv.FormatInt(
 				time.Now().Add(time.Duration(owner.Edges.Group.Settings.TrashRetention)*time.Second).Unix(),
 				10),
 		}
-		if sourceURI := sourceURIByID[target.ID()]; sourceURI != nil && sourceURI.FileSystem() == constants.FileSystemPublic {
+		if sourceURI != nil && sourceURI.FileSystem() == constants.FileSystemPublic {
 			metadataToUpsert[MetadataTrashVisibility] = f.currentUserHash()
 		}
 
@@ -563,6 +575,9 @@ func (f *DBFS) VersionControl(ctx context.Context, path *fs.URI, versionId int, 
 func (f *DBFS) Restore(ctx context.Context, path ...*fs.URI) error {
 	ae := serializer.NewAggregateError()
 	targets := make([]*File, 0, len(path))
+	// Restore needs internal metadata (e.g. MetadataTrashVisibility / MetadataRestoreUri)
+	// to decide whether shared-trash bypass is allowed.
+	ctx = context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
 	ctx = context.WithValue(ctx, inventory.LoadFilePublicMetadata{}, true)
 
 	for _, p := range path {

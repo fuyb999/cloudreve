@@ -936,7 +936,8 @@ func canMoveOrCopyTo(src, dst *fs.URI, isCopy bool) bool {
 			dst.FileSystem() == constants.FileSystemTrash ||
 			dst.FileSystem() == constants.FileSystemPublic
 	case constants.FileSystemTrash:
-		return dst.FileSystem() == constants.FileSystemMy
+		return dst.FileSystem() == constants.FileSystemMy ||
+			dst.FileSystem() == constants.FileSystemPublic
 	case constants.FileSystemPublic:
 		return dst.FileSystem() == constants.FileSystemPublic
 	}

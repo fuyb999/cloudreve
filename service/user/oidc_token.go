@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -125,6 +126,28 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 			_ = dep.KV().Delete("", oidcAccessTokenCacheKey(token))
 			return false, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token has been logged out", nil)
 		}
+		// Cached entry still needs live introspection so cross-system logout/revoke
+		// can take effect immediately.
+		discovery, err := fetchOIDCDiscovery(c, dep, dep.SettingProvider().OIDC(c))
+		if err != nil {
+			return false, err
+		}
+		introspection, err := introspectOIDCAccessToken(c, dep, discovery, token)
+		if err != nil {
+			_ = dep.KV().Delete("", oidcAccessTokenCacheKey(token))
+			return false, err
+		}
+		issuedAt := introspection.Iat
+		if issuedAt == 0 {
+			issuedAt = time.Now().Unix()
+		}
+		if isOIDCLogoutAfter(getOIDCSubjectLogoutAt(c, dep, entry.Issuer, entry.Subject), issuedAt) {
+			_ = dep.KV().Delete("", oidcAccessTokenCacheKey(token))
+			return false, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token has been logged out", nil)
+		}
+		entry.ExpiresAt = introspection.Exp
+		entry.IssuedAt = issuedAt
+		_ = cacheOIDCAccessToken(c, dep, token, entry)
 		util.WithValue(c, inventory.UserIDCtx{}, entry.LocalUserID)
 		return true, nil
 	}
@@ -141,7 +164,11 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 
 	userinfo, err := fetchOIDCUserinfo(c, dep, discovery, token)
 	if err != nil {
-		return false, err
+		// Some IdP-issued access tokens (for example, password-login tokens) may not
+		// carry userinfo-read scopes. If introspection already succeeded, fall back to
+		// introspection-only identity reconstruction instead of hard-failing.
+		dep.Logger().Warning("Failed to load OIDC userinfo, fallback to introspection-only profile: %s", err)
+		userinfo = &oidcUserinfoPayload{}
 	}
 
 	profile, err := buildOIDCIdentityProfileFromAccessToken(discovery, introspection, userinfo)
@@ -329,6 +356,10 @@ func introspectOIDCAccessToken(c *gin.Context, dep dependency.Dep, discovery *oi
 
 	payload, err := parseOIDCPayload[oidcIntrospectionPayload](body)
 	if err != nil {
+		var appErr serializer.AppError
+		if errors.As(err, &appErr) {
+			return nil, appErr
+		}
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to parse OIDC introspection response", err)
 	}
 	if payload.Active != nil && !*payload.Active {
