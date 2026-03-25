@@ -3,6 +3,8 @@ package dbfs
 import (
 	"context"
 	"fmt"
+
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -13,22 +15,27 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
 
 var myNavigatorCapability = &boolset.BooleanSet{}
 
+type hiddenPublicRootAccessCtxKey struct{}
+
 // NewMyNavigator creates a navigator for user's "my" file system.
 func NewMyNavigator(u *ent.User, fileClient inventory.FileClient, userClient inventory.UserClient, l logging.Logger,
-	config *setting.DBFS, hasher hashid.Encoder) Navigator {
-	return &myNavigator{
+	config *setting.DBFS, hasher hashid.Encoder, publicService *publicshare.Service) Navigator {
+	n := &myNavigator{
 		user:          u,
 		l:             l,
 		fileClient:    fileClient,
 		userClient:    userClient,
 		config:        config,
-		baseNavigator: newBaseNavigator(fileClient, defaultFilter, u, hasher, config),
+		publicService: publicService,
 	}
+	n.baseNavigator = newBaseNavigator(fileClient, n.filter, u, hasher, config)
+	return n
 }
 
 type myNavigator struct {
@@ -37,11 +44,14 @@ type myNavigator struct {
 	fileClient inventory.FileClient
 	userClient inventory.UserClient
 
-	config *setting.DBFS
+	config        *setting.DBFS
+	publicService *publicshare.Service
 	*baseNavigator
 	root           *File
 	disableRecycle bool
 	persist        func()
+	publicRootID   int
+	publicRootSet  bool
 }
 
 func (n *myNavigator) Recycle() {
@@ -133,6 +143,68 @@ func (n *myNavigator) walkNext(ctx context.Context, root *File, next string, isL
 	return n.baseNavigator.walkNext(ctx, root, next, isLeaf)
 }
 
+func (n *myNavigator) filter(ctx context.Context, f *File) (*File, bool) {
+	if n.isHiddenPublicFile(ctx, f) {
+		return nil, false
+	}
+
+	return f, true
+}
+
+func (n *myNavigator) publicRoot(ctx context.Context) int {
+	if n.publicRootSet || n.publicService == nil {
+		return n.publicRootID
+	}
+
+	rootID, err := n.publicService.RootID(ctx)
+	if err != nil {
+		if n.l != nil {
+			n.l.Warning("Failed to resolve public root id for my navigator filter: %v", err)
+		}
+		n.publicRootSet = true
+		return 0
+	}
+
+	n.publicRootID = rootID
+	n.publicRootSet = true
+	return n.publicRootID
+}
+
+func (n *myNavigator) isHiddenPublicFile(ctx context.Context, f *File) bool {
+	if f == nil || f.IsNil() {
+		return false
+	}
+	if allowed, _ := ctx.Value(hiddenPublicRootAccessCtxKey{}).(bool); allowed {
+		return false
+	}
+
+	publicRootID := n.publicRoot(ctx)
+	if publicRootID == 0 {
+		return false
+	}
+
+	for current := f; current != nil; current = current.Parent {
+		if current.ID() == publicRootID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func withHiddenPublicRootAccess(ctx context.Context, target *File) context.Context {
+	if ctx == nil || target == nil {
+		return ctx
+	}
+
+	uri := target.Uri(false)
+	if uri == nil || uri.FileSystem() != constants.FileSystemPublic {
+		return ctx
+	}
+
+	return context.WithValue(ctx, hiddenPublicRootAccessCtxKey{}, true)
+}
+
 func (n *myNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {
 	res := &fs.NavigatorProps{
 		Capability:            myNavigatorCapability,
@@ -149,7 +221,97 @@ func (n *myNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {
 }
 
 func (n *myNavigator) Walk(ctx context.Context, levelFiles []*File, limit, depth int, f WalkFunc) error {
-	return n.baseNavigator.walk(ctx, levelFiles, limit, depth, f)
+	if depth < 0 {
+		depth = int(^uint(0) >> 1)
+	}
+	allowed, _ := ctx.Value(hiddenPublicRootAccessCtxKey{}).(bool)
+
+	if len(levelFiles) == 0 {
+		return nil
+	}
+
+	if limit <= 0 {
+		return ErrFileCountLimitedReached
+	}
+
+	pageSize := defaultPageSize
+	if n.config != nil && n.config.MaxPageSize > 0 {
+		pageSize = n.config.MaxPageSize
+	}
+
+	walked := 0
+	currentLevel := levelFiles
+	for level := 0; len(currentLevel) > 0 && depth >= 0; level++ {
+		visible := currentLevel
+		if !allowed {
+			visible = make([]*File, 0, len(currentLevel))
+			for _, current := range currentLevel {
+				if filtered, ok := n.filter(ctx, current); ok {
+					visible = append(visible, filtered)
+				}
+			}
+		}
+
+		if len(visible) == 0 {
+			break
+		}
+
+		stop := false
+		if len(visible) > limit-walked {
+			visible = visible[:limit-walked]
+			stop = true
+		}
+
+		if err := f(visible, level); err != nil {
+			return err
+		}
+
+		if stop {
+			return ErrFileCountLimitedReached
+		}
+
+		walked += len(visible)
+		if walked >= limit {
+			return ErrFileCountLimitedReached
+		}
+
+		if depth == 0 {
+			break
+		}
+		depth--
+
+		nextLevel := make([]*File, 0)
+		for _, parent := range visible {
+			if !parent.CanHaveChildren() {
+				continue
+			}
+
+			token := ""
+			for {
+				res, err := n.Children(ctx, parent, &ListArgs{
+					Page: &inventory.PaginationArgs{
+						UseCursorPagination: true,
+						PageToken:           token,
+						PageSize:            pageSize,
+					},
+				})
+				if err != nil {
+					return err
+				}
+
+				nextLevel = append(nextLevel, res.Files...)
+				if res.Pagination == nil || res.Pagination.NextPageToken == "" {
+					break
+				}
+
+				token = res.Pagination.NextPageToken
+			}
+		}
+
+		currentLevel = nextLevel
+	}
+
+	return nil
 }
 
 func (n *myNavigator) FollowTx(ctx context.Context) (func(), error) {

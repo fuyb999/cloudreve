@@ -1237,7 +1237,7 @@ func (f *DBFS) buildMoveIndexDiff(ctx context.Context, targets []*File, destinat
 			newRoot = newBase.Join(target.DisplayName())
 		}
 
-		if err := f.Walk(ctx, target.Uri(true), -1, func(file fs.File, level int) error {
+		if err := f.Walk(withHiddenPublicRootAccess(ctx, target), target.Uri(true), -1, func(file fs.File, level int) error {
 			dbFile, ok := file.(*File)
 			if !ok || dbFile == nil {
 				return nil
@@ -1315,7 +1315,7 @@ func (f *DBFS) buildRebasedIndexDiff(ctx context.Context, targets []*File, rebas
 			continue
 		}
 
-		if err := f.Walk(ctx, target.Uri(true), -1, func(file fs.File, level int) error {
+		if err := f.Walk(withHiddenPublicRootAccess(ctx, target), target.Uri(true), -1, func(file fs.File, level int) error {
 			dbFile, ok := file.(*File)
 			if !ok || dbFile == nil {
 				return nil

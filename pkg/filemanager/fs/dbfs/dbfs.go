@@ -831,7 +831,7 @@ func (f *DBFS) getNavigator(ctx context.Context, path *fs.URI, requiredCapabilit
 		var n Navigator
 		switch pathFs {
 		case constants.FileSystemMy:
-			n = NewMyNavigator(f.user, f.fileClient, f.userClient, f.l, config, f.hasher)
+			n = NewMyNavigator(f.user, f.fileClient, f.userClient, f.l, config, f.hasher, f.publicService)
 		case constants.FileSystemPublic:
 			n = NewPublicNavigator(f.user, f.fileClient, f.l, config, f.hasher, f.publicService)
 		case constants.FileSystemShare:

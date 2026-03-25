@@ -38,15 +38,29 @@ func NewService(l logging.Logger, fileClient inventory.FileClient, settingClient
 	}
 }
 
-func (s *Service) Root(ctx context.Context) (*ent.File, error) {
+// RootID returns configured public root ID.
+// It returns 0 when the public root has not been configured yet.
+func (s *Service) RootID(ctx context.Context) (int, error) {
 	value, err := s.settingClient.Get(ctx, PublicRootFileIDSetting)
 	if err != nil || strings.TrimSpace(value) == "" {
-		return nil, fmt.Errorf("public root not configured")
+		return 0, nil
 	}
 
 	rootID, err := strconv.Atoi(value)
 	if err != nil {
-		return nil, fmt.Errorf("invalid public root id: %w", err)
+		return 0, fmt.Errorf("invalid public root id: %w", err)
+	}
+
+	return rootID, nil
+}
+
+func (s *Service) Root(ctx context.Context) (*ent.File, error) {
+	rootID, err := s.RootID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if rootID == 0 {
+		return nil, fmt.Errorf("public root not configured")
 	}
 
 	ctx = context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
