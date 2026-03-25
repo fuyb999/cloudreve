@@ -537,6 +537,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 	}
 
 	var currentUser *ent.User
+	createdShadowUser := false
 	if identity != nil {
 		currentUser, err = userClient.GetByID(c, identity.UserID)
 		if err != nil && !ent.IsNotFound(err) {
@@ -586,6 +587,12 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		if err != nil {
 			_ = tx.Rollback()
 			return nil, serializer.NewError(serializer.CodeDBError, "Failed to create shadow user", err)
+		}
+		createdShadowUser = true
+		settingClient := dep.SettingClient().SetClient(tx.Client()).(inventory.SettingClient)
+		if err := disableOpenRegistrationAfterFirstSignup(c, settingClient, currentUser); err != nil {
+			_ = tx.Rollback()
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to update registration setting", err)
 		}
 	}
 
@@ -641,9 +648,19 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		}
 	}
 
-	_ = identity
+	currentUser, err = promoteFirstOIDCIdentityUserToAdmin(c, currentUser, identity)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, serializer.NewError(serializer.CodeDBError, "Failed to promote first OIDC user to admin", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to commit OIDC login transaction", err)
+	}
+	if createdShadowUser {
+		if err := invalidateOpenRegistrationCache(dep.KV(), currentUser); err != nil {
+			dep.Logger().Warning("Failed to clear registration setting cache after OIDC signup: %s", err)
+		}
 	}
 
 	ctx := context.WithValue(c, inventory.LoadUserGroup{}, true)

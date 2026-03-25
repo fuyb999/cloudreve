@@ -358,9 +358,11 @@ func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, 
 
 	if newUser.ID == 1 {
 		// For the first user registered, elevate it to admin group.
-		if _, err := newUser.Update().SetGroupID(1).Save(ctx); err != nil {
+		promotedUser, err := newUser.Update().SetGroupID(1).Save(ctx)
+		if err != nil {
 			return newUser, fmt.Errorf("failed to elevate user to admin: %w", err)
 		}
+		newUser = promotedUser
 	}
 	return newUser, nil
 }

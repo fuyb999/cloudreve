@@ -80,8 +80,17 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 		return serializer.DBErr(c, "Failed to insert user row", err)
 	}
 
+	settingClient := dep.SettingClient().SetClient(uc.GetClient()).(inventory.SettingClient)
+	if err := disableOpenRegistrationAfterFirstSignup(c, settingClient, expectedUser); err != nil {
+		_ = inventory.Rollback(tx)
+		return serializer.DBErr(c, "Failed to update registration setting", err)
+	}
+
 	if err := inventory.Commit(tx); err != nil {
 		return serializer.DBErr(c, "Failed to commit user row", err)
+	}
+	if err := invalidateOpenRegistrationCache(dep.KV(), expectedUser); err != nil {
+		dep.Logger().Warning("Failed to clear registration setting cache after signup: %s", err)
 	}
 
 	if err := audit.Publish(c, &audit.Event{

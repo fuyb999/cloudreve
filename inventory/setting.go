@@ -500,7 +500,7 @@ var DefaultSettings = map[string]string{
 	"pwa_display":                                "standalone",
 	"pwa_theme_color":                            "#000000",
 	"pwa_background_color":                       "#ffffff",
-	"register_enabled":                           `0`,
+	"register_enabled":                           `1`,
 	"default_group":                              `2`,
 	"fromName":                                   `Cloudreve`,
 	"mail_keepalive":                             `30`,
