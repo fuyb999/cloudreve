@@ -1,30 +1,30 @@
 services:
-#  cloudreve:
-#    image: cloudreve/cloudreve:latest
-#    container_name: cloudreve-backend
-#    depends_on:
-#      - postgresql
-#      - redis
-#    restart: unless-stopped
-#    ports:
-#      - 5212:5212
-#      - 6888:6888
-#      - 6888:6888/udp
-#    environment:
-#      - CR_CONF_Database.Type=postgres
-#      - CR_CONF_Database.Host=postgresql
-#      - CR_CONF_Database.User=cloudreve
-#      - CR_CONF_Database.Name=cloudreve
-#      - CR_CONF_Database.Port=5432
-#      - CR_CONF_Redis.Server=redis:6379
-#    volumes:
-#      - backend_data:/cloudreve/data
+  cloudreve:
+    image: cloudreve/cloudreve:latest
+    container_name: cloudreve-backend
+    depends_on:
+      - postgresql
+      - redis
+    restart: unless-stopped
+    ports:
+      - 5212:5212
+      - 6888:6888
+      - 6888:6888/udp
+    environment:
+      - CR_CONF_Database.Type=postgres
+      - CR_CONF_Database.Host=postgresql
+      - CR_CONF_Database.User=cloudreve
+      - CR_CONF_Database.Name=cloudreve
+      - CR_CONF_Database.Port=5432
+      - CR_CONF_Redis.Server=redis:6379
+    volumes:
+      - backend_data:/cloudreve/data
 
   postgresql:
-    # Best practice: Pin to major version. 
+    # Best practice: Pin to major version.
     # NOTE: For major version jumps:
-    # backup & consult https://www.postgresql.org/docs/current/pgupgrade.html 
-    image: postgres:17    
+    # backup & consult https://www.postgresql.org/docs/current/pgupgrade.html
+    image: postgres:17
     container_name: postgresql
     restart: unless-stopped
     environment:
@@ -51,13 +51,13 @@ services:
     container_name: minio
     restart: unless-stopped
     environment:
-      - MINIO_ROOT_USER=minio
-      - MINIO_ROOT_PASSWORD=minio123456
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minio123456}
       - MINIO_DISTRIBUTED_MODE_ENABLED=no
       - MINIO_SKIP_CLIENT=yes
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/bitnami/minio/data
 
@@ -93,6 +93,7 @@ services:
       # - /absolute/path/to/company-fonts:/tika-fonts/company:ro
 
 volumes:
+  backend_data:
   minio_data:
   elasticsearch_data:
   pg_data:
