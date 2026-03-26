@@ -869,10 +869,10 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 		return task.StatusError, fmt.Errorf("failed to index file %d: %w", fileID, err)
 	}
 
-	if doc.EntityID > 0 && uri != nil {
+	if uri != nil {
 		if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
 			Key:   dbfs.FullTextIndexKey,
-			Value: hashid.EncodeEntityID(fm.hasher, doc.EntityID),
+			Value: dbfs.BuildFullTextIndexMetadataValue(fm.hasher, doc.FileID, doc.EntityID),
 		}); err != nil {
 			return task.StatusError, fmt.Errorf("failed to patch metadata: %w", err)
 		}

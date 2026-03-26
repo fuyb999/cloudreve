@@ -227,7 +227,7 @@ type FileClient interface {
 	UnlinkEntity(ctx context.Context, entity *ent.Entity, file *ent.File, owner *ent.User) (StorageDiff, error)
 	// CreateDirectLink creates a direct link for a file
 	CreateDirectLink(ctx context.Context, fileID int, name string, speed int, reuse bool) (*ent.DirectLink, error)
-	// CountIndexableFiles counts files suitable for FTS indexing (non-empty name, has parent, is file type).
+	// CountIndexableFiles counts files suitable for FTS indexing (non-empty name, has parent, includes files and folders).
 	CountIndexableFiles(ctx context.Context) (int, error)
 	// ListIndexableFiles lists files suitable for FTS indexing, returning up to limit files
 	// with ID strictly greater than afterID. Use afterID=0 to start from the beginning.
@@ -364,7 +364,7 @@ func (f *fileClient) ListIndexableFiles(ctx context.Context, afterID, limit int)
 
 func (f *fileClient) indexableFilesQuery() *ent.FileQuery {
 	return f.client.File.Query().Where(
-		file.Type(int(types.FileTypeFile)),
+		file.TypeIn(int(types.FileTypeFile), int(types.FileTypeFolder)),
 		file.NameNEQ(""),
 		file.FileChildrenNotNil(),
 	).Order(file.ByID())

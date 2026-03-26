@@ -1462,6 +1462,7 @@ func (s testSettingProvider) MediaMetaGeocodingEnabled(ctx context.Context) bool
 type testDep struct {
 	dependency.Dep
 	settings      setting.Provider
+	settingClient inventory.SettingClient
 	taskClient    inventory.TaskClient
 	contentQueue  queue.Queue
 	mediaMeta     queue.Queue
@@ -1479,6 +1480,10 @@ type testDep struct {
 
 func (d testDep) SettingProvider() setting.Provider {
 	return d.settings
+}
+
+func (d testDep) SettingClient() inventory.SettingClient {
+	return d.settingClient
 }
 
 func (d testDep) TaskClient() inventory.TaskClient {
@@ -1635,7 +1640,8 @@ func (s *testSearchIndexer) Close() error {
 
 type testFileClient struct {
 	inventory.FileClient
-	fileByID map[int]*ent.File
+	fileByID     map[int]*ent.File
+	ancestorByID map[int][]*ent.File
 }
 
 func (c *testFileClient) GetByID(ctx context.Context, id int) (*ent.File, error) {
@@ -1643,6 +1649,47 @@ func (c *testFileClient) GetByID(ctx context.Context, id int) (*ent.File, error)
 		return file, nil
 	}
 	return nil, &ent.NotFoundError{}
+}
+
+func (c *testFileClient) GetAncestorFiles(ctx context.Context, target *ent.File) ([]*ent.File, error) {
+	if target != nil && c.ancestorByID != nil {
+		if items, ok := c.ancestorByID[target.ID]; ok {
+			return append([]*ent.File(nil), items...), nil
+		}
+	}
+	return nil, inventory.ErrTreePathQueryUnavailable
+}
+
+type testSettingClient struct {
+	inventory.SettingClient
+	values map[string]string
+}
+
+func (c testSettingClient) Get(ctx context.Context, name string) (string, error) {
+	if value, ok := c.values[name]; ok {
+		return value, nil
+	}
+	return "", &ent.NotFoundError{}
+}
+
+func (c testSettingClient) Set(ctx context.Context, settings map[string]string) error {
+	if c.values == nil {
+		c.values = map[string]string{}
+	}
+	for k, v := range settings {
+		c.values[k] = v
+	}
+	return nil
+}
+
+func (c testSettingClient) Gets(ctx context.Context, names []string) (map[string]string, error) {
+	res := make(map[string]string, len(names))
+	for _, name := range names {
+		if value, ok := c.values[name]; ok {
+			res[name] = value
+		}
+	}
+	return res, nil
 }
 
 type testPolicyClient struct {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
@@ -137,12 +138,57 @@ func TestDeleteAndRestoreSkipFullTextTraversalWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestCreateQueuesFullTextReconcileForNewFilesAndFolders(t *testing.T) {
+	ctx := context.Background()
+	folderURI := mustURI(t, "cloudreve:///docs/new-folder")
+	publicFileURI := mustURI(t, "cloudreve://public/team/readme.txt")
+	backend := &testOperationFS{
+		createResults: map[string]fs.File{
+			folderURI.String():     testCreatedFile{id: 41, ownerID: 501, uri: folderURI},
+			publicFileURI.String(): testCreatedFile{id: 42, ownerID: 502, uri: publicFileURI},
+		},
+	}
+	tasks := &testQueue{}
+	settings := testSettingProvider{enabled: true}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		fs:       backend,
+		settings: settings,
+		dep: testDep{
+			settings:   settings,
+			taskClient: &testTaskClient{},
+			mediaMeta:  tasks,
+			registry:   queue.NewTaskRegistry(),
+		},
+	}
+
+	if _, err := m.Create(ctx, folderURI, types.FileTypeFolder); err != nil {
+		t.Fatalf("unexpected folder create error: %v", err)
+	}
+	if _, err := m.Create(ctx, publicFileURI, types.FileTypeFile); err != nil {
+		t.Fatalf("unexpected public file create error: %v", err)
+	}
+
+	if len(backend.created) != 2 {
+		t.Fatalf("unexpected create calls: %v", backend.created)
+	}
+	if len(tasks.tasks) != 2 {
+		t.Fatalf("unexpected queued task count: got %d want 2", len(tasks.tasks))
+	}
+
+	assertQueuedState(t, tasks.tasks[0], 41, 501, 0, folderURI.String())
+	assertQueuedState(t, tasks.tasks[1], 42, 502, 0, publicFileURI.String())
+}
+
 type testOperationFS struct {
 	fs.FileSystem
-	walkIDs     map[string][]int
-	walkCalls   int
-	softDeleted []string
-	restored    []string
+	walkIDs       map[string][]int
+	walkCalls     int
+	softDeleted   []string
+	restored      []string
+	created       []string
+	createResults map[string]fs.File
 }
 
 func (f *testOperationFS) SoftDelete(ctx context.Context, path ...*fs.URI) error {
@@ -163,6 +209,18 @@ func (f *testOperationFS) Restore(ctx context.Context, path ...*fs.URI) error {
 	return nil
 }
 
+func (f *testOperationFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType, opts ...fs.Option) (fs.File, error) {
+	if path != nil {
+		f.created = append(f.created, path.String())
+		if f.createResults != nil {
+			if file, ok := f.createResults[path.String()]; ok {
+				return file, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (f *testOperationFS) Walk(ctx context.Context, path *fs.URI, depth int, walk fs.WalkFunc, opts ...fs.Option) error {
 	f.walkCalls++
 	for _, id := range f.walkIDs[path.String()] {
@@ -171,4 +229,32 @@ func (f *testOperationFS) Walk(ctx context.Context, path *fs.URI, depth int, wal
 		}
 	}
 	return nil
+}
+
+type testCreatedFile struct {
+	fs.File
+	id       int
+	ownerID  int
+	entityID int
+	uri      *fs.URI
+}
+
+func (f testCreatedFile) IsNil() bool {
+	return false
+}
+
+func (f testCreatedFile) ID() int {
+	return f.id
+}
+
+func (f testCreatedFile) OwnerID() int {
+	return f.ownerID
+}
+
+func (f testCreatedFile) PrimaryEntityID() int {
+	return f.entityID
+}
+
+func (f testCreatedFile) Uri(isRoot bool) *fs.URI {
+	return f.uri
 }

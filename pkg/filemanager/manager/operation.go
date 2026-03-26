@@ -138,6 +138,14 @@ func (m *manager) Create(ctx context.Context, path *fs.URI, fileType types.FileT
 
 	file, err := m.fs.Create(ctx, path, fileType, opts...)
 	if err == nil {
+		syncURI := path
+		if file != nil && !file.IsNil() {
+			if resolved := file.Uri(false); resolved != nil {
+				syncURI = resolved
+			}
+			m.queueFullTextSync(ctx, syncURI, file.ID(), file.OwnerID(), file.PrimaryEntityID())
+		}
+
 		m.publishAudit(ctx, audit.FileCreate, map[string]any{
 			"path": path.String(),
 			"type": fileType,

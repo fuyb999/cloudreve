@@ -260,17 +260,13 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 	}
 
 	for _, doc := range docs {
-		if doc.EntityID == 0 {
-			continue
-		}
-
 		fileModel, ok := fileByID[doc.FileID]
 		if !ok {
 			continue
 		}
 
 		if err := dep.FileClient().UpsertMetadata(ctx, fileModel, map[string]string{
-			dbfs.FullTextIndexKey: hashid.EncodeEntityID(dep.HashIDEncoder(), doc.EntityID),
+			dbfs.FullTextIndexKey: dbfs.BuildFullTextIndexMetadataValue(dep.HashIDEncoder(), doc.FileID, doc.EntityID),
 		}, nil); err != nil {
 			m.l.Warning("Failed to upsert metadata for file %d: %s", doc.FileID, err)
 		}

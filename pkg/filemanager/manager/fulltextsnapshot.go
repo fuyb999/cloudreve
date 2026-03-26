@@ -19,6 +19,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -56,8 +57,8 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 		return nil, nil, fmt.Errorf("failed to resolve file uri: %w", err)
 	}
 
-	uri := traversed.Uri(true)
-	if uri == nil {
+	ownerURI := traversed.Uri(true)
+	if ownerURI == nil {
 		return nil, nil, fmt.Errorf("failed to resolve file uri")
 	}
 
@@ -79,7 +80,7 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 		ownerManager,
 		fileModel,
 		primaryFTSEntity,
-		uri,
+		ownerURI,
 	)
 	if extractErr != nil {
 		m.l.Warning("Failed to extract FTS content for file %d name=%q: %s", fileModel.ID, fileModel.Name, extractErr)
@@ -90,19 +91,24 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 
 	filePolicy, _ := m.storagePolicyFromID(ctx, fileModel.StoragePolicyFiles)
 	latestVersion := buildSearchVersion(primaryEntity, fileModel.Name, filePolicy)
-	versions, attachments := buildSearchEntities(fileModel, uri, filePolicy)
-
-	pathDoc := searcher.SearchPathDocument{
-		Path:      uri.String(),
-		IsPrimary: true,
-		Size:      fileModel.Size,
-		FileType:  fileTypeString(types.FileType(fileModel.Type)),
-		EntityID:  fileModel.PrimaryEntity,
-	}
+	versions, attachments := buildSearchEntities(fileModel, ownerURI, filePolicy)
+	latestVersionID := 0
+	latestVersionBucket := ""
 	if latestVersion != nil {
-		pathDoc.Bucket = latestVersion.Bucket
-		pathDoc.VersionID = latestVersion.EntityID
+		latestVersionID = latestVersion.EntityID
+		latestVersionBucket = latestVersion.Bucket
 	}
+
+	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
+	paths, pathText := buildFTSSearchPathDocuments(
+		ownerURI,
+		publicURI,
+		fileModel.Size,
+		fileTypeString(types.FileType(fileModel.Type)),
+		fileModel.PrimaryEntity,
+		latestVersionID,
+		latestVersionBucket,
+	)
 	attachments = append(attachments, embeddedAttachments...)
 
 	doc := &searcher.SearchFileDocument{
@@ -125,12 +131,12 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 		Metadata:        metadata,
 		MetadataText:    joinMetadata(metadata),
 		Props:           mapFromFileProps(fileModel.Props),
-		PathText:        uri.String(),
+		PathText:        pathText,
 		Content:         content,
 		ContentExcerpt:  excerpt(content, 320),
 		LatestVersion:   latestVersion,
 		Versions:        versions,
-		Paths:           []searcher.SearchPathDocument{pathDoc},
+		Paths:           paths,
 		Attachments:     attachments,
 		SnapshotVersion: ftsSnapshotVersion,
 		SynchronizedAt:  time.Now(),
@@ -148,7 +154,102 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 		doc.StorageBucket = latestVersion.Bucket
 	}
 
-	return doc, uri, nil
+	return doc, ownerURI, nil
+}
+
+func (m *manager) resolvePublicSearchURI(ctx context.Context, fileModel *ent.File) *fs.URI {
+	if m == nil || fileModel == nil {
+		return nil
+	}
+
+	publicService := publicshare.NewService(m.l, m.dep.FileClient(), m.dep.SettingClient(), m.hasher)
+	rootID, err := publicService.RootID(ctx)
+	if err != nil || rootID == 0 {
+		return nil
+	}
+
+	publicURI := publicshare.BuildPublicURI()
+	if fileModel.ID == rootID {
+		return publicURI
+	}
+
+	ancestors, err := m.dep.FileClient().GetAncestorFiles(ctx, fileModel)
+	if err != nil {
+		return nil
+	}
+
+	rootIndex := -1
+	for i, ancestor := range ancestors {
+		if ancestor != nil && ancestor.ID == rootID {
+			rootIndex = i
+			break
+		}
+	}
+	if rootIndex < 0 {
+		return nil
+	}
+
+	for _, ancestor := range ancestors[rootIndex+1:] {
+		if ancestor == nil || strings.TrimSpace(ancestor.Name) == "" {
+			continue
+		}
+		publicURI = publicURI.Join(ancestor.Name)
+	}
+
+	return publicURI
+}
+
+func buildFTSSearchPathDocuments(
+	ownerURI *fs.URI,
+	publicURI *fs.URI,
+	size int64,
+	fileType string,
+	entityID int,
+	versionID int,
+	bucket string,
+) ([]searcher.SearchPathDocument, string) {
+	paths := make([]searcher.SearchPathDocument, 0, 2)
+	seen := map[string]struct{}{}
+	appendPath := func(uri *fs.URI, primary bool) {
+		if uri == nil {
+			return
+		}
+
+		raw := strings.TrimSpace(uri.String())
+		if raw == "" {
+			return
+		}
+		if _, ok := seen[raw]; ok {
+			return
+		}
+
+		seen[raw] = struct{}{}
+		paths = append(paths, searcher.SearchPathDocument{
+			Path:      raw,
+			IsPrimary: primary,
+			Bucket:    bucket,
+			Size:      size,
+			FileType:  fileType,
+			EntityID:  entityID,
+			VersionID: versionID,
+		})
+	}
+
+	appendPath(publicURI, publicURI != nil)
+	appendPath(ownerURI, publicURI == nil)
+
+	if len(paths) > 0 {
+		paths[0].IsPrimary = true
+	}
+
+	pathTextParts := make([]string, 0, len(paths))
+	for _, item := range paths {
+		if item.Path != "" {
+			pathTextParts = append(pathTextParts, item.Path)
+		}
+	}
+
+	return paths, strings.Join(pathTextParts, "\n")
 }
 
 func (m *manager) loadFTSFileModel(ctx context.Context, fileID int) (*ent.File, error) {

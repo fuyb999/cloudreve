@@ -2,6 +2,7 @@ package dbfs
 
 import (
 	"encoding/gob"
+	"fmt"
 	"path"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/samber/lo"
 )
@@ -74,6 +76,17 @@ const (
 	pathIndexRoot = 0
 	pathIndexUser = 1
 )
+
+func BuildFullTextIndexMetadataValue(hasher hashid.Encoder, fileID, entityID int) string {
+	if entityID > 0 {
+		if hasher != nil {
+			return hashid.EncodeEntityID(hasher, entityID)
+		}
+		return fmt.Sprintf("entity:%d", entityID)
+	}
+
+	return fmt.Sprintf("file:%d", fileID)
+}
 
 func (f *File) Name() string {
 	if f == nil || f.Model == nil {

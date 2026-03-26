@@ -6,6 +6,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 )
 
 func TestFileRecycleHandlesCycle(t *testing.T) {
@@ -72,5 +73,19 @@ func TestFileResolveOwnerURIRebasesProjectedPath(t *testing.T) {
 	}
 	if got, want := resolved.String(), "cloudreve://owner@my/Team/Docs/specs/design.md"; got != want {
 		t.Fatalf("unexpected resolved uri: got %q, want %q", got, want)
+	}
+}
+
+func TestBuildFullTextIndexMetadataValueHandlesEntityAndFolderDocs(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	if got := BuildFullTextIndexMetadataValue(hasher, 7, 9); got == "" {
+		t.Fatalf("expected non-empty entity marker")
+	}
+	if got, want := BuildFullTextIndexMetadataValue(nil, 7, 0), "file:7"; got != want {
+		t.Fatalf("unexpected folder marker: got %q want %q", got, want)
 	}
 }
