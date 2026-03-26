@@ -79,7 +79,7 @@ services:
     build:
       context: .
       dockerfile: docker/tika-unrar/Dockerfile
-    image: cloudreve/tika:3.2.3.0-full-unrar
+    image: cloudreve/tika:3.2.3.0-full-unrar-charset
     container_name: tika
     restart: unless-stopped
     ports:

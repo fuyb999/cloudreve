@@ -7,16 +7,25 @@
 - 文档、邮件、归档、多层压缩包、中文文件名、不同编码文本的边界行为
 - 已发现限制及建议解决方案
 
+## 0. 2026-03-26 修复更新
+
+以下结论已基于当前工作区代码和自定义 Tika 镜像重新验证，覆盖并修正本文后续历史章节中关于 ZIP/RAR 中文文件名的旧结论：
+
+- 当前 Tika 镜像已引入自定义 `CloudrevePackageParser` 与 `CloudreveRarParser`，替换默认 `PackageParser` / `RarParser`。
+- 当前 Tika 镜像已启用 `zh_CN.UTF-8` locale，并安装 `fonts-noto-cjk`，容器内 JVM `file.encoding/native.encoding/sun.jnu.encoding` 均为 `UTF-8`。
+- `ZIP UTF-8 / GBK / GB2312` 的中文目录名、中文文件名、正文内容均已通过 `/rmeta` 真实验证。
+- `RAR4 WinRAR`、`RAR4 file-roller`、`RAR5 Unicode 中文` 三类样本均已通过 `/rmeta` 真实验证。
+- 本文后续第 `9.2`、`9.3` 节中“不要继续从 Tika 侧解决 ZIP/RAR 中文文件名问题”的结论已不再适用，应以当前代码和本节验证结果为准。
+
 ## 1. 本轮结论
 
 结论先行：
 
 - `DOCX/PDF/EML/MBOX/WINMAIL.DAT` 已在真实链路验证通过，文本、图片/附件、层级关系、PG sidecar、ES 同步都能跑通。
 - 单文件文本在 `UTF-8/GBK/GB2312` 三种编码下均已验证可正确提取内容。
-- 递归压缩包中，`UTF-8 ZIP` 与 `UTF-8 7z` 的中文目录名、中文文件名、正文内容都可正确保留。
-- `GBK/GB2312 ZIP` 的正文内容可提取，但内层中文目录名、中文文件名会乱码。
-- `UTF-8 RAR` 中文递归场景在当前 Tika 容器下会直接返回 `422`，Cloudreve 侧不会生成 sidecar 附件树。
-- 本轮已确认问题不在 ES/PG 落盘逻辑，而在 Tika 对特定编码压缩包或 RAR Unicode 场景的原生解析能力。
+- 递归压缩包中，`UTF-8 ZIP`、`GBK ZIP`、`GB2312 ZIP` 的中文目录名、中文文件名、正文内容都可正确保留。
+- `RAR4 WinRAR`、`RAR4 file-roller`、`RAR5 Unicode 中文` 的中文文件名递归场景均已通过当前 Tika 自定义镜像验证。
+- 当前边界问题已不再是 ZIP/RAR 中文文件名编码，而主要回到具体格式内容抽取本身。
 
 ## 2. 测试环境
 
@@ -37,18 +46,30 @@ Apache Tika 3.2.3
 
 - `docker/tika-unrar/Dockerfile`
 - 基础镜像：`apache/tika:3.2.3.0-full`
-- 额外安装：`unrar-free`
+- 额外安装：`unrar-free`、`locales`、`fontconfig`、`fonts-noto-cjk`
 - 自定义配置：`docker/tika-unrar/tika-config.xml`
+- 容器 locale：`zh_CN.UTF-8`
 
-当前容器做了 `RarParser -> UnrarParser` 切换：
+当前容器使用自定义归档解析器：
 
 ```xml
 <parser class="org.apache.tika.parser.DefaultParser">
+  <parser-exclude class="org.apache.tika.parser.pkg.PackageParser"/>
   <parser-exclude class="org.apache.tika.parser.pkg.RarParser"/>
 </parser>
-<parser class="org.apache.tika.parser.pkg.UnrarParser">
+<parser class="org.cloudreve.tika.parser.pkg.CloudrevePackageParser">
+  <params>
+    <param name="legacyCharset" type="string">GB18030</param>
+    <param name="forceLegacyCharsetForNonUnicodeEntries" type="bool">true</param>
+  </params>
+</parser>
+<parser class="org.cloudreve.tika.parser.pkg.CloudreveRarParser">
   <mime>application/x-rar-compressed</mime>
   <mime>application/vnd.rar</mime>
+  <params>
+    <param name="legacyCharset" type="string">GB18030</param>
+    <param name="forceLegacyCharsetForNonUnicodeEntries" type="bool">false</param>
+  </params>
 </parser>
 ```
 

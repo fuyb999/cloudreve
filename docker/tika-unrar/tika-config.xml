@@ -2,11 +2,22 @@
 <properties>
   <parsers>
     <parser class="org.apache.tika.parser.DefaultParser">
+      <parser-exclude class="org.apache.tika.parser.pkg.PackageParser"/>
       <parser-exclude class="org.apache.tika.parser.pkg.RarParser"/>
     </parser>
-    <parser class="org.apache.tika.parser.pkg.UnrarParser">
+    <parser class="org.cloudreve.tika.parser.pkg.CloudrevePackageParser">
+      <params>
+        <param name="legacyCharset" type="string">GB18030</param>
+        <param name="forceLegacyCharsetForNonUnicodeEntries" type="bool">true</param>
+      </params>
+    </parser>
+    <parser class="org.cloudreve.tika.parser.pkg.CloudreveRarParser">
       <mime>application/x-rar-compressed</mime>
       <mime>application/vnd.rar</mime>
+      <params>
+        <param name="legacyCharset" type="string">GB18030</param>
+        <param name="forceLegacyCharsetForNonUnicodeEntries" type="bool">false</param>
+      </params>
     </parser>
   </parsers>
 </properties>
