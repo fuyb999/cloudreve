@@ -71,6 +71,12 @@ func InitializeDBClient(l logging.Logger,
 		"oidc_client_id",
 		"oidc_client_secret",
 		"oidc_scope",
+		"queue_content_processing_worker_num",
+		"queue_content_processing_max_execution",
+		"queue_content_processing_backoff_factor",
+		"queue_content_processing_backoff_max_duration",
+		"queue_content_processing_max_retry",
+		"queue_content_processing_retry_delay",
 	); err != nil {
 		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)
 	}

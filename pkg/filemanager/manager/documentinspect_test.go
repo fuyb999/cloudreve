@@ -198,7 +198,7 @@ func TestDocumentInspectTaskAwaitSlaveInspectionAppliesMetadata(t *testing.T) {
 	}
 }
 
-func TestExecuteSlaveDocumentInspectSkipsUnsupportedExt(t *testing.T) {
+func TestExecuteSlaveDocumentInspectSkipsWhenFileTooLarge(t *testing.T) {
 	settings := testSettingProvider{
 		enabled: true,
 		tikaCfg: &setting.FTSTikaExtractorSetting{
@@ -215,11 +215,11 @@ func TestExecuteSlaveDocumentInspectSkipsUnsupportedExt(t *testing.T) {
 
 	result, err := ExecuteSlaveDocumentInspect(ctx, dep, &SlaveDocumentInspectPayload{
 		FileName: "sample.bin",
-		FileSize: 128,
+		FileSize: 4096,
 		Entity:   &ent.Entity{ID: 902},
 	})
 	if err != nil {
-		t.Fatalf("expected unsupported ext to short-circuit without error, got %v", err)
+		t.Fatalf("expected oversized file to short-circuit without error, got %v", err)
 	}
 	if result == nil || result.EntityID != 902 || result.MimeType != "" || result.Parser != "" {
 		t.Fatalf("unexpected document inspect result: %+v", result)

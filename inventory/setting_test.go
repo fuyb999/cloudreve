@@ -50,3 +50,24 @@ func TestSettingClientSetUpsertsMissingSetting(t *testing.T) {
 		t.Fatalf("unexpected updated setting value: got %q want %q", got, wantUpdated)
 	}
 }
+
+func TestDefaultSettingsIncludeContentProcessingQueueDefaults(t *testing.T) {
+	expected := map[string]string{
+		"queue_content_processing_worker_num":           "30",
+		"queue_content_processing_max_execution":        "3600",
+		"queue_content_processing_backoff_factor":       "2",
+		"queue_content_processing_backoff_max_duration": "60",
+		"queue_content_processing_max_retry":            "1",
+		"queue_content_processing_retry_delay":          "0",
+	}
+
+	for key, want := range expected {
+		got, ok := DefaultSettings[key]
+		if !ok {
+			t.Fatalf("expected default setting %q to exist", key)
+		}
+		if got != want {
+			t.Fatalf("unexpected default setting %q: got %q want %q", key, got, want)
+		}
+	}
+}

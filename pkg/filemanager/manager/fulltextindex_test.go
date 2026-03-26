@@ -208,6 +208,26 @@ func TestShouldExtractTextSupportsWinmailDATWhenTNEFEnabled(t *testing.T) {
 	}
 }
 
+func TestShouldExtractTextAllowsTikaToDetectByContent(t *testing.T) {
+	extractor := tikaextractor.NewTikaExtractor(
+		nil,
+		nil,
+		logging.NewConsoleLogger(logging.LevelError),
+		&setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			Exts:        []string{"pdf", "docx"},
+			MaxFileSize: 1024,
+		},
+	)
+
+	if !ShouldExtractText(extractor, "payload.unknown", 128) {
+		t.Fatal("expected tika extractor to accept unknown extension and defer detection to tika")
+	}
+	if ShouldExtractText(extractor, "payload.unknown", 4096) {
+		t.Fatal("expected tika extractor size limit to still apply")
+	}
+}
+
 func TestCollectFTSRecursiveFileIDsDeduplicatesOverlappingTrees(t *testing.T) {
 	rootA := mustURI(t, "cloudreve:///ops/a")
 	rootB := mustURI(t, "cloudreve:///ops/b")
@@ -1203,9 +1223,10 @@ func TestExecuteSlaveFullTextExtractValidatesExtractorAndEligibility(t *testing.
 		settings:      tikaSettings,
 		textExtractor: tikaextractor.NewTikaExtractor(nil, tikaSettings, logging.NewConsoleLogger(logging.LevelError), tikaSettings.tikaCfg),
 	}
+	payload.FileSize = 4096
 	result, err := ExecuteSlaveFullTextExtract(context.WithValue(context.Background(), dependency.DepCtx{}, tikaDep), tikaDep, payload)
 	if err != nil {
-		t.Fatalf("expected unsupported extension to short-circuit without error, got %v", err)
+		t.Fatalf("expected oversized file to short-circuit without error, got %v", err)
 	}
 	if result == nil || result.EntityID != 902 || result.ManifestPath != "" {
 		t.Fatalf("unexpected short-circuit result: %+v", result)
