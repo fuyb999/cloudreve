@@ -82,8 +82,15 @@ services:
     image: cloudreve/tika:3.2.3.0-full-unrar-charset
     container_name: tika
     restart: unless-stopped
+    environment:
+      - TIKA_FONT_DIRS=${TIKA_FONT_DIRS:-/tika-fonts/custom}
+      - TIKA_FONT_DEBUG=${TIKA_FONT_DEBUG:-0}
     ports:
       - "9998:9998"
+    volumes:
+      - ${TIKA_CUSTOM_FONTS_HOST_PATH:-./docker/tika-unrar/fonts}:/tika-fonts/custom:ro
+      # 额外挂载更多字体目录时，可在这里追加 volume，并把容器内路径追加到 TIKA_FONT_DIRS
+      # - /absolute/path/to/company-fonts:/tika-fonts/company:ro
 
 volumes:
   minio_data:

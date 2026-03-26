@@ -22,15 +22,23 @@ RUN apt-get update \
     && update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8 LANGUAGE=zh_CN:zh \
     && fc-cache -f \
     && ln -sf /usr/bin/unrar-free /usr/local/bin/unrar \
-    && mkdir -p /tika-extras \
+    && mkdir -p /tika-extras /tika-fonts/custom \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=custom-parser-builder /build/target/tika-archive-charset-patch-1.0.0.jar /tika-extras/tika-archive-charset-patch.jar
 COPY docker/tika-unrar/tika-config.xml /tika-config.xml
+COPY docker/tika-unrar/fonts-local.conf /etc/fonts/local.conf
+COPY docker/tika-unrar/entrypoint.sh /usr/local/bin/tika-entrypoint.sh
+
+RUN chmod 755 /usr/local/bin/tika-entrypoint.sh
 
 ENV LANG=zh_CN.UTF-8
 ENV LC_ALL=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV TIKA_FONT_DIRS=/tika-fonts/custom
 ENV TIKA_CONFIG=file:///tika-config.xml
 
 USER 35002:35002
+
+ENTRYPOINT ["/usr/local/bin/tika-entrypoint.sh"]
