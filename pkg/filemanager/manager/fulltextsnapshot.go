@@ -207,11 +207,7 @@ func buildFTSSearchPathText(ownerURI *fs.URI, publicURI *fs.URI) string {
 	paths := make([]string, 0, 2)
 	seen := map[string]struct{}{}
 	appendPath := func(uri *fs.URI) {
-		if uri == nil {
-			return
-		}
-
-		raw := strings.TrimSpace(uri.String())
+		raw := strings.TrimSpace(searchableURIText(uri))
 		if raw == "" {
 			return
 		}
@@ -227,6 +223,38 @@ func buildFTSSearchPathText(ownerURI *fs.URI, publicURI *fs.URI) string {
 	appendPath(ownerURI)
 
 	return strings.Join(paths, "\n")
+}
+
+func searchableURIText(uri *fs.URI) string {
+	if uri == nil || uri.U == nil {
+		return ""
+	}
+
+	pathText := uri.Path()
+	if pathText == "." {
+		pathText = ""
+	}
+
+	scheme := strings.TrimSpace(uri.U.Scheme)
+	host := strings.TrimSpace(uri.U.Host)
+	userInfo := ""
+	if uri.U.User != nil {
+		userInfo = uri.U.User.String()
+	}
+
+	authority := host
+	if userInfo != "" {
+		authority = userInfo + "@" + authority
+	}
+
+	if authority != "" {
+		return strings.TrimSpace(fmt.Sprintf("%s://%s%s", scheme, authority, pathText))
+	}
+	if scheme != "" {
+		return strings.TrimSpace(fmt.Sprintf("%s://%s", scheme, strings.TrimPrefix(pathText, "/")))
+	}
+
+	return strings.TrimSpace(pathText)
 }
 
 func (m *manager) loadFTSFileModel(ctx context.Context, fileID int) (*ent.File, error) {
