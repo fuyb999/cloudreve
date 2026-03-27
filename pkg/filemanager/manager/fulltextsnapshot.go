@@ -28,7 +28,22 @@ import (
 
 const ftsSnapshotVersion = 1
 
+type FTSBuildOptions struct {
+	SkipTextExtraction       bool `json:"skip_text_extraction,omitempty"`
+	SkipAttachmentExtraction bool `json:"skip_attachment_extraction,omitempty"`
+}
+
 func BuildFTSFileDocument(ctx context.Context, dep dependency.Dep, user *ent.User, fileID int) (*searcher.SearchFileDocument, *fs.URI, error) {
+	return BuildFTSFileDocumentWithOptions(ctx, dep, user, fileID, FTSBuildOptions{})
+}
+
+func BuildFTSFileDocumentWithOptions(
+	ctx context.Context,
+	dep dependency.Dep,
+	user *ent.User,
+	fileID int,
+	opts FTSBuildOptions,
+) (*searcher.SearchFileDocument, *fs.URI, error) {
 	fm := NewFileManager(dep, user)
 	defer fm.Recycle()
 
@@ -37,10 +52,18 @@ func BuildFTSFileDocument(ctx context.Context, dep dependency.Dep, user *ent.Use
 		return nil, nil, fmt.Errorf("failed to construct file manager")
 	}
 
-	return internal.buildFTSFileDocument(ctx, fileID)
+	return internal.buildFTSFileDocumentWithOptions(ctx, fileID, opts)
 }
 
 func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*searcher.SearchFileDocument, *fs.URI, error) {
+	return m.buildFTSFileDocumentWithOptions(ctx, fileID, FTSBuildOptions{})
+}
+
+func (m *manager) buildFTSFileDocumentWithOptions(
+	ctx context.Context,
+	fileID int,
+	opts FTSBuildOptions,
+) (*searcher.SearchFileDocument, *fs.URI, error) {
 	fileModel, err := m.loadFTSFileModel(ctx, fileID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load file model: %w", err)
@@ -81,6 +104,7 @@ func (m *manager) buildFTSFileDocument(ctx context.Context, fileID int) (*search
 		fileModel,
 		primaryFTSEntity,
 		ownerURI,
+		opts,
 	)
 	if extractErr != nil {
 		m.l.Warning("Failed to extract FTS content for file %d name=%q: %s", fileModel.ID, fileModel.Name, extractErr)
@@ -295,6 +319,7 @@ func extractFTSContent(
 	fileModel *ent.File,
 	primaryEntity fs.Entity,
 	uri *fs.URI,
+	opts FTSBuildOptions,
 ) (string, []searcher.SearchAttachmentDocument, error) {
 	if primaryEntity == nil {
 		return "", nil, nil
@@ -333,17 +358,37 @@ func extractFTSContent(
 		}
 	}
 
+	text := ""
+	if opts.SkipTextExtraction || sidecarCfg.textEnabled {
+		text = strings.TrimSpace(sidecarContent)
+	}
+
+	var attachments []searcher.SearchAttachmentDocument
+	if opts.SkipAttachmentExtraction || sidecarCfg.assetsEnabled {
+		attachments = sidecarAttachments
+	}
+
+	shouldPersistSidecar := !opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
+		(!hasCurrentSidecar ||
+			(sidecarCfg.textEnabled && (sidecarManifest == nil || !sidecarManifest.TextReady)) ||
+			(sidecarCfg.assetsEnabled && (sidecarManifest == nil || !sidecarManifest.AssetsReady)))
+
+	needTextExtraction := !opts.SkipTextExtraction && text == "" && ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
+	needAttachmentExtraction := !opts.SkipAttachmentExtraction &&
+		len(attachments) == 0 &&
+		(!hasCurrentSidecar || sidecarManifest == nil || !sidecarManifest.AssetsReady)
+
+	if !needTextExtraction && !needAttachmentExtraction && !shouldPersistSidecar {
+		return text, attachments, nil
+	}
+
 	source, err := ownerManager.GetEntitySource(ctx, primaryEntity.ID())
 	if err != nil {
 		return "", nil, err
 	}
 	defer source.Close()
 
-	text := ""
-	if sidecarCfg.textEnabled {
-		text = sidecarContent
-	}
-	if text == "" && ShouldExtractText(extractor, fileModel.Name, fileModel.Size) {
+	if needTextExtraction {
 		var err error
 		if tika, ok := extractor.(*tikaextractor.TikaExtractor); ok {
 			text, err = tika.ExtractFile(ctx, source, fileModel.Name)
@@ -357,16 +402,9 @@ func extractFTSContent(
 		text = strings.TrimSpace(text)
 	}
 
-	var attachments []searcher.SearchAttachmentDocument
-	if sidecarCfg.assetsEnabled {
-		attachments = sidecarAttachments
-	}
-	if len(attachments) == 0 && (!hasCurrentSidecar || sidecarManifest == nil || !sidecarManifest.AssetsReady) {
+	if needAttachmentExtraction {
 		attachments = extractFTSEmbeddedAttachments(ctx, extractor, ownerManager, fileModel, primaryEntity, uri, source)
 	}
-	shouldPersistSidecar := !hasCurrentSidecar ||
-		(sidecarCfg.textEnabled && (sidecarManifest == nil || !sidecarManifest.TextReady)) ||
-		(sidecarCfg.assetsEnabled && (sidecarManifest == nil || !sidecarManifest.AssetsReady))
 	if shouldPersistSidecar {
 		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, uri, primaryEntity, source, text)
 		if internal != nil && sidecarCfg.assetsEnabled && len(attachments) > 0 {

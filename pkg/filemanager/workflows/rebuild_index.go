@@ -38,6 +38,8 @@ type (
 		LastFileID            int                   `json:"last_file_id"`
 		Failed                int                   `json:"failed"`
 		FilteredStoragePolicy []int                 `json:"filtered_storage_policy"`
+		SkipTextExtraction    bool                  `json:"skip_text_extraction,omitempty"`
+		SkipAssetExtraction   bool                  `json:"skip_attachment_extraction,omitempty"`
 	}
 )
 
@@ -55,10 +57,18 @@ func init() {
 	queue.RegisterResumableTaskFactory(queue.FullTextRebuildTaskType, NewRebuildIndexTaskFromModel)
 }
 
-func NewRebuildIndexTask(ctx context.Context, u *ent.User, filteredStoragePolicy []int) (queue.Task, error) {
+func NewRebuildIndexTask(
+	ctx context.Context,
+	u *ent.User,
+	filteredStoragePolicy []int,
+	skipTextExtraction bool,
+	skipAssetExtraction bool,
+) (queue.Task, error) {
 	state := &RebuildIndexTaskState{
 		Phase:                 RebuildIndexPhaseNuke,
 		FilteredStoragePolicy: filteredStoragePolicy,
+		SkipTextExtraction:    skipTextExtraction,
+		SkipAssetExtraction:   skipAssetExtraction,
 	}
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -218,7 +228,10 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 				wg.Done()
 			}()
 
-			doc, _, err := manager.BuildFTSFileDocument(ctx, dep, user, f.ID)
+			doc, _, err := manager.BuildFTSFileDocumentWithOptions(ctx, dep, user, f.ID, manager.FTSBuildOptions{
+				SkipTextExtraction:       m.state.SkipTextExtraction,
+				SkipAttachmentExtraction: m.state.SkipAssetExtraction,
+			})
 			if err != nil {
 				var notFound *ent.NotFoundError
 				if errors.As(err, &notFound) {
@@ -291,8 +304,10 @@ func (m *RebuildIndexTask) Summarize(hasher hashid.Encoder) *queue.Summary {
 	return &queue.Summary{
 		Phase: string(m.state.Phase),
 		Props: map[string]any{
-			SummaryKeyFailed: m.state.Failed,
-			SummaryKeyTotal:  m.state.Total,
+			SummaryKeyFailed:             m.state.Failed,
+			SummaryKeyTotal:              m.state.Total,
+			"skip_text_extraction":       m.state.SkipTextExtraction,
+			"skip_attachment_extraction": m.state.SkipAssetExtraction,
 		},
 	}
 }

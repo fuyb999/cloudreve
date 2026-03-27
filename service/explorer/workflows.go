@@ -472,7 +472,9 @@ func (service *SetDownloadFilesService) SetDownloadFiles(c *gin.Context, taskID 
 
 type (
 	RebuildFTSIndexWorkflowService struct {
-		FilteredStoragePolicy []int `json:"filtered_storage_policy"`
+		FilteredStoragePolicy    []int `json:"filtered_storage_policy"`
+		SkipTextExtraction       bool  `json:"skip_text_extraction"`
+		SkipAttachmentExtraction bool  `json:"skip_attachment_extraction"`
 	}
 	CreateRebuildFTSIndexParamCtx struct{}
 )
@@ -489,7 +491,13 @@ func (service *RebuildFTSIndexWorkflowService) CreateRebuildFTSIndexTask(c *gin.
 	}
 
 	// Create task
-	t, err := workflows.NewRebuildIndexTask(c, user, service.FilteredStoragePolicy)
+	t, err := workflows.NewRebuildIndexTask(
+		c,
+		user,
+		service.FilteredStoragePolicy,
+		service.SkipTextExtraction,
+		service.SkipAttachmentExtraction,
+	)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to create task", err)
 	}
