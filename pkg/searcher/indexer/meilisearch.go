@@ -334,10 +334,6 @@ func buildSearchableText(doc *searcher.SearchFileDocument) string {
 		doc.Content,
 	}
 
-	for _, path := range doc.Paths {
-		parts = append(parts, path.Path, path.Bucket)
-	}
-
 	if doc.LatestVersion != nil {
 		parts = append(parts, doc.LatestVersion.Source, doc.LatestVersion.Bucket, doc.LatestVersion.MimeType)
 	}

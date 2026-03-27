@@ -115,24 +115,10 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 
 	filePolicy, _ := m.storagePolicyFromID(ctx, fileModel.StoragePolicyFiles)
 	latestVersion := buildSearchVersion(primaryEntity, fileModel.Name, filePolicy)
-	versions, attachments := buildSearchEntities(fileModel, ownerURI, filePolicy)
-	latestVersionID := 0
-	latestVersionBucket := ""
-	if latestVersion != nil {
-		latestVersionID = latestVersion.EntityID
-		latestVersionBucket = latestVersion.Bucket
-	}
+	attachments := buildSearchAttachments(fileModel, ownerURI, filePolicy)
 
 	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
-	paths, pathText := buildFTSSearchPathDocuments(
-		ownerURI,
-		publicURI,
-		fileModel.Size,
-		fileTypeString(types.FileType(fileModel.Type)),
-		fileModel.PrimaryEntity,
-		latestVersionID,
-		latestVersionBucket,
-	)
+	pathText := buildFTSSearchPathText(ownerURI, publicURI)
 	attachments = append(attachments, embeddedAttachments...)
 
 	doc := &searcher.SearchFileDocument{
@@ -143,8 +129,7 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 		ParentID:        fileModel.FileChildren,
 		FileName:        fileModel.Name,
 		FileExt:         firstNonEmpty(fileModel.FileExt, util.Ext(fileModel.Name)),
-		FileType:        fileTypeString(types.FileType(fileModel.Type)),
-		FileTypeValue:   fileModel.Type,
+		FileType:        fileModel.Type,
 		Size:            fileModel.Size,
 		CreatedAt:       fileModel.CreatedAt,
 		UpdatedAt:       fileModel.UpdatedAt,
@@ -157,10 +142,7 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 		Props:           mapFromFileProps(fileModel.Props),
 		PathText:        pathText,
 		Content:         content,
-		ContentExcerpt:  excerpt(content, 320),
 		LatestVersion:   latestVersion,
-		Versions:        versions,
-		Paths:           paths,
 		Attachments:     attachments,
 		SnapshotVersion: ftsSnapshotVersion,
 		SynchronizedAt:  time.Now(),
@@ -168,13 +150,11 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 
 	if filePolicy != nil {
 		doc.StorageType = filePolicy.Type
-		doc.StorageName = filePolicy.Name
 		doc.StorageBucket = filePolicy.BucketName
 	}
 	if latestVersion != nil {
 		doc.StoragePolicyID = latestVersion.StoragePolicyID
 		doc.StorageType = latestVersion.StorageType
-		doc.StorageName = latestVersion.StorageName
 		doc.StorageBucket = latestVersion.Bucket
 	}
 
@@ -223,18 +203,10 @@ func (m *manager) resolvePublicSearchURI(ctx context.Context, fileModel *ent.Fil
 	return publicURI
 }
 
-func buildFTSSearchPathDocuments(
-	ownerURI *fs.URI,
-	publicURI *fs.URI,
-	size int64,
-	fileType string,
-	entityID int,
-	versionID int,
-	bucket string,
-) ([]searcher.SearchPathDocument, string) {
-	paths := make([]searcher.SearchPathDocument, 0, 2)
+func buildFTSSearchPathText(ownerURI *fs.URI, publicURI *fs.URI) string {
+	paths := make([]string, 0, 2)
 	seen := map[string]struct{}{}
-	appendPath := func(uri *fs.URI, primary bool) {
+	appendPath := func(uri *fs.URI) {
 		if uri == nil {
 			return
 		}
@@ -248,32 +220,13 @@ func buildFTSSearchPathDocuments(
 		}
 
 		seen[raw] = struct{}{}
-		paths = append(paths, searcher.SearchPathDocument{
-			Path:      raw,
-			IsPrimary: primary,
-			Bucket:    bucket,
-			Size:      size,
-			FileType:  fileType,
-			EntityID:  entityID,
-			VersionID: versionID,
-		})
+		paths = append(paths, raw)
 	}
 
-	appendPath(publicURI, publicURI != nil)
-	appendPath(ownerURI, publicURI == nil)
+	appendPath(publicURI)
+	appendPath(ownerURI)
 
-	if len(paths) > 0 {
-		paths[0].IsPrimary = true
-	}
-
-	pathTextParts := make([]string, 0, len(paths))
-	for _, item := range paths {
-		if item.Path != "" {
-			pathTextParts = append(pathTextParts, item.Path)
-		}
-	}
-
-	return paths, strings.Join(pathTextParts, "\n")
+	return strings.Join(paths, "\n")
 }
 
 func (m *manager) loadFTSFileModel(ctx context.Context, fileID int) (*ent.File, error) {
@@ -535,8 +488,7 @@ func extractFTSEmbeddedAttachments(
 	return buildEmbeddedSearchAttachments(fileModel, uri, primaryEntity, rmetaRaw, unpackRaw, docxRaw)
 }
 
-func buildSearchEntities(fileModel *ent.File, uri *fs.URI, fallbackPolicy *ent.StoragePolicy) ([]searcher.SearchFileVersionDocument, []searcher.SearchAttachmentDocument) {
-	versions := make([]searcher.SearchFileVersionDocument, 0)
+func buildSearchAttachments(fileModel *ent.File, uri *fs.URI, fallbackPolicy *ent.StoragePolicy) []searcher.SearchAttachmentDocument {
 	attachments := make([]searcher.SearchAttachmentDocument, 0)
 	fileName := fileModel.Name
 
@@ -552,7 +504,6 @@ func buildSearchEntities(fileModel *ent.File, uri *fs.URI, fallbackPolicy *ent.S
 		}
 
 		if types.EntityType(entity.Type) == types.EntityTypeVersion {
-			versions = append(versions, *versionDoc)
 			continue
 		}
 
@@ -572,17 +523,7 @@ func buildSearchEntities(fileModel *ent.File, uri *fs.URI, fallbackPolicy *ent.S
 		})
 	}
 
-	sort.SliceStable(versions, func(i, j int) bool {
-		if versions[i].EntityID == fileModel.PrimaryEntity {
-			return true
-		}
-		if versions[j].EntityID == fileModel.PrimaryEntity {
-			return false
-		}
-		return versions[i].EntityID > versions[j].EntityID
-	})
-
-	return versions, attachments
+	return attachments
 }
 
 type embeddedAttachmentAccumulator struct {
@@ -941,7 +882,6 @@ func buildSearchVersion(entity *ent.Entity, fileName string, policy *ent.Storage
 
 	if policy != nil {
 		doc.StorageType = policy.Type
-		doc.StorageName = policy.Name
 		doc.Bucket = policy.BucketName
 		if doc.StoragePolicyID == 0 {
 			doc.StoragePolicyID = policy.ID
@@ -1008,15 +948,6 @@ func mapFromAny(value any) map[string]any {
 	return result
 }
 
-func fileTypeString(fileType types.FileType) string {
-	switch fileType {
-	case types.FileTypeFolder:
-		return "folder"
-	default:
-		return "file"
-	}
-}
-
 func entityTypeString(entityType types.EntityType) string {
 	switch entityType {
 	case types.EntityTypeThumbnail:
@@ -1037,19 +968,6 @@ func attachmentName(fileName string, entityType types.EntityType) string {
 	default:
 		return fileName
 	}
-}
-
-func excerpt(content string, limit int) string {
-	if limit <= 0 || content == "" {
-		return ""
-	}
-
-	runes := []rune(content)
-	if len(runes) <= limit {
-		return content
-	}
-
-	return string(runes[:limit]) + "..."
 }
 
 func firstNonEmpty(values ...string) string {

@@ -8,16 +8,6 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 )
 
-type SearchPathDocument struct {
-	Path      string `json:"path"`
-	IsPrimary bool   `json:"is_primary"`
-	Bucket    string `json:"bucket,omitempty"`
-	Size      int64  `json:"size,omitempty"`
-	FileType  string `json:"file_type,omitempty"`
-	EntityID  int    `json:"entity_id,omitempty"`
-	VersionID int    `json:"version_id,omitempty"`
-}
-
 type SearchAttachmentDocument struct {
 	ID                 string            `json:"id"`
 	ParentID           int               `json:"parent_id"`
@@ -48,7 +38,6 @@ type SearchFileVersionDocument struct {
 	UpdatedAt       time.Time      `json:"updated_at,omitempty"`
 	StoragePolicyID int            `json:"storage_policy_id,omitempty"`
 	StorageType     string         `json:"storage_type,omitempty"`
-	StorageName     string         `json:"storage_name,omitempty"`
 	Bucket          string         `json:"bucket,omitempty"`
 	MimeType        string         `json:"mime_type,omitempty"`
 	ReferenceCount  int            `json:"reference_count,omitempty"`
@@ -57,37 +46,32 @@ type SearchFileVersionDocument struct {
 }
 
 type SearchFileDocument struct {
-	ID              string                      `json:"id"`
-	FileID          int                         `json:"file_id"`
-	OwnerID         int                         `json:"owner_id"`
-	EntityID        int                         `json:"entity_id,omitempty"`
-	ParentID        int                         `json:"parent_id,omitempty"`
-	FileName        string                      `json:"file_name"`
-	FileExt         string                      `json:"file_ext,omitempty"`
-	FileType        string                      `json:"file_type"`
-	FileTypeValue   int                         `json:"file_type_value"`
-	Size            int64                       `json:"size"`
-	CreatedAt       time.Time                   `json:"created_at,omitempty"`
-	UpdatedAt       time.Time                   `json:"updated_at,omitempty"`
-	IsSymbolic      bool                        `json:"is_symbolic,omitempty"`
-	Shared          bool                        `json:"shared,omitempty"`
-	TreePath        string                      `json:"tree_path,omitempty"`
-	StoragePolicyID int                         `json:"storage_policy_id,omitempty"`
-	StorageType     string                      `json:"storage_type,omitempty"`
-	StorageName     string                      `json:"storage_name,omitempty"`
-	StorageBucket   string                      `json:"storage_bucket,omitempty"`
-	Metadata        map[string]string           `json:"metadata,omitempty"`
-	MetadataText    string                      `json:"metadata_text,omitempty"`
-	Props           map[string]any              `json:"props,omitempty"`
-	PathText        string                      `json:"path_text,omitempty"`
-	Content         string                      `json:"content,omitempty"`
-	ContentExcerpt  string                      `json:"content_excerpt,omitempty"`
-	LatestVersion   *SearchFileVersionDocument  `json:"latest_version,omitempty"`
-	Versions        []SearchFileVersionDocument `json:"versions,omitempty"`
-	Paths           []SearchPathDocument        `json:"paths,omitempty"`
-	Attachments     []SearchAttachmentDocument  `json:"attachments,omitempty"`
-	SnapshotVersion int                         `json:"snapshot_version"`
-	SynchronizedAt  time.Time                   `json:"synchronized_at,omitempty"`
+	ID              string                     `json:"id"`
+	FileID          int                        `json:"file_id"`
+	OwnerID         int                        `json:"owner_id"`
+	EntityID        int                        `json:"entity_id,omitempty"`
+	ParentID        int                        `json:"parent_id,omitempty"`
+	FileName        string                     `json:"file_name"`
+	FileExt         string                     `json:"file_ext,omitempty"`
+	FileType        int                        `json:"file_type"`
+	Size            int64                      `json:"size"`
+	CreatedAt       time.Time                  `json:"created_at,omitempty"`
+	UpdatedAt       time.Time                  `json:"updated_at,omitempty"`
+	IsSymbolic      bool                       `json:"is_symbolic,omitempty"`
+	Shared          bool                       `json:"shared,omitempty"`
+	TreePath        string                     `json:"tree_path,omitempty"`
+	StoragePolicyID int                        `json:"storage_policy_id,omitempty"`
+	StorageType     string                     `json:"storage_type,omitempty"`
+	StorageBucket   string                     `json:"storage_bucket,omitempty"`
+	Metadata        map[string]string          `json:"metadata,omitempty"`
+	MetadataText    string                     `json:"metadata_text,omitempty"`
+	Props           map[string]any             `json:"props,omitempty"`
+	PathText        string                     `json:"path_text,omitempty"`
+	Content         string                     `json:"content,omitempty"`
+	LatestVersion   *SearchFileVersionDocument `json:"latest_version,omitempty"`
+	Attachments     []SearchAttachmentDocument `json:"attachments,omitempty"`
+	SnapshotVersion int                        `json:"snapshot_version"`
+	SynchronizedAt  time.Time                  `json:"synchronized_at,omitempty"`
 }
 
 type SearchResult struct {

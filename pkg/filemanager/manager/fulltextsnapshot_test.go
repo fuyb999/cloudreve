@@ -12,44 +12,20 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 )
 
-func TestBuildFTSSearchPathDocumentsPrefersPublicPath(t *testing.T) {
+func TestBuildFTSSearchPathTextPrefersPublicPath(t *testing.T) {
 	ownerURI := mustURI(t, "cloudreve://owner@my/公共文件/研发部/说明.txt")
 	publicURI := mustURI(t, "cloudreve://public/研发部/说明.txt")
 
-	paths, pathText := buildFTSSearchPathDocuments(ownerURI, publicURI, 128, "file", 0, 0, "")
-	if len(paths) != 2 {
-		t.Fatalf("unexpected path count: got %d want 2", len(paths))
-	}
-	if got, want := paths[0].Path, publicURI.String(); got != want {
-		t.Fatalf("unexpected primary path: got %q want %q", got, want)
-	}
-	if !paths[0].IsPrimary {
-		t.Fatalf("expected public path to be primary")
-	}
-	if got, want := paths[1].Path, ownerURI.String(); got != want {
-		t.Fatalf("unexpected secondary path: got %q want %q", got, want)
-	}
-	if paths[1].IsPrimary {
-		t.Fatalf("expected owner path to be secondary")
-	}
+	pathText := buildFTSSearchPathText(ownerURI, publicURI)
 	if got, want := pathText, publicURI.String()+"\n"+ownerURI.String(); got != want {
 		t.Fatalf("unexpected path text: got %q want %q", got, want)
 	}
 }
 
-func TestBuildFTSSearchPathDocumentsKeepsOwnerPathForNonPublicFile(t *testing.T) {
+func TestBuildFTSSearchPathTextKeepsOwnerPathForNonPublicFile(t *testing.T) {
 	ownerURI := mustURI(t, "cloudreve://owner@my/docs/readme.txt")
 
-	paths, pathText := buildFTSSearchPathDocuments(ownerURI, nil, 64, "file", 9, 19, "bucket")
-	if len(paths) != 1 {
-		t.Fatalf("unexpected path count: got %d want 1", len(paths))
-	}
-	if got, want := paths[0].Path, ownerURI.String(); got != want {
-		t.Fatalf("unexpected owner path: got %q want %q", got, want)
-	}
-	if !paths[0].IsPrimary {
-		t.Fatalf("expected owner path to be primary")
-	}
+	pathText := buildFTSSearchPathText(ownerURI, nil)
 	if got, want := pathText, ownerURI.String(); got != want {
 		t.Fatalf("unexpected path text: got %q want %q", got, want)
 	}

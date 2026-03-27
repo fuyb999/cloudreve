@@ -33,11 +33,10 @@ type elasticsearchSearchResponse struct {
 		} `json:"total"`
 		Hits []struct {
 			Source struct {
-				FileID         int    `json:"file_id"`
-				OwnerID        int    `json:"owner_id"`
-				EntityID       int    `json:"entity_id"`
-				FileName       string `json:"file_name"`
-				ContentExcerpt string `json:"content_excerpt"`
+				FileID   int    `json:"file_id"`
+				OwnerID  int    `json:"owner_id"`
+				EntityID int    `json:"entity_id"`
+				FileName string `json:"file_name"`
 			} `json:"_source"`
 			Highlight map[string][]string `json:"highlight"`
 		} `json:"hits"`
@@ -310,7 +309,6 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 			"owner_id",
 			"entity_id",
 			"file_name",
-			"content_excerpt",
 		},
 		"query": map[string]any{
 			"bool": map[string]any{
@@ -329,7 +327,6 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 								"latest_version.source",
 								"latest_version.bucket",
 								"latest_version.mime_type",
-								"paths.path^4",
 								"attachments.name^2",
 								"attachments.path^2",
 								"attachments.content",
@@ -383,7 +380,7 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 			OwnerID:  hit.Source.OwnerID,
 			EntityID: hit.Source.EntityID,
 			FileName: hit.Source.FileName,
-			Text:     bestHighlightSnippet(hit.Highlight, hit.Source.ContentExcerpt, hit.Source.FileName),
+			Text:     bestHighlightSnippet(hit.Highlight, hit.Source.FileName),
 		})
 	}
 
@@ -450,8 +447,7 @@ func elasticsearchIndexDefinition() map[string]any {
 				"parent_id":         map[string]any{"type": "integer"},
 				"file_name":         textWithKeywordMapping(),
 				"file_ext":          map[string]any{"type": "keyword"},
-				"file_type":         map[string]any{"type": "keyword"},
-				"file_type_value":   map[string]any{"type": "integer"},
+				"file_type":         map[string]any{"type": "integer"},
 				"size":              map[string]any{"type": "long"},
 				"created_at":        map[string]any{"type": "date"},
 				"updated_at":        map[string]any{"type": "date"},
@@ -460,14 +456,12 @@ func elasticsearchIndexDefinition() map[string]any {
 				"tree_path":         map[string]any{"type": "keyword"},
 				"storage_policy_id": map[string]any{"type": "integer"},
 				"storage_type":      map[string]any{"type": "keyword"},
-				"storage_name":      textWithKeywordMapping(),
 				"storage_bucket":    textWithKeywordMapping(),
 				"metadata":          map[string]any{"type": "flattened"},
 				"metadata_text":     map[string]any{"type": "text"},
 				"props":             map[string]any{"type": "flattened"},
 				"path_text":         map[string]any{"type": "text"},
 				"content":           map[string]any{"type": "text"},
-				"content_excerpt":   map[string]any{"type": "text"},
 				"snapshot_version":  map[string]any{"type": "integer"},
 				"synchronized_at":   map[string]any{"type": "date"},
 				"latest_version": map[string]any{
@@ -482,43 +476,11 @@ func elasticsearchIndexDefinition() map[string]any {
 						"updated_at":        map[string]any{"type": "date"},
 						"storage_policy_id": map[string]any{"type": "integer"},
 						"storage_type":      map[string]any{"type": "keyword"},
-						"storage_name":      textWithKeywordMapping(),
 						"bucket":            textWithKeywordMapping(),
 						"mime_type":         map[string]any{"type": "keyword"},
 						"reference_count":   map[string]any{"type": "integer"},
 						"encrypted":         map[string]any{"type": "boolean"},
 						"props":             map[string]any{"type": "flattened"},
-					},
-				},
-				"versions": map[string]any{
-					"properties": map[string]any{
-						"id":                map[string]any{"type": "keyword"},
-						"entity_id":         map[string]any{"type": "integer"},
-						"entity_type":       map[string]any{"type": "keyword"},
-						"entity_type_value": map[string]any{"type": "integer"},
-						"source":            textWithKeywordMapping(),
-						"size":              map[string]any{"type": "long"},
-						"created_at":        map[string]any{"type": "date"},
-						"updated_at":        map[string]any{"type": "date"},
-						"storage_policy_id": map[string]any{"type": "integer"},
-						"storage_type":      map[string]any{"type": "keyword"},
-						"storage_name":      textWithKeywordMapping(),
-						"bucket":            textWithKeywordMapping(),
-						"mime_type":         map[string]any{"type": "keyword"},
-						"reference_count":   map[string]any{"type": "integer"},
-						"encrypted":         map[string]any{"type": "boolean"},
-						"props":             map[string]any{"type": "flattened"},
-					},
-				},
-				"paths": map[string]any{
-					"properties": map[string]any{
-						"path":       textWithKeywordMapping(),
-						"is_primary": map[string]any{"type": "boolean"},
-						"bucket":     textWithKeywordMapping(),
-						"size":       map[string]any{"type": "long"},
-						"file_type":  map[string]any{"type": "keyword"},
-						"entity_id":  map[string]any{"type": "integer"},
-						"version_id": map[string]any{"type": "integer"},
 					},
 				},
 				"attachments": map[string]any{
