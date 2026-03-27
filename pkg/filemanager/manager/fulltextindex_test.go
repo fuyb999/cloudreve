@@ -1238,7 +1238,7 @@ func TestExecuteSlaveFullTextExtractAllowsAssetsOnlyConfig(t *testing.T) {
 		FileID:   901,
 		OwnerID:  902,
 		FileName: "sample.bin",
-		FileSize: 128,
+		FileSize: 4096,
 		Entity:   &ent.Entity{ID: 903},
 	}
 	settings := testSettingProvider{
@@ -1259,7 +1259,7 @@ func TestExecuteSlaveFullTextExtractAllowsAssetsOnlyConfig(t *testing.T) {
 
 	result, err := ExecuteSlaveFullTextExtract(context.WithValue(context.Background(), dependency.DepCtx{}, dep), dep, payload)
 	if err != nil {
-		t.Fatalf("expected assets-only config to be allowed, got %v", err)
+		t.Fatalf("expected oversized file with assets-only config to short-circuit without error, got %v", err)
 	}
 	if result == nil || result.EntityID != 903 || result.ManifestPath != "" {
 		t.Fatalf("unexpected assets-only short-circuit result: %+v", result)

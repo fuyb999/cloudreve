@@ -81,6 +81,48 @@ func TestFileAwareHeadersSupportsMailTypes(t *testing.T) {
 	}
 }
 
+func TestFileAwareHeadersSupportsCodeAndConfigTypes(t *testing.T) {
+	cases := map[string]string{
+		"app.js":         "application/javascript",
+		"module.mjs":     "application/javascript",
+		"script.cjs":     "application/javascript",
+		"style.css":      "text/css",
+		"style.scss":     "text/plain",
+		"style.less":     "text/plain",
+		"index.ts":       "text/plain",
+		"index.tsx":      "text/plain",
+		"view.jsx":       "text/plain",
+		"config.yaml":    "text/plain",
+		"config.yml":     "text/plain",
+		"config.toml":    "text/plain",
+		"config.ini":     "text/plain",
+		"app.conf":       "text/plain",
+		"app.properties": "text/plain",
+		"main.py":        "text/plain",
+		"main.go":        "text/plain",
+		"main.java":      "text/plain",
+		"main.kt":        "text/plain",
+		"query.sql":      "application/x-sql",
+		"main.php":       "text/plain",
+		"main.rb":        "text/plain",
+		"main.rs":        "text/plain",
+		"main.c":         "text/plain",
+		"main.h":         "text/plain",
+		"main.cpp":       "text/plain",
+		"main.hpp":       "text/plain",
+		"App.vue":        "text/plain",
+		"App.svelte":     "text/plain",
+		"notes.log":      "text/plain",
+	}
+
+	for fileName, want := range cases {
+		headers := fileAwareHeaders(nil, fileName)
+		if got := headers.Get("Content-Type"); got != want {
+			t.Fatalf("unexpected code/config content type for %s: got %q want %q", fileName, got, want)
+		}
+	}
+}
+
 func TestNormalizeTextLikeContentTypeStripsForcedUTF8Charset(t *testing.T) {
 	cases := map[string]string{
 		"text/plain; charset=utf-8":       "text/plain",

@@ -28,6 +28,45 @@ type ArtifactOptions struct {
 	ExtractInlineImages bool
 }
 
+var explicitTikaContentTypes = map[string]string{
+	".js":         "application/javascript",
+	".mjs":        "application/javascript",
+	".cjs":        "application/javascript",
+	".css":        "text/css",
+	".scss":       "text/plain",
+	".less":       "text/plain",
+	".ts":         "text/plain",
+	".tsx":        "text/plain",
+	".jsx":        "text/plain",
+	".json":       "application/json",
+	".yaml":       "text/plain",
+	".yml":        "text/plain",
+	".xml":        "application/xml",
+	".toml":       "text/plain",
+	".ini":        "text/plain",
+	".conf":       "text/plain",
+	".properties": "text/plain",
+	".sh":         "application/x-sh",
+	".bash":       "application/x-sh",
+	".zsh":        "application/x-sh",
+	".py":         "text/plain",
+	".go":         "text/plain",
+	".java":       "text/plain",
+	".kt":         "text/plain",
+	".sql":        "application/x-sql",
+	".php":        "text/plain",
+	".rb":         "text/plain",
+	".rs":         "text/plain",
+	".c":          "text/plain",
+	".h":          "text/plain",
+	".cpp":        "text/plain",
+	".hpp":        "text/plain",
+	".vue":        "text/plain",
+	".svelte":     "text/plain",
+	".txt":        "text/plain",
+	".log":        "text/plain",
+}
+
 // NewTikaExtractor creates a new TikaExtractor.
 func NewTikaExtractor(client request.Client, settings setting.Provider, l logging.Logger, cfg *setting.FTSTikaExtractorSetting) *TikaExtractor {
 	exts := cfg.Exts
@@ -214,6 +253,10 @@ func tikaContentTypeByName(fileName string) string {
 	ext := strings.ToLower(filepath.Ext(lowerName))
 	if ext == "" {
 		return ""
+	}
+
+	if contentType, ok := explicitTikaContentTypes[ext]; ok {
+		return contentType
 	}
 
 	switch ext {
