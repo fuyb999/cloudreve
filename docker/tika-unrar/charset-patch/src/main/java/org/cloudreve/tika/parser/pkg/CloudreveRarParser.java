@@ -27,6 +27,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -57,7 +58,8 @@ import org.apache.tika.sax.XHTMLContentHandler;
 public class CloudreveRarParser implements Parser {
     private static final long serialVersionUID = 6157727985054451501L;
     private static final String UNRAR_BINARY = "unrar-free";
-    private static final String UTF8_FALLBACK_LOCALE = "C.UTF-8";
+    private static final String UTF8_FALLBACK_LOCALE = "zh_CN.UTF-8";
+    private static final String UTF8_FALLBACK_LANGUAGE = "zh_CN:zh";
 
     private static final Set<MediaType> SUPPORTED_TYPES =
             Set.of(MediaType.application("x-rar-compressed"), MediaType.application("vnd.rar"));
@@ -222,19 +224,25 @@ public class CloudreveRarParser implements Parser {
     }
 
     private static void applyLocaleEnvironment(ProcessBuilder pb) {
+        applyLocaleEnvironment(pb, System.getenv());
+    }
+
+    static void applyLocaleEnvironment(ProcessBuilder pb, Map<String, String> processEnv) {
         boolean hasLocale = false;
-        hasLocale |= copyEnvIfPresent(pb, "LANG");
-        hasLocale |= copyEnvIfPresent(pb, "LC_ALL");
-        copyEnvIfPresent(pb, "LANGUAGE");
+        hasLocale |= copyEnvIfPresent(pb, processEnv, "LANG");
+        hasLocale |= copyEnvIfPresent(pb, processEnv, "LC_ALL");
+        copyEnvIfPresent(pb, processEnv, "LANGUAGE");
 
         if (!hasLocale) {
             pb.environment().put("LANG", UTF8_FALLBACK_LOCALE);
             pb.environment().put("LC_ALL", UTF8_FALLBACK_LOCALE);
+            pb.environment().put("LANGUAGE", UTF8_FALLBACK_LANGUAGE);
         }
     }
 
-    private static boolean copyEnvIfPresent(ProcessBuilder pb, String key) {
-        String value = System.getenv(key);
+    private static boolean copyEnvIfPresent(ProcessBuilder pb, Map<String, String> processEnv,
+                                            String key) {
+        String value = processEnv.get(key);
         if (value == null || value.isBlank()) {
             return false;
         }

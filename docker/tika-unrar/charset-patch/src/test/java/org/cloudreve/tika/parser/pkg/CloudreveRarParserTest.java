@@ -6,6 +6,7 @@ import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.xml.sax.ContentHandler;
@@ -34,6 +35,34 @@ class CloudreveRarParserTest {
     @Test
     void keepsReadableNonUnicodeRar4NamesAsChinese() throws Exception {
         assertEquals(List.of("文本文档.txt"), parseEntryNames(FILE_ROLLER_RAR4));
+    }
+
+    @Test
+    void appliesZhCnUtf8FallbackLocaleWhenMissing() {
+        ProcessBuilder pb = new ProcessBuilder("true");
+        pb.environment().clear();
+
+        CloudreveRarParser.applyLocaleEnvironment(pb, Map.of());
+
+        assertEquals("zh_CN.UTF-8", pb.environment().get("LANG"));
+        assertEquals("zh_CN.UTF-8", pb.environment().get("LC_ALL"));
+        assertEquals("zh_CN:zh", pb.environment().get("LANGUAGE"));
+    }
+
+    @Test
+    void copiesExistingLocaleEnvironmentWhenPresent() {
+        ProcessBuilder pb = new ProcessBuilder("true");
+        pb.environment().clear();
+
+        CloudreveRarParser.applyLocaleEnvironment(pb, Map.of(
+                "LANG", "ja_JP.UTF-8",
+                "LC_ALL", "ja_JP.UTF-8",
+                "LANGUAGE", "ja_JP:ja"
+        ));
+
+        assertEquals("ja_JP.UTF-8", pb.environment().get("LANG"));
+        assertEquals("ja_JP.UTF-8", pb.environment().get("LC_ALL"));
+        assertEquals("ja_JP:ja", pb.environment().get("LANGUAGE"));
     }
 
     private static List<String> parseEntryNames(byte[] rarBytes) throws Exception {

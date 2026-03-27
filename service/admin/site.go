@@ -5,8 +5,11 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/url"
 	"reflect"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -305,16 +308,16 @@ func (s *SetSettingService) SetSetting(c *gin.Context) (map[string]string, error
 	allPostprocessors := make(map[string]SettingPostProcessor)
 	for k, _ := range s.Settings {
 		if preprocessor, ok := preprocessors[k]; ok {
-			fnName := reflect.TypeOf(preprocessor).Name()
-			if _, ok := allPreprocessors[fnName]; !ok {
-				allPreprocessors[fnName] = preprocessor
+			key := processorKey(preprocessor)
+			if _, ok := allPreprocessors[key]; !ok {
+				allPreprocessors[key] = preprocessor
 			}
 		}
 
 		if postprocessor, ok := postprocessors[k]; ok {
-			fnName := reflect.TypeOf(postprocessor).Name()
-			if _, ok := allPostprocessors[fnName]; !ok {
-				allPostprocessors[fnName] = postprocessor
+			key := processorKey(postprocessor)
+			if _, ok := allPostprocessors[key]; !ok {
+				allPostprocessors[key] = postprocessor
 			}
 		}
 	}
@@ -377,19 +380,83 @@ func secretKeyPreProcessor(ctx context.Context, settings map[string]string) erro
 }
 
 func mimeMappingPreProcessor(ctx context.Context, settings map[string]string) error {
+	raw := strings.TrimSpace(settings["mime_mapping"])
 	var mapping map[string]string
-	if err := json.Unmarshal([]byte(settings["mime_mapping"]), &mapping); err != nil {
+	if err := json.Unmarshal([]byte(raw), &mapping); err != nil {
 		return serializer.NewError(serializer.CodeParamErr, "Invalid mime mapping", err)
 	}
 
+	normalized := make(map[string]string, len(mapping))
+	originalKeys := make(map[string]string, len(mapping))
+	for rawExt, rawContentType := range mapping {
+		ext := strings.ToLower(strings.TrimSpace(rawExt))
+		if ext == "" {
+			return serializer.NewError(serializer.CodeParamErr, "Invalid mime mapping", fmt.Errorf("empty extension key"))
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+
+		contentType := strings.TrimSpace(rawContentType)
+		if contentType == "" {
+			return serializer.NewError(serializer.CodeParamErr, "Invalid mime mapping", fmt.Errorf("empty MIME type for %s", rawExt))
+		}
+		contentType = normalizeMimeMappingContentType(contentType)
+
+		if previous, ok := originalKeys[ext]; ok && previous != rawExt {
+			return serializer.NewError(serializer.CodeParamErr, "Invalid mime mapping", fmt.Errorf("duplicate extension after normalization: %s and %s", previous, rawExt))
+		}
+
+		originalKeys[ext] = rawExt
+		normalized[ext] = contentType
+	}
+
+	keys := lo.Keys(normalized)
+	sort.Strings(keys)
+	ordered := make(map[string]string, len(keys))
+	for _, key := range keys {
+		ordered[key] = normalized[key]
+	}
+
+	encoded, err := json.Marshal(ordered)
+	if err != nil {
+		return serializer.NewError(serializer.CodeParamErr, "Invalid mime mapping", err)
+	}
+
+	settings["mime_mapping"] = string(encoded)
 	return nil
 }
 
 func mimeMappingPostProcessor(ctx context.Context, settings map[string]string) error {
 	dep := dependency.FromContext(ctx)
-	dep.MimeDetector(context.WithValue(ctx, dependency.ReloadCtx{}, true))
+	reloadCtx := context.WithValue(ctx, dependency.ReloadCtx{}, true)
+	dep.MimeDetector(reloadCtx)
+	dep.TextExtractor(reloadCtx)
 
 	return nil
+}
+
+func processorKey(fn any) string {
+	value := reflect.ValueOf(fn)
+	if !value.IsValid() || value.IsNil() {
+		return ""
+	}
+
+	return runtime.FuncForPC(value.Pointer()).Name()
+}
+
+func normalizeMimeMappingContentType(contentType string) string {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return contentType
+	}
+
+	normalized := mime.FormatMediaType(mediaType, params)
+	if normalized != "" {
+		return normalized
+	}
+
+	return mediaType
 }
 
 func mediaMetaPostProcessor(ctx context.Context, settings map[string]string) error {

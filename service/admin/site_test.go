@@ -1,6 +1,9 @@
 package admin
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestContentProcessingQueueSettingsRegistered(t *testing.T) {
 	keys := []string{
@@ -22,5 +25,63 @@ func TestContentProcessingQueueSettingsRegistered(t *testing.T) {
 		if _, ok := postprocessors[key]; !ok {
 			t.Fatalf("expected postprocessor for %s to be registered", key)
 		}
+	}
+}
+
+func TestProcessorKeyUsesFunctionIdentity(t *testing.T) {
+	first := processorKey(siteUrlPreProcessor)
+	second := processorKey(secretKeyPreProcessor)
+	third := processorKey(siteUrlPreProcessor)
+
+	if first == "" || second == "" {
+		t.Fatal("expected non-empty processor keys")
+	}
+	if first == second {
+		t.Fatalf("expected distinct processor keys, got %q", first)
+	}
+	if first != third {
+		t.Fatalf("expected stable processor key, got %q and %q", first, third)
+	}
+}
+
+func TestMimeMappingPreProcessorNormalizesMappings(t *testing.T) {
+	settings := map[string]string{
+		"mime_mapping": `{
+			"TS":" text/plain ",
+			".RAR":"application/x-rar-compressed",
+			"json":"application/json; charset=utf-8"
+		}`,
+	}
+
+	if err := mimeMappingPreProcessor(context.Background(), settings); err != nil {
+		t.Fatalf("unexpected preprocessor error: %v", err)
+	}
+
+	want := `{".json":"application/json; charset=utf-8",".rar":"application/x-rar-compressed",".ts":"text/plain"}`
+	if got := settings["mime_mapping"]; got != want {
+		t.Fatalf("unexpected normalized mime mapping: got %q want %q", got, want)
+	}
+}
+
+func TestMimeMappingPreProcessorRejectsInvalidJSON(t *testing.T) {
+	settings := map[string]string{
+		"mime_mapping": `{invalid}`,
+	}
+
+	if err := mimeMappingPreProcessor(context.Background(), settings); err == nil {
+		t.Fatal("expected error for invalid mime mapping json")
+	}
+}
+
+func TestMimeMappingPreProcessorRejectsConflictingNormalizedKeys(t *testing.T) {
+	settings := map[string]string{
+		"mime_mapping": `{
+			"TS":"text/plain",
+			".ts":"application/typescript"
+		}`,
+	}
+
+	if err := mimeMappingPreProcessor(context.Background(), settings); err == nil {
+		t.Fatal("expected error for conflicting normalized mime mapping keys")
 	}
 }
