@@ -547,17 +547,31 @@ func rootGrantForAncestors(target *ent.File, grants []RootGrant) (RootGrant, boo
 
 	targetPath := strings.TrimSpace(target.TreePath)
 	targetID := target.ID
+	var (
+		matched      RootGrant
+		matchedDepth = -1
+	)
 	for _, grant := range grants {
 		if grant.RootFileID == targetID {
 			return grant, true
 		}
 
-		if grant.RootTreePath != "" && targetPath != "" && (targetPath == grant.RootTreePath || strings.HasPrefix(targetPath, grant.RootTreePath+".")) {
-			return grant, true
+		grantPath := strings.TrimSpace(grant.RootTreePath)
+		if grantPath == "" || targetPath == "" {
+			continue
+		}
+		if targetPath != grantPath && !strings.HasPrefix(targetPath, grantPath+".") {
+			continue
+		}
+
+		depth := len(strings.Split(grantPath, "."))
+		if depth > matchedDepth {
+			matched = grant
+			matchedDepth = depth
 		}
 	}
 
-	return RootGrant{}, false
+	return matched, matchedDepth >= 0
 }
 
 type stateIndex struct {

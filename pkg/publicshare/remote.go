@@ -112,6 +112,11 @@ func (s *Service) checkActionRemote(ctx context.Context, accessToken string, tar
 		return &ActionDecision{Allowed: false, Action: action, Reason: "target_not_found"}, nil
 	}
 
+	rootID, rootErr := s.RootID(ctx)
+	if rootErr == nil && rootID > 0 && target.ID == rootID {
+		return virtualPublicRootDecision(target, action), nil
+	}
+
 	baseURL, err := s.remoteAuthzBaseURL(ctx)
 	if err != nil {
 		return nil, err
@@ -131,7 +136,14 @@ func (s *Service) checkActionRemote(ctx context.Context, accessToken string, tar
 		return nil, err
 	}
 
-	return toLocalActionDecision(payload, target, action), nil
+	decision := toLocalActionDecision(payload, target, action)
+
+	visibility, err := s.resolveVisibilityRemote(ctx, accessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	return constrainRemoteDecisionToVisibility(target, action, visibility, decision), nil
 }
 
 func (s *Service) remoteAuthzBaseURL(ctx context.Context) (string, error) {
@@ -301,6 +313,107 @@ func toLocalActionDecision(payload *remoteActionDecision, target *ent.File, acti
 		Actions:    toLocalActions(payload.Actions),
 		Reason:     payload.Reason,
 	}
+}
+
+func virtualPublicRootDecision(target *ent.File, action Action) *ActionDecision {
+	actions := make(map[Action]bool, len(ActionOrder))
+	for _, candidate := range ActionOrder {
+		actions[candidate] = false
+	}
+	actions[ActionList] = true
+
+	allowed := action == ActionList
+	reason := "virtual_public_root_readonly"
+	if allowed {
+		reason = "allowed"
+	}
+
+	return &ActionDecision{
+		Allowed:    allowed,
+		Action:     action,
+		RootFileID: target.ID,
+		Actions:    actions,
+		Reason:     reason,
+	}
+}
+
+func constrainRemoteDecisionToVisibility(target *ent.File, action Action, visibility *VisibilityResult, decision *ActionDecision) *ActionDecision {
+	if target == nil {
+		return &ActionDecision{Allowed: false, Action: action, Reason: "target_not_found"}
+	}
+
+	if decision == nil {
+		decision = &ActionDecision{Allowed: false, Action: action, Reason: "empty_remote_decision"}
+	}
+
+	if visibility == nil {
+		visibility = &VisibilityResult{}
+	}
+
+	rootGrant, found := rootGrantForAncestors(target, visibility.RootGrants)
+	if !found {
+		return &ActionDecision{
+			Allowed:    false,
+			Action:     action,
+			RootFileID: target.ID,
+			Actions:    denyAllActions(),
+			Reason:     "root_not_visible",
+		}
+	}
+
+	actions := intersectDecisionActions(rootGrant, target.ID, decision.Actions)
+	allowed := decision.Allowed && actions[action]
+	if action == ActionList {
+		allowed = true
+	}
+
+	reason := strings.TrimSpace(decision.Reason)
+	switch {
+	case allowed:
+		if reason == "" {
+			reason = "allowed"
+		}
+	case action == ActionDelete && target.ID == rootGrant.RootFileID && !RootGrantActionAllowed(target.ID, rootGrant, ActionDelete):
+		reason = "root_delete_protected"
+	default:
+		if reason == "" || reason == "allowed" {
+			reason = "action_denied"
+		}
+	}
+
+	return &ActionDecision{
+		Allowed:    allowed,
+		Action:     action,
+		RootFileID: rootGrant.RootFileID,
+		Actions:    actions,
+		Reason:     reason,
+	}
+}
+
+func intersectDecisionActions(grant RootGrant, targetFileID int, decisionActions map[Action]bool) map[Action]bool {
+	res := make(map[Action]bool, len(ActionOrder))
+	useDecisionActions := len(decisionActions) > 0
+
+	for _, action := range ActionOrder {
+		visibleAllowed := action == ActionList || RootGrantActionAllowed(targetFileID, grant, action)
+		if useDecisionActions {
+			res[action] = visibleAllowed && decisionActions[action]
+			continue
+		}
+
+		res[action] = visibleAllowed
+	}
+
+	res[ActionList] = true
+	return res
+}
+
+func denyAllActions() map[Action]bool {
+	res := make(map[Action]bool, len(ActionOrder))
+	for _, action := range ActionOrder {
+		res[action] = false
+	}
+	return res
 }
 
 func toLocalActions(actions map[string]bool) map[Action]bool {

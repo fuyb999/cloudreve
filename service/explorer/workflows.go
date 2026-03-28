@@ -106,7 +106,7 @@ func (service *DownloadWorkflowService) CreateDownloadTask(c *gin.Context) ([]*T
 	}
 
 	// Validate dst
-	_, err = m.Get(c, dst, dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityCreateFile))
+	_, err = m.Get(c, dst, dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityUploadFile))
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid destination", err)
 	}
