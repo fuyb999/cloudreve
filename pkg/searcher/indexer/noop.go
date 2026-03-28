@@ -9,6 +9,15 @@ import (
 // NoopIndexer is a no-op implementation of SearchIndexer, used when FTS is disabled.
 type NoopIndexer struct{}
 
+func IsNoopIndexer(idx searcher.SearchIndexer) bool {
+	if idx == nil {
+		return true
+	}
+
+	_, ok := idx.(*NoopIndexer)
+	return ok
+}
+
 func (n *NoopIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
 	return nil
 }

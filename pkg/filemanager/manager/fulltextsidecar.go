@@ -880,6 +880,9 @@ func saveSidecarArchiveRecursive(
 		if !ok {
 			continue
 		}
+		if shouldSkipFTSSidecarArchiveArtifact(logicalRoot, relativeName) {
+			continue
+		}
 
 		logicalID := path.Join(logicalRoot, relativeName)
 		hasChildren, childRaw := archiveBytes(entry.Data)
@@ -914,6 +917,15 @@ func saveSidecarArchiveRecursive(
 	}
 
 	return artifacts, nil
+}
+
+func shouldSkipFTSSidecarArchiveArtifact(logicalRoot string, relativeName string) bool {
+	logicalRoot = strings.TrimSpace(logicalRoot)
+	if logicalRoot == "" || !strings.HasPrefix(logicalRoot, ftsSidecarEmbeddedDir) {
+		return false
+	}
+
+	return isTikaSyntheticAttachmentArtifact(relativeName)
 }
 
 type archiveEntry struct {

@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"mime"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,11 +28,15 @@ import (
 	"github.com/samber/lo"
 )
 
-const ftsSnapshotVersion = 1
+const ftsSnapshotVersion = 2
+
+var tikaMarkupTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
 
 type FTSBuildOptions struct {
-	SkipTextExtraction       bool `json:"skip_text_extraction,omitempty"`
-	SkipAttachmentExtraction bool `json:"skip_attachment_extraction,omitempty"`
+	SkipTextExtraction        bool `json:"skip_text_extraction,omitempty"`
+	SkipAttachmentExtraction  bool `json:"skip_attachment_extraction,omitempty"`
+	ForceTextExtraction       bool `json:"-"`
+	ForceAttachmentExtraction bool `json:"-"`
 }
 
 func BuildFTSFileDocument(ctx context.Context, dep dependency.Dep, user *ent.User, fileID int) (*searcher.SearchFileDocument, *fs.URI, error) {
@@ -323,43 +329,31 @@ func extractFTSContent(
 		sidecarCfg.textEnabled = cfg.SidecarTextEnabled
 		sidecarCfg.assetsEnabled = cfg.SidecarAssetsEnabled
 		sidecarContent, sidecarAttachments, sidecarManifest, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri)
-		if hasCurrentSidecar {
-			if sidecarCfg.textEnabled && sidecarManifest != nil && sidecarManifest.TextReady {
-				if !sidecarCfg.assetsEnabled {
-					sidecarAttachments = nil
-				}
-				if !sidecarCfg.assetsEnabled || sidecarManifest.AssetsReady {
-					return sidecarContent, sidecarAttachments, nil
-				}
-			}
-
-			if !sidecarCfg.textEnabled && sidecarCfg.assetsEnabled && sidecarManifest != nil && sidecarManifest.AssetsReady {
-				return "", sidecarAttachments, nil
-			}
-		}
 	}
 
+	plan := buildFTSExtractionPlan(
+		opts,
+		extractor,
+		fileModel,
+		sidecarContent,
+		sidecarAttachments,
+		hasCurrentSidecar,
+		sidecarManifest,
+		sidecarCfg.textEnabled,
+		sidecarCfg.assetsEnabled,
+	)
+
 	text := ""
-	if opts.SkipTextExtraction || sidecarCfg.textEnabled {
+	if opts.SkipTextExtraction || plan.ReuseSidecarText {
 		text = strings.TrimSpace(sidecarContent)
 	}
 
 	var attachments []searcher.SearchAttachmentDocument
-	if opts.SkipAttachmentExtraction || sidecarCfg.assetsEnabled {
+	if opts.SkipAttachmentExtraction || plan.ReuseSidecarAttachments {
 		attachments = sidecarAttachments
 	}
 
-	shouldPersistSidecar := !opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
-		(!hasCurrentSidecar ||
-			(sidecarCfg.textEnabled && (sidecarManifest == nil || !sidecarManifest.TextReady)) ||
-			(sidecarCfg.assetsEnabled && (sidecarManifest == nil || !sidecarManifest.AssetsReady)))
-
-	needTextExtraction := !opts.SkipTextExtraction && text == "" && ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
-	needAttachmentExtraction := !opts.SkipAttachmentExtraction &&
-		len(attachments) == 0 &&
-		(!hasCurrentSidecar || sidecarManifest == nil || !sidecarManifest.AssetsReady)
-
-	if !needTextExtraction && !needAttachmentExtraction && !shouldPersistSidecar {
+	if !plan.NeedTextExtraction && !plan.NeedAttachmentExtraction && !plan.ShouldPersistSidecar {
 		return text, attachments, nil
 	}
 
@@ -369,7 +363,7 @@ func extractFTSContent(
 	}
 	defer source.Close()
 
-	if needTextExtraction {
+	if plan.NeedTextExtraction {
 		var err error
 		if tika, ok := extractor.(*tikaextractor.TikaExtractor); ok {
 			text, err = tika.ExtractFile(ctx, source, fileModel.Name)
@@ -383,10 +377,10 @@ func extractFTSContent(
 		text = strings.TrimSpace(text)
 	}
 
-	if needAttachmentExtraction {
+	if plan.NeedAttachmentExtraction {
 		attachments = extractFTSEmbeddedAttachments(ctx, extractor, ownerManager, fileModel, primaryEntity, uri, source)
 	}
-	if shouldPersistSidecar {
+	if plan.ShouldPersistSidecar {
 		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, uri, primaryEntity, source, text)
 		if internal != nil && sidecarCfg.assetsEnabled && len(attachments) > 0 {
 			if refreshedText, refreshedAttachments, _, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri); ok {
@@ -400,6 +394,49 @@ func extractFTSContent(
 		}
 	}
 	return text, attachments, nil
+}
+
+type ftsExtractionPlan struct {
+	ReuseSidecarText         bool
+	ReuseSidecarAttachments  bool
+	NeedTextExtraction       bool
+	NeedAttachmentExtraction bool
+	ShouldPersistSidecar     bool
+}
+
+func buildFTSExtractionPlan(
+	opts FTSBuildOptions,
+	extractor searcher.TextExtractor,
+	fileModel *ent.File,
+	currentText string,
+	currentAttachments []searcher.SearchAttachmentDocument,
+	hasCurrentSidecar bool,
+	sidecarManifest *FTSSidecarManifest,
+	textSidecarEnabled bool,
+	assetSidecarEnabled bool,
+) ftsExtractionPlan {
+	plan := ftsExtractionPlan{
+		ReuseSidecarText:        textSidecarEnabled && !opts.ForceTextExtraction,
+		ReuseSidecarAttachments: assetSidecarEnabled && !opts.ForceAttachmentExtraction,
+	}
+
+	textReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.TextReady
+	assetsReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.AssetsReady
+
+	plan.NeedTextExtraction = !opts.SkipTextExtraction &&
+		(!plan.ReuseSidecarText || strings.TrimSpace(currentText) == "") &&
+		ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
+
+	plan.NeedAttachmentExtraction = !opts.SkipAttachmentExtraction &&
+		assetSidecarEnabled &&
+		(opts.ForceAttachmentExtraction || (len(currentAttachments) == 0 && !assetsReady))
+
+	plan.ShouldPersistSidecar = !opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
+		(!hasCurrentSidecar ||
+			(textSidecarEnabled && (opts.ForceTextExtraction || !textReady)) ||
+			(assetSidecarEnabled && (opts.ForceAttachmentExtraction || !assetsReady)))
+
+	return plan
 }
 
 func (m *manager) loadFTSContentFromSidecar(
@@ -537,7 +574,7 @@ func buildSearchAttachments(fileModel *ent.File, uri *fs.URI, fallbackPolicy *en
 
 		attachments = append(attachments, searcher.SearchAttachmentDocument{
 			ID:        versionDoc.ID,
-			ParentID:  fileModel.ID,
+			ParentID:  attachmentRootParentID(fileModel.ID),
 			EntityID:  entity.ID,
 			Type:      versionDoc.EntityType,
 			Name:      attachmentName(fileName, types.EntityType(entity.Type)),
@@ -552,6 +589,27 @@ func buildSearchAttachments(fileModel *ent.File, uri *fs.URI, fallbackPolicy *en
 	}
 
 	return attachments
+}
+
+func attachmentRootParentID(fileID int) string {
+	if fileID <= 0 {
+		return ""
+	}
+
+	return strconv.Itoa(fileID)
+}
+
+func embeddedAttachmentDocID(fileID int, objectName string) string {
+	return fmt.Sprintf("%d:embedded:%s", fileID, objectName)
+}
+
+func embeddedAttachmentParentID(fileID int, objectParentID string) string {
+	objectParentID = strings.TrimSpace(objectParentID)
+	if objectParentID == "" {
+		return attachmentRootParentID(fileID)
+	}
+
+	return embeddedAttachmentDocID(fileID, objectParentID)
 }
 
 type embeddedAttachmentAccumulator struct {
@@ -581,8 +639,8 @@ func buildEmbeddedSearchAttachments(
 		acc, ok := items[key]
 		if !ok {
 			doc := &searcher.SearchAttachmentDocument{
-				ID:       fmt.Sprintf("%d:embedded:%s", fileModel.ID, key),
-				ParentID: fileModel.ID,
+				ID:       embeddedAttachmentDocID(fileModel.ID, key),
+				ParentID: attachmentRootParentID(fileModel.ID),
 				EntityID: primaryEntity.ID(),
 				Type:     "embedded",
 				Path:     key,
@@ -611,6 +669,9 @@ func buildEmbeddedSearchAttachments(
 				relativeName = normalized
 			} else {
 				relativeName = fmt.Sprintf("embedded_%d", index)
+			}
+			if isTikaSyntheticAttachmentArtifact(relativeName) {
+				continue
 			}
 			key := path.Join(prefix, ftsSidecarEmbeddedDir, relativeName)
 
@@ -677,6 +738,9 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 		if !ok {
 			continue
 		}
+		if isTikaSyntheticAttachmentArtifact(relativeName) {
+			continue
+		}
 
 		key := path.Join(ftsSidecarEmbeddedDir, relativeName)
 		if _, exists := rmetaByName[key]; !exists {
@@ -691,6 +755,9 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 			continue
 		}
 		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" {
+			continue
+		}
+		if strings.HasPrefix(objectName, ftsSidecarEmbeddedDir+"/") && isTikaSyntheticAttachmentArtifact(objectName) {
 			continue
 		}
 
@@ -709,19 +776,18 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 		}
 
 		doc := searcher.SearchAttachmentDocument{
-			ID:                 fmt.Sprintf("%d:embedded:%s", fileModel.ID, objectName),
-			ParentID:           fileModel.ID,
-			ParentAttachmentID: object.ParentID,
-			Depth:              object.Depth,
-			EntityID:           primaryEntity.ID(),
-			Type:               docType,
-			Name:               path.Base(objectName),
-			Path:               object.Path,
-			Size:               object.Size,
-			MimeType:           object.MimeType,
-			Source:             object.Path,
-			CreatedAt:          primaryEntity.CreatedAt(),
-			UpdatedAt:          primaryEntity.UpdatedAt(),
+			ID:        embeddedAttachmentDocID(fileModel.ID, objectName),
+			ParentID:  embeddedAttachmentParentID(fileModel.ID, object.ParentID),
+			Depth:     object.Depth,
+			EntityID:  primaryEntity.ID(),
+			Type:      docType,
+			Name:      path.Base(objectName),
+			Path:      object.Path,
+			Size:      object.Size,
+			MimeType:  object.MimeType,
+			Source:    object.Path,
+			CreatedAt: primaryEntity.CreatedAt(),
+			UpdatedAt: primaryEntity.UpdatedAt(),
 		}
 
 		if doc.MimeType == "" {
@@ -806,6 +872,7 @@ func parseTikaRMetaAttachments(raw []byte) []tikaRMetaAttachment {
 			int64Value(item["Content-Length"]),
 			int64Value(item["content_length"]),
 		)
+		content = sanitizeTikaAttachmentContent(content, mimeType)
 
 		metadata := map[string]string{}
 		for key, value := range item {
@@ -831,6 +898,43 @@ func parseTikaRMetaAttachments(raw []byte) []tikaRMetaAttachment {
 	return res
 }
 
+func sanitizeTikaAttachmentContent(content string, mimeType string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+
+	if !looksLikeTikaMarkupContent(content) {
+		return content
+	}
+
+	plain := html.UnescapeString(tikaMarkupTagPattern.ReplaceAllString(content, " "))
+	plain = strings.Join(strings.Fields(plain), " ")
+
+	if plain == "" {
+		return ""
+	}
+
+	return plain
+}
+
+func looksLikeTikaMarkupContent(content string) bool {
+	content = strings.TrimSpace(strings.ToLower(content))
+	return strings.HasPrefix(content, "<html") ||
+		strings.HasPrefix(content, "<?xml") ||
+		strings.HasPrefix(content, "<body") ||
+		strings.HasPrefix(content, "<div") ||
+		strings.HasPrefix(content, "<p") ||
+		strings.HasPrefix(content, "<span") ||
+		strings.HasPrefix(content, "<meta") ||
+		strings.HasPrefix(content, "<head")
+}
+
+func isTikaSyntheticAttachmentArtifact(name string) bool {
+	base := strings.TrimSpace(path.Base(name))
+	return strings.EqualFold(base, "__TEXT__") || strings.EqualFold(base, "__METADATA__")
+}
+
 func addArchiveEntriesToAttachments(
 	raw []byte,
 	prefix string,
@@ -850,6 +954,9 @@ func addArchiveEntriesToAttachments(
 	for _, entry := range entries {
 		relativeName, ok := normalizeFTSSidecarRelativePath(entry.Name)
 		if !ok {
+			continue
+		}
+		if storageDir == ftsSidecarEmbeddedDir && isTikaSyntheticAttachmentArtifact(relativeName) {
 			continue
 		}
 		entryName := entry.Name

@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"entgo.io/ent/dialect"
+	sqlbuilder "entgo.io/ent/dialect/sql"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"golang.org/x/tools/container/intsets"
 )
 
@@ -79,5 +82,40 @@ func TestTreePathVisibleSubtreeConditionIgnoresOverflowDepth(t *testing.T) {
 	condition := treePathVisibleSubtreeCondition("f.tree_path", "text2ltree($1)", false, intsets.MaxInt)
 	if strings.Contains(condition, "nlevel(f.tree_path) <= ?") {
 		t.Fatalf("overflow depth should not append nlevel condition: %q", condition)
+	}
+}
+
+func TestIndexableTreePathCondition(t *testing.T) {
+	condition := indexableTreePathCondition("f.tree_path")
+	for _, expected := range []string{
+		"FROM files AS active_root",
+		"active_root.name = ?",
+		"active_root.tree_path IS NOT NULL",
+		"active_root.tree_path @> f.tree_path",
+	} {
+		if !strings.Contains(condition, expected) {
+			t.Fatalf("condition %q does not contain %q", condition, expected)
+		}
+	}
+}
+
+func TestIndexableTreePathPredicateQuery(t *testing.T) {
+	builder := sqlbuilder.Dialect(dialect.Postgres)
+	table := builder.Table(file.Table)
+	selector := builder.Select(table.C(file.FieldID)).From(table)
+	indexableTreePathPredicate()(selector)
+
+	query, args := selector.Query()
+	for _, expected := range []string{
+		`WHERE EXISTS (SELECT 1 FROM files AS active_root`,
+		`active_root.name = $1`,
+		`active_root.tree_path @> "files"."tree_path"`,
+	} {
+		if !strings.Contains(query, expected) {
+			t.Fatalf("query %q does not contain %q", query, expected)
+		}
+	}
+	if !reflect.DeepEqual(args, []any{RootFolderName}) {
+		t.Fatalf("unexpected args: %#v", args)
 	}
 }

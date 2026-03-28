@@ -27,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
+	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/thumb"
 )
@@ -901,6 +902,24 @@ func TestFullTextIndexTaskDoSkipsWhenFTSDisabled(t *testing.T) {
 	}
 }
 
+func TestPerformIndexingFailsWhenSearchIndexerIsNoop(t *testing.T) {
+	dep := testDep{
+		searchIndexer: &searchindexer.NoopIndexer{},
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	status, err := performIndexing(ctx, &manager{
+		l:   logging.NewConsoleLogger(logging.LevelError),
+		dep: dep,
+	}, 801)
+	if err == nil {
+		t.Fatal("expected performIndexing to fail when search indexer is noop")
+	}
+	if status != task.StatusError {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusError)
+	}
+}
+
 func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
 	settings := testSettingProvider{
 		enabled: true,
@@ -1114,40 +1133,6 @@ func TestFullTextIndexTaskAwaitSlaveExtractionHandlesRunningAndError(t *testing.
 		t.Fatalf("unexpected running node getTask call: id=%d clear=%v", runningNode.getTaskID, runningNode.clearCalled)
 	}
 
-	failedNode := &testClusterNode{
-		id:        52,
-		isMaster:  false,
-		slaveTask: &cluster.SlaveTaskSummary{Status: task.StatusError, Error: "boom"},
-	}
-	failedTask := &FullTextIndexTask{
-		DBTask: &queue.DBTask{
-			Task: &ent.Task{
-				Type:        queue.FullTextIndexTaskType,
-				PublicState: &inventorytypes.TaskPublicState{},
-			},
-		},
-	}
-	failedState := &FullTextIndexTaskState{
-		Phase:   fullTextIndexPhaseAwaitSlave,
-		NodeID:  52,
-		SlaveID: 1002,
-		Active:  &FullTextIndexTaskItem{FileID: 802},
-	}
-	failedManager := &manager{
-		settings: testSettingProvider{enabled: true},
-		dep: testDep{
-			settings: testSettingProvider{enabled: true},
-			nodePool: &testNodePool{node: failedNode},
-		},
-	}
-
-	status, err = failedTask.awaitSlaveExtraction(context.Background(), failedManager, failedState)
-	if err == nil {
-		t.Fatalf("expected slave failure to be returned")
-	}
-	if status != task.StatusError {
-		t.Fatalf("unexpected failed await status: got %s want %s", status, task.StatusError)
-	}
 }
 
 func TestFullTextIndexTaskSummarizeReportsPhaseNodeAndCurrentFile(t *testing.T) {
@@ -1183,6 +1168,67 @@ func TestFullTextIndexTaskSummarizeReportsPhaseNodeAndCurrentFile(t *testing.T) 
 	}
 	if summary.Props["src"] != uri {
 		t.Fatalf("unexpected summary src: %+v", summary.Props["src"])
+	}
+}
+
+func TestFullTextIndexTaskAwaitSlaveExtractionFallsBackToLocalIndexing(t *testing.T) {
+	originalPerformIndexing := fullTextPerformIndexing
+	defer func() {
+		fullTextPerformIndexing = originalPerformIndexing
+	}()
+
+	called := 0
+	fullTextPerformIndexing = func(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
+		called++
+		if fileID != 802 {
+			t.Fatalf("unexpected fallback file id: %d", fileID)
+		}
+		return task.StatusCompleted, nil
+	}
+
+	failedNode := &testClusterNode{
+		id:        52,
+		isMaster:  false,
+		slaveTask: &cluster.SlaveTaskSummary{Status: task.StatusError, Error: "boom"},
+	}
+	failedTask := &FullTextIndexTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:        queue.FullTextIndexTaskType,
+				PublicState: &inventorytypes.TaskPublicState{},
+			},
+		},
+	}
+	failedState := &FullTextIndexTaskState{
+		Phase:   fullTextIndexPhaseAwaitSlave,
+		NodeID:  52,
+		SlaveID: 1002,
+		Active:  &FullTextIndexTaskItem{FileID: 802},
+	}
+	failedManager := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings: testSettingProvider{enabled: true},
+			nodePool: &testNodePool{node: failedNode},
+		},
+	}
+
+	status, err := failedTask.awaitSlaveExtraction(context.Background(), failedManager, failedState)
+	if err != nil {
+		t.Fatalf("unexpected fallback await error: %v", err)
+	}
+	if status != task.StatusProcessing {
+		t.Fatalf("unexpected fallback await status: got %s want %s", status, task.StatusProcessing)
+	}
+	if called != 1 {
+		t.Fatalf("expected fallback indexing to be called once, got %d", called)
+	}
+	if failedState.Active != nil {
+		t.Fatalf("expected active item to be cleared after fallback, got %+v", failedState.Active)
+	}
+	if failedState.Phase != fullTextIndexPhasePending || failedState.NodeID != 0 || failedState.SlaveID != 0 {
+		t.Fatalf("expected await state to be reset after fallback, got %+v", failedState)
 	}
 }
 

@@ -322,7 +322,7 @@ __METADATA__
   - `外层说明.txt`
   - `内层.zip`
   - `中文内容.txt`
-  - `parent_attachment_id="attachments/中文目录/内层.zip"`
+  - `parent_id="12:embedded:attachments/中文目录/内层.zip"`
   - 层级完全正确
 - `gbk-中文.zip` / `gb2312-中文.zip`
   - 正文内容仍然能进入 `content`
@@ -377,7 +377,7 @@ __METADATA__
 当前 ES 附件字段与 PG sidecar 的层级能保持一致，依赖字段包括：
 
 - `attachments[].id`
-- `attachments[].parent_attachment_id`
+- `attachments[].parent_id`
 - `attachments[].depth`
 - `attachments[].path`
 
@@ -501,7 +501,7 @@ __METADATA__
 - 文本与附件二进制不直接入数据库。
 - 二进制内容按用户存储策略写入 sidecar 路径。
 - PG 保存 manifest 与实体关联。
-- ES 主文档写入 `content`，附件写入 `attachments`，并通过 `parent_attachment_id` / `depth` 保留层级关系。
+- ES 主文档写入 `content`，附件写入 `attachments`，并通过 `parent_id` / `depth` 保留层级关系。
 
 ## 11. 复现命令
 

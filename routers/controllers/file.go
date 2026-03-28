@@ -194,6 +194,15 @@ func DownloadFullTextSidecar(c *gin.Context) {
 	}
 }
 
+func DownloadSignedFullTextSidecar(c *gin.Context) {
+	service := ParametersFromContext[*explorer.FullTextSidecarObjectContentService](c, explorer.FullTextSidecarObjectContentParameterCtx{})
+	if err := service.Serve(c); err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+}
+
 // ServeEntity download entity content
 func ServeEntity(c *gin.Context) {
 	service := ParametersFromContext[*explorer.EntityDownloadService](c, explorer.EntityDownloadParameterCtx{})

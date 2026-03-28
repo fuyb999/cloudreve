@@ -442,36 +442,71 @@ func (s *FileURLService) Get(c *gin.Context) (*FileURLResponse, error) {
 	dep := dependency.FromContext(c)
 	settings := dep.SettingProvider()
 	user := inventory.UserFromContext(c)
-	m := manager.NewFileManager(dep, user)
-	defer m.Recycle()
 
-	uris, err := fs.NewUriFromStrings(s.Uris...)
-	if err != nil {
-		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
-	}
-
-	// Request entity URL
-	expire := time.Now().Add(settings.EntityUrlValidDuration(c))
-	urlReq := lo.Map(uris, func(uri *fs.URI, _ int) manager.GetEntityUrlArgs {
-		return manager.GetEntityUrlArgs{
-			URI:               uri,
-			PreferredEntityID: s.Entity,
-		}
-	})
-
-	var ctx context.Context = c
-	if s.UsePrimarySiteURL {
-		ctx = setting.UseFirstSiteUrl(ctx)
-	}
-
-	res, earliestExpire, err := m.GetEntityUrls(ctx, urlReq,
-		fs.WithDownloadSpeed(int64(user.Edges.Group.SpeedLimit)),
-		fs.WithIsDownload(s.Download),
-		fs.WithNoCache(s.NoCache),
-		fs.WithUrlExpire(&expire),
+	res := make([]manager.EntityUrl, len(s.Uris))
+	var (
+		normalRaw      []string
+		normalIndexes  []int
+		earliestExpire *time.Time
 	)
-	if err != nil && !s.SkipError {
-		return nil, fmt.Errorf("failed to get entity url: %w", err)
+
+	for i, raw := range s.Uris {
+		entityURL, expireAt, isSidecarURI, err := resolveFullTextSidecarObjectURL(c, raw, s.Download, s.UsePrimarySiteURL)
+		if isSidecarURI {
+			if err != nil {
+				if !s.SkipError {
+					return nil, err
+				}
+				continue
+			}
+
+			if entityURL != nil {
+				res[i] = *entityURL
+			}
+			earliestExpire = earlierExpire(earliestExpire, expireAt)
+			continue
+		}
+
+		normalRaw = append(normalRaw, raw)
+		normalIndexes = append(normalIndexes, i)
+	}
+
+	if len(normalRaw) > 0 {
+		m := manager.NewFileManager(dep, user)
+		defer m.Recycle()
+
+		uris, err := fs.NewUriFromStrings(normalRaw...)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+		}
+
+		expire := time.Now().Add(settings.EntityUrlValidDuration(c))
+		urlReq := lo.Map(uris, func(uri *fs.URI, _ int) manager.GetEntityUrlArgs {
+			return manager.GetEntityUrlArgs{
+				URI:               uri,
+				PreferredEntityID: s.Entity,
+			}
+		})
+
+		var ctx context.Context = c
+		if s.UsePrimarySiteURL {
+			ctx = setting.UseFirstSiteUrl(ctx)
+		}
+
+		normalRes, normalExpire, err := m.GetEntityUrls(ctx, urlReq,
+			fs.WithDownloadSpeed(int64(user.Edges.Group.SpeedLimit)),
+			fs.WithIsDownload(s.Download),
+			fs.WithNoCache(s.NoCache),
+			fs.WithUrlExpire(&expire),
+		)
+		if err != nil && !s.SkipError {
+			return nil, fmt.Errorf("failed to get entity url: %w", err)
+		}
+
+		for i, idx := range normalIndexes {
+			res[idx] = normalRes[i]
+		}
+		earliestExpire = earlierExpire(earliestExpire, normalExpire)
 	}
 
 	//if !s.NoCache && earliestExpire != nil {
@@ -482,7 +517,10 @@ func (s *FileURLService) Get(c *gin.Context) (*FileURLResponse, error) {
 	//	}
 	//}
 
-	if s.Redirect && len(uris) == 1 {
+	if s.Redirect && len(s.Uris) == 1 {
+		if res[0].Url == "" {
+			return nil, serializer.NewError(serializer.CodeNotFound, "entity url not found", nil)
+		}
 		c.Redirect(http.StatusFound, res[0].Url)
 		return nil, nil
 	}
@@ -491,6 +529,17 @@ func (s *FileURLService) Get(c *gin.Context) (*FileURLResponse, error) {
 		Urls:    res,
 		Expires: earliestExpire,
 	}, nil
+}
+
+func earlierExpire(current, candidate *time.Time) *time.Time {
+	if candidate == nil {
+		return current
+	}
+	if current == nil || candidate.Before(*current) {
+		return candidate
+	}
+
+	return current
 }
 
 type (
@@ -624,10 +673,11 @@ type (
 func (s *GetFileInfoService) Get(c *gin.Context) (*FileResponse, error) {
 	dep := dependency.FromContext(c)
 	user := inventory.UserFromContext(c)
-	m := manager.NewFileManager(dep, user)
-	defer m.Recycle()
 
 	if s.ID != "" && s.Uri == "" {
+		m := manager.NewFileManager(dep, user)
+		defer m.Recycle()
+
 		fileId, err := dep.HashIDEncoder().Decode(s.ID, hashid.FileID)
 		if err != nil {
 			return nil, serializer.NewError(serializer.CodeParamErr, "unknown file id", err)
@@ -645,10 +695,21 @@ func (s *GetFileInfoService) Get(c *gin.Context) (*FileResponse, error) {
 		return nil, serializer.NewError(serializer.CodeParamErr, "uri is required", nil)
 	}
 
+	if _, manifest, artifact, isSidecarURI, err := getFullTextSidecarObject(c, s.Uri); err != nil || isSidecarURI {
+		if err != nil {
+			return nil, err
+		}
+
+		return buildFullTextSidecarFileResponse(s.Uri, manifest, artifact), nil
+	}
+
 	uri, err := fs.NewUriFromString(s.Uri)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
 	}
+
+	m := manager.NewFileManager(dep, user)
+	defer m.Recycle()
 
 	opts := []fs.Option{dbfs.WithFilePublicMetadata(), dbfs.WithNotRoot()}
 	if s.ExtendedInfo {

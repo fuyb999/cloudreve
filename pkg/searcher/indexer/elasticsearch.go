@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
@@ -18,6 +19,12 @@ import (
 )
 
 const elasticsearchDefaultIndexName = "cloudreve_files"
+
+const (
+	elasticsearchMaxContentBytes           = 8 << 20
+	elasticsearchMaxAttachmentContentBytes = 512 << 10
+	elasticsearchMaxDocumentPayloadBytes   = 16 << 20
+)
 
 type ElasticsearchIndexer struct {
 	client   *elasticsearch.Client
@@ -152,7 +159,9 @@ func (e *ElasticsearchIndexer) UpsertFile(ctx context.Context, doc *searcher.Sea
 		return nil
 	}
 
-	body, err := json.Marshal(doc)
+	sanitized := sanitizeElasticsearchDocument(doc)
+
+	body, err := json.Marshal(sanitized)
 	if err != nil {
 		return fmt.Errorf("failed to marshal search document: %w", err)
 	}
@@ -161,7 +170,7 @@ func (e *ElasticsearchIndexer) UpsertFile(ctx context.Context, doc *searcher.Sea
 		e.index,
 		bytes.NewReader(body),
 		e.client.Index.WithContext(ctx),
-		e.client.Index.WithDocumentID(doc.ID),
+		e.client.Index.WithDocumentID(sanitized.ID),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to upsert file document: %w", err)
@@ -187,16 +196,18 @@ func (e *ElasticsearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*sear
 			continue
 		}
 
+		sanitized := sanitizeElasticsearchDocument(doc)
+
 		if err := encoder.Encode(map[string]any{
 			"index": map[string]any{
 				"_index": e.index,
-				"_id":    doc.ID,
+				"_id":    sanitized.ID,
 			},
 		}); err != nil {
 			return fmt.Errorf("failed to encode bulk action: %w", err)
 		}
 
-		if err := encoder.Encode(doc); err != nil {
+		if err := encoder.Encode(sanitized); err != nil {
 			return fmt.Errorf("failed to encode bulk document: %w", err)
 		}
 	}
@@ -408,6 +419,65 @@ func (e *ElasticsearchIndexer) Close() error {
 	return nil
 }
 
+func sanitizeElasticsearchDocument(doc *searcher.SearchFileDocument) *searcher.SearchFileDocument {
+	if doc == nil {
+		return nil
+	}
+
+	sanitized := *doc
+	sanitized.Content = truncateUTF8ByBytes(strings.TrimSpace(doc.Content), elasticsearchMaxContentBytes)
+	if len(doc.Attachments) > 0 {
+		sanitized.Attachments = make([]searcher.SearchAttachmentDocument, len(doc.Attachments))
+		copy(sanitized.Attachments, doc.Attachments)
+		for i := range sanitized.Attachments {
+			sanitized.Attachments[i].Content = truncateUTF8ByBytes(
+				strings.TrimSpace(sanitized.Attachments[i].Content),
+				elasticsearchMaxAttachmentContentBytes,
+			)
+		}
+	}
+
+	if elasticsearchDocumentSizeWithinLimit(&sanitized, elasticsearchMaxDocumentPayloadBytes) {
+		return &sanitized
+	}
+
+	for i := range sanitized.Attachments {
+		sanitized.Attachments[i].Content = ""
+	}
+	if elasticsearchDocumentSizeWithinLimit(&sanitized, elasticsearchMaxDocumentPayloadBytes) {
+		return &sanitized
+	}
+
+	sanitized.Content = ""
+	return &sanitized
+}
+
+func elasticsearchDocumentSizeWithinLimit(doc *searcher.SearchFileDocument, maxBytes int) bool {
+	if doc == nil || maxBytes <= 0 {
+		return true
+	}
+
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return false
+	}
+
+	return len(raw) <= maxBytes
+}
+
+func truncateUTF8ByBytes(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+
+	value = value[:maxBytes]
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+
+	return value
+}
+
 func bestHighlightSnippet(highlight map[string][]string, fallback ...string) string {
 	order := []string{
 		"content",
@@ -485,22 +555,21 @@ func elasticsearchIndexDefinition() map[string]any {
 				},
 				"attachments": map[string]any{
 					"properties": map[string]any{
-						"id":                   map[string]any{"type": "keyword"},
-						"parent_id":            map[string]any{"type": "integer"},
-						"parent_attachment_id": map[string]any{"type": "keyword"},
-						"depth":                map[string]any{"type": "integer"},
-						"entity_id":            map[string]any{"type": "integer"},
-						"type":                 map[string]any{"type": "keyword"},
-						"name":                 textWithKeywordMapping(),
-						"path":                 textWithKeywordMapping(),
-						"bucket":               textWithKeywordMapping(),
-						"size":                 map[string]any{"type": "long"},
-						"mime_type":            map[string]any{"type": "keyword"},
-						"source":               textWithKeywordMapping(),
-						"metadata":             map[string]any{"type": "flattened"},
-						"content":              map[string]any{"type": "text"},
-						"created_at":           map[string]any{"type": "date"},
-						"updated_at":           map[string]any{"type": "date"},
+						"id":         map[string]any{"type": "keyword"},
+						"parent_id":  map[string]any{"type": "keyword"},
+						"depth":      map[string]any{"type": "integer"},
+						"entity_id":  map[string]any{"type": "integer"},
+						"type":       map[string]any{"type": "keyword"},
+						"name":       textWithKeywordMapping(),
+						"path":       textWithKeywordMapping(),
+						"bucket":     textWithKeywordMapping(),
+						"size":       map[string]any{"type": "long"},
+						"mime_type":  map[string]any{"type": "keyword"},
+						"source":     textWithKeywordMapping(),
+						"metadata":   map[string]any{"type": "flattened"},
+						"content":    map[string]any{"type": "text"},
+						"created_at": map[string]any{"type": "date"},
+						"updated_at": map[string]any{"type": "date"},
 					},
 				},
 			},

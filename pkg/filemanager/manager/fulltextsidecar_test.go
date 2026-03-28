@@ -222,6 +222,36 @@ func TestSaveSidecarArchiveRecursiveSupportsTar(t *testing.T) {
 	}
 }
 
+func TestSaveSidecarArchiveRecursiveSkipsSyntheticTikaArtifacts(t *testing.T) {
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+
+	raw := buildZipForTest(t, map[string][]byte{
+		"__TEXT__":     []byte("redundant"),
+		"__METADATA__": []byte(`{"k":"v"}`),
+		"plain.txt":    []byte("plain"),
+	})
+
+	artifacts, err := saveSidecarArchive(context.Background(), handler, "cloudreve/fts-sidecar/1/2/3", ftsSidecarEmbeddedDir, raw)
+	if err != nil {
+		t.Fatalf("saveSidecarArchive returned error: %v", err)
+	}
+
+	if len(artifacts) != 1 {
+		t.Fatalf("unexpected artifact count: got %d want 1", len(artifacts))
+	}
+	if got, want := artifacts[0].ID, "attachments/plain.txt"; got != want {
+		t.Fatalf("unexpected artifact id: got %q want %q", got, want)
+	}
+
+	if _, err := os.Stat(handler.LocalPath(context.Background(), "cloudreve/fts-sidecar/1/2/3/attachments/__TEXT__")); !os.IsNotExist(err) {
+		t.Fatalf("expected synthetic __TEXT__ artifact to be skipped, stat err=%v", err)
+	}
+	if _, err := os.Stat(handler.LocalPath(context.Background(), "cloudreve/fts-sidecar/1/2/3/attachments/__METADATA__")); !os.IsNotExist(err) {
+		t.Fatalf("expected synthetic __METADATA__ artifact to be skipped, stat err=%v", err)
+	}
+}
+
 func TestBuildEmbeddedSearchAttachmentsFromManifestKeepsHierarchy(t *testing.T) {
 	fileModel := &ent.File{ID: 42}
 	entity := &testEntity{id: 7}
@@ -264,8 +294,8 @@ func TestBuildEmbeddedSearchAttachmentsFromManifestKeepsHierarchy(t *testing.T) 
 	if nested.ID == "" {
 		t.Fatal("missing nested attachment")
 	}
-	if nested.ParentAttachmentID != "attachments/archive.zip" {
-		t.Fatalf("unexpected parent attachment id: %q", nested.ParentAttachmentID)
+	if got, want := nested.ParentID, embeddedAttachmentDocID(42, "attachments/archive.zip"); got != want {
+		t.Fatalf("unexpected parent id: got %q want %q", got, want)
 	}
 	if nested.Depth != 1 {
 		t.Fatalf("unexpected nested depth: %d", nested.Depth)

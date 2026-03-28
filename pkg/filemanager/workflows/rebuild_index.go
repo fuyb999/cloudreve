@@ -9,17 +9,20 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
+	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
 )
 
 type (
@@ -141,6 +144,9 @@ func (m *RebuildIndexTask) Do(ctx context.Context) (task.Status, error) {
 // then counts total indexable files for progress tracking.
 func (m *RebuildIndexTask) nuke(ctx context.Context, dep dependency.Dep) (task.Status, error) {
 	indexer := dep.SearchIndexer(ctx)
+	if searchindexer.IsNoopIndexer(indexer) {
+		return task.StatusError, fmt.Errorf("search indexer is unavailable")
+	}
 
 	m.l.Info("Deleting all existing index documents...")
 	if err := indexer.DeleteAll(ctx); err != nil {
@@ -199,6 +205,27 @@ func (m *RebuildIndexTask) index(ctx context.Context, dep dependency.Dep) (task.
 	return task.StatusSuspending, nil
 }
 
+func shouldIndexRebuildURI(uri *fs.URI) bool {
+	if uri == nil {
+		return true
+	}
+
+	return uri.FileSystem() != constants.FileSystemTrash
+}
+
+func matchesRebuildStoragePolicy(doc *searcher.SearchFileDocument, filteredStoragePolicy []int) bool {
+	if doc == nil || len(filteredStoragePolicy) == 0 {
+		return true
+	}
+
+	policyID := doc.StoragePolicyID
+	if doc.LatestVersion != nil && doc.LatestVersion.StoragePolicyID > 0 {
+		policyID = doc.LatestVersion.StoragePolicyID
+	}
+
+	return slices.Contains(filteredStoragePolicy, policyID)
+}
+
 // processBatch indexes a batch of files concurrently.
 func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep, files []*ent.File) int {
 	user := inventory.UserFromContext(ctx)
@@ -228,9 +255,11 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 				wg.Done()
 			}()
 
-			doc, _, err := manager.BuildFTSFileDocumentWithOptions(ctx, dep, user, f.ID, manager.FTSBuildOptions{
-				SkipTextExtraction:       m.state.SkipTextExtraction,
-				SkipAttachmentExtraction: m.state.SkipAssetExtraction,
+			doc, uri, err := manager.BuildFTSFileDocumentWithOptions(ctx, dep, user, f.ID, manager.FTSBuildOptions{
+				SkipTextExtraction:        m.state.SkipTextExtraction,
+				SkipAttachmentExtraction:  m.state.SkipAssetExtraction,
+				ForceTextExtraction:       !m.state.SkipTextExtraction,
+				ForceAttachmentExtraction: !m.state.SkipAssetExtraction,
 			})
 			if err != nil {
 				var notFound *ent.NotFoundError
@@ -245,14 +274,13 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 				return
 			}
 
-			if len(m.state.FilteredStoragePolicy) > 0 {
-				policyID := doc.StoragePolicyID
-				if doc.LatestVersion != nil && doc.LatestVersion.StoragePolicyID > 0 {
-					policyID = doc.LatestVersion.StoragePolicyID
-				}
-				if !slices.Contains(m.state.FilteredStoragePolicy, policyID) {
-					return
-				}
+			if !shouldIndexRebuildURI(uri) {
+				m.l.Debug("Skip rebuild indexing for trashed file %d (%s)", f.ID, f.Name)
+				return
+			}
+
+			if !matchesRebuildStoragePolicy(doc, m.state.FilteredStoragePolicy) {
+				return
 			}
 
 			mu.Lock()

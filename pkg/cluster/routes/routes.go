@@ -120,6 +120,17 @@ func MasterFTSSidecarContentUrl(base *url.URL, uri, name string, download bool) 
 	return base.ResolveReference(route)
 }
 
+func MasterFTSSidecarObjectContentUrl(base *url.URL, token string, download bool) *url.URL {
+	token = url.PathEscape(token)
+	route, _ := url.Parse(path.Join(constants.APIPrefix, "file", "fulltext", "sidecar", "object", token))
+	if download {
+		values := route.Query()
+		values.Set(IsDownloadQuery, "true")
+		route.RawQuery = values.Encode()
+	}
+	return base.ResolveReference(route)
+}
+
 func MasterPolicyOAuthCallback(base *url.URL) *url.URL {
 	if base.Scheme != "https" {
 		base.Scheme = "https"

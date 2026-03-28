@@ -25,6 +25,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
+	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/samber/lo"
 )
@@ -73,6 +74,7 @@ var fullTextMergeableTaskTypes = []string{
 
 var fullTextEnqueueLocks [64]sync.Mutex
 var fullTextPendingMergeLock sync.Mutex
+var fullTextPerformIndexing = performIndexing
 
 const (
 	fullTextMaxFilesPerTask = 64
@@ -468,7 +470,7 @@ func (t *FullTextCopyTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
 
-	status, err := performIndexing(ctx, fm, state.FileID)
+	status, err := fullTextPerformIndexing(ctx, fm, state.FileID)
 	if err == nil {
 		l.Debug("Successfully rebuilt full text index for copied file %d.", state.FileID)
 	}
@@ -538,7 +540,7 @@ func (t *FullTextChangeOwnerTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
 
-	status, err := performIndexing(ctx, fm, state.FileID)
+	status, err := fullTextPerformIndexing(ctx, fm, state.FileID)
 	if err == nil {
 		l.Debug("Successfully rebuilt full text index for owner-updated file %d.", state.FileID)
 	}
@@ -597,7 +599,7 @@ func (t *FullTextDeleteTask) Do(ctx context.Context) (task.Status, error) {
 
 	if fm.settings.FTSEnabled(ctx) {
 		for _, fileID := range state.FileIDs {
-			status, err := performIndexing(ctx, fm, fileID)
+			status, err := fullTextPerformIndexing(ctx, fm, fileID)
 			if err != nil {
 				return status, err
 			}
@@ -685,7 +687,7 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 	t.progress = nil
 	t.Unlock()
 	if node.IsMaster() || !fm.shouldOffloadFullTextToSlave(ctx) {
-		status, err := performIndexing(ctx, fm, item.FileID)
+		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
 		if err != nil {
 			return status, err
 		}
@@ -696,7 +698,7 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 
 	payload, err := fm.buildSlaveFullTextExtractPayload(ctx, item.FileID)
 	if err != nil {
-		status, localErr := performIndexing(ctx, fm, item.FileID)
+		status, localErr := fullTextPerformIndexing(ctx, fm, item.FileID)
 		if localErr != nil {
 			return status, fmt.Errorf("failed to build slave full text payload for file %d: %v; local fallback failed: %w", item.FileID, err, localErr)
 		}
@@ -704,7 +706,7 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 		return t.persistAndContinue(state)
 	}
 	if payload.Policy == nil {
-		status, err := performIndexing(ctx, fm, item.FileID)
+		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
 		if err != nil {
 			return status, err
 		}
@@ -790,12 +792,36 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
-		return task.StatusError, fmt.Errorf("slave content processing task failed: %s%s (%w)", summary.Error, slaveTaskDiagnostic(summary), queue.CriticalErr)
+		item, ok := state.Current()
+		if !ok {
+			return task.StatusError, fmt.Errorf("missing active file in full text await phase: %w", queue.CriticalErr)
+		}
+
+		fm.l.Warning("Slave full text extraction failed for file %d, falling back to local indexing: %s%s", item.FileID, summary.Error, slaveTaskDiagnostic(summary))
+		status, localErr := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if localErr != nil {
+			return status, fmt.Errorf("slave content processing task failed: %s%s; local fallback failed: %w", summary.Error, slaveTaskDiagnostic(summary), localErr)
+		}
+
+		state.CompleteActive()
+		return t.persistAndContinue(state)
 	case task.StatusCanceled:
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
-		return task.StatusError, fmt.Errorf("slave content processing task canceled%s (%w)", slaveTaskDiagnostic(summary), queue.CriticalErr)
+		item, ok := state.Current()
+		if !ok {
+			return task.StatusError, fmt.Errorf("missing active file in full text await phase: %w", queue.CriticalErr)
+		}
+
+		fm.l.Warning("Slave full text extraction canceled for file %d, falling back to local indexing%s", item.FileID, slaveTaskDiagnostic(summary))
+		status, localErr := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if localErr != nil {
+			return status, fmt.Errorf("slave content processing task canceled%s; local fallback failed: %w", slaveTaskDiagnostic(summary), localErr)
+		}
+
+		state.CompleteActive()
+		return t.persistAndContinue(state)
 	default:
 		t.Lock()
 		t.progress = summary.Progress
@@ -828,12 +854,15 @@ func (t *FullTextIndexTask) persistAndContinue(state *FullTextIndexTaskState) (t
 func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
-	indexer := dep.SearchIndexer(ctx)
+	searchIdx := dep.SearchIndexer(ctx)
+	if searchindexer.IsNoopIndexer(searchIdx) {
+		return task.StatusError, fmt.Errorf("search indexer is unavailable")
+	}
 
 	uri, err := fm.resolveFTSFileURI(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
-			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
 				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 
@@ -844,7 +873,7 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	}
 
 	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
-		if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
 			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
 		}
 
@@ -855,17 +884,19 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	doc, _, err := fm.buildFTSFileDocument(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
-			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
 				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 
 			l.Debug("File %d disappeared before full text sync finished, removed stale index entry.", fileID)
 			return task.StatusCompleted, nil
 		}
+		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
 		return task.StatusError, fmt.Errorf("failed to build search document for file %d: %w", fileID, err)
 	}
 
-	if err := indexer.UpsertFile(ctx, doc); err != nil {
+	if err := searchIdx.UpsertFile(ctx, doc); err != nil {
+		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
 		return task.StatusError, fmt.Errorf("failed to index file %d: %w", fileID, err)
 	}
 
@@ -880,6 +911,19 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 
 	l.Debug("Successfully indexed file %d for owner %d.", fileID, doc.OwnerID)
 	return task.StatusCompleted, nil
+}
+
+func clearFullTextIndexMetadataBestEffort(ctx context.Context, fm *manager, uri *fs.URI) {
+	if fm == nil || fm.fs == nil || uri == nil {
+		return
+	}
+
+	if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
+		Key:    dbfs.FullTextIndexKey,
+		Remove: true,
+	}); err != nil {
+		fm.l.Warning("Failed to clear full text index metadata for %s: %s", uri.String(), err)
+	}
 }
 
 func allocateContentProcessingNode(ctx context.Context, dep dependency.Dep, nodeID int) (cluster.Node, error) {
@@ -908,12 +952,15 @@ func (m *manager) shouldOffloadFullTextToSlave(ctx context.Context) bool {
 
 func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, result *SlaveFullTextExtractResult) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
-	indexer := dep.SearchIndexer(ctx)
+	searchIdx := dep.SearchIndexer(ctx)
+	if searchindexer.IsNoopIndexer(searchIdx) {
+		return task.StatusError, fmt.Errorf("search indexer is unavailable")
+	}
 
 	uri, err := fm.resolveFTSFileURI(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
-			if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
 				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 			return task.StatusCompleted, nil
@@ -922,7 +969,7 @@ func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, resu
 	}
 
 	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
-		if err := indexer.DeleteByFileIDs(ctx, fileID); err != nil {
+		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
 			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
 		}
 		return task.StatusCompleted, nil
@@ -932,7 +979,7 @@ func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, resu
 		return task.StatusError, err
 	}
 
-	return performIndexing(ctx, fm, fileID)
+	return fullTextPerformIndexing(ctx, fm, fileID)
 }
 
 func (t *FullTextIndexTask) Progress(ctx context.Context) queue.Progresses {

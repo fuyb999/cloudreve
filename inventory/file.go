@@ -363,11 +363,16 @@ func (f *fileClient) ListIndexableFiles(ctx context.Context, afterID, limit int)
 }
 
 func (f *fileClient) indexableFilesQuery() *ent.FileQuery {
-	return f.client.File.Query().Where(
+	q := f.client.File.Query().Where(
 		file.TypeIn(int(types.FileTypeFile), int(types.FileTypeFolder)),
 		file.NameNEQ(""),
 		file.FileChildrenNotNil(),
-	).Order(file.ByID())
+	)
+	if f.dbType == conf.PostgresDB {
+		q = q.Where(indexableTreePathPredicate())
+	}
+
+	return q.Order(file.ByID())
 }
 
 func (f *fileClient) CountEntityByTimeRange(ctx context.Context, start, end *time.Time) (int, error) {

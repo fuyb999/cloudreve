@@ -661,6 +661,11 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				controllers.FromQuery[explorer.FullTextSidecarContentService](explorer.FullTextSidecarContentParameterCtx{}),
 				controllers.DownloadFullTextSidecar,
 			)
+			file.GET("fulltext/sidecar/object/:token",
+				middleware.SignRequired(dep.GeneralAuth()),
+				controllers.FromUri[explorer.FullTextSidecarObjectContentService](explorer.FullTextSidecarObjectContentParameterCtx{}),
+				controllers.DownloadSignedFullTextSidecar,
+			)
 			// Update file content
 			file.PUT("content",
 				middleware.RequiredScopes(types.ScopeFilesWrite),

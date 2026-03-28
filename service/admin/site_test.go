@@ -28,6 +28,20 @@ func TestContentProcessingQueueSettingsRegistered(t *testing.T) {
 	}
 }
 
+func TestFTSIndexerSettingsRegistered(t *testing.T) {
+	keys := []string{
+		"fts_enabled",
+		"fts_index_type",
+		"fts_chunk_size",
+	}
+
+	for _, key := range keys {
+		if _, ok := postprocessors[key]; !ok {
+			t.Fatalf("expected postprocessor for %s to be registered", key)
+		}
+	}
+}
+
 func TestProcessorKeyUsesFunctionIdentity(t *testing.T) {
 	first := processorKey(siteUrlPreProcessor)
 	second := processorKey(secretKeyPreProcessor)

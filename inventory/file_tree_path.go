@@ -292,6 +292,30 @@ func treePathVisibleSubtreePredicate(prefix string, includeSelf bool, maxDepth i
 	}
 }
 
+func indexableTreePathCondition(pathColumn string) string {
+	return fmt.Sprintf(`EXISTS (
+    SELECT 1
+    FROM %s AS active_root
+    WHERE active_root.%s = ?
+      AND active_root.%s IS NOT NULL
+      AND active_root.%s @> %s
+)`, file.Table, file.FieldName, file.FieldTreePath, file.FieldTreePath, pathColumn)
+}
+
+func indexableTreePathPredicate() predicate.File {
+	return func(s *sql.Selector) {
+		pathColumn := s.C(file.FieldTreePath)
+		s.Where(sql.P(func(b *sql.Builder) {
+			b.WriteString("EXISTS (")
+			b.WriteString("SELECT 1 FROM ").WriteString(file.Table).WriteString(" AS active_root WHERE ")
+			b.WriteString("active_root.").WriteString(file.FieldName).WriteString(" = ").Arg(RootFolderName)
+			b.WriteString(" AND active_root.").WriteString(file.FieldTreePath).WriteString(" IS NOT NULL")
+			b.WriteString(" AND active_root.").WriteString(file.FieldTreePath).WriteString(" @> ").WriteString(pathColumn)
+			b.WriteByte(')')
+		}))
+	}
+}
+
 func treePathVisibleSubtreeMaxLevel(prefix string, maxDepth int) (int, bool) {
 	if maxDepth < 0 {
 		return 0, false
