@@ -19,6 +19,13 @@ const (
 	CrHeaderPrefix = "X-Cr-"
 )
 
+const (
+	PublicSystemOwnerID       = -1
+	PublicSystemOwnerUsername = "__cloudreve_public_root__"
+	PublicSystemOwnerEmail    = "__cloudreve_public_root__@internal.cloudreve"
+	PublicSystemOwnerNick     = "系统公共文件"
+)
+
 const CloudreveScheme = "cloudreve"
 
 type (

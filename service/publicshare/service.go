@@ -155,7 +155,7 @@ func buildFolderResponse(c *gin.Context, file *ent.File, rule *acl.Rule, ownerBa
 
 	return &PublicFolderResponse{
 		ID:        hashid.EncodeFileID(dep.HashIDEncoder(), file.ID),
-		Name:      file.Name,
+		Name:      displayPublicFileName(file),
 		Owner:     encodedOwner(dep.HashIDEncoder(), file.OwnerID),
 		OwnerID:   file.OwnerID,
 		TreePath:  file.TreePath,
@@ -288,7 +288,7 @@ func buildResourceSnapshot(c *gin.Context, file *ent.File, uri *fs.URI, ownerBas
 		ID:           hashid.EncodeFileID(dep.HashIDEncoder(), file.ID),
 		FileID:       file.ID,
 		ParentFileID: parentFileIDFromTreePath(file.TreePath),
-		Name:         file.Name,
+		Name:         displayPublicFileName(file),
 		Owner:        encodedOwner(dep.HashIDEncoder(), file.OwnerID),
 		OwnerID:      file.OwnerID,
 		TreePath:     file.TreePath,
@@ -297,6 +297,16 @@ func buildResourceSnapshot(c *gin.Context, file *ent.File, uri *fs.URI, ownerBas
 		Type:         file.Type,
 		HasChildren:  file.Type == int(types.FileTypeFolder) && file.FileChildren > 0,
 	}
+}
+
+func displayPublicFileName(file *ent.File) string {
+	if file == nil {
+		return ""
+	}
+	if file.Name == inventory.RootFolderName {
+		return acl.DefaultRootName
+	}
+	return file.Name
 }
 
 func publicDisplayOwnerBase(ownerBase *fs.URI) *fs.URI {

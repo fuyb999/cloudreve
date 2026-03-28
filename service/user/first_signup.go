@@ -12,28 +12,44 @@ import (
 
 const registerEnabledSettingName = "register_enabled"
 
-func isFirstRegisteredUser(newUser *ent.User) bool {
-	return newUser != nil && newUser.ID == 1
+type registrationDisabledCtx struct{}
+
+func isFirstRegisteredUser(ctx context.Context, userClient inventory.UserClient, newUser *ent.User) (bool, error) {
+	if newUser == nil || userClient == nil || inventory.IsInternalSystemUser(newUser) {
+		return false, nil
+	}
+
+	total, err := userClient.CountByTimeRange(ctx, nil, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to count visible users: %w", err)
+	}
+
+	return total == 1, nil
 }
 
 func disableOpenRegistrationAfterFirstSignup(
 	ctx context.Context,
+	userClient inventory.UserClient,
 	settingClient inventory.SettingClient,
 	newUser *ent.User,
-) error {
-	if !isFirstRegisteredUser(newUser) {
-		return nil
+) (bool, error) {
+	firstRegisteredUser, err := isFirstRegisteredUser(ctx, userClient, newUser)
+	if err != nil {
+		return false, err
+	}
+	if !firstRegisteredUser {
+		return false, nil
 	}
 
 	if err := settingClient.Set(ctx, map[string]string{registerEnabledSettingName: "0"}); err != nil {
-		return fmt.Errorf("failed to disable public registration after first signup: %w", err)
+		return false, fmt.Errorf("failed to disable public registration after first signup: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
-func invalidateOpenRegistrationCache(kv cache.Driver, newUser *ent.User) error {
-	if !isFirstRegisteredUser(newUser) || kv == nil {
+func invalidateOpenRegistrationCache(kv cache.Driver, disabled bool) error {
+	if !disabled || kv == nil {
 		return nil
 	}
 
@@ -45,7 +61,7 @@ func invalidateOpenRegistrationCache(kv cache.Driver, newUser *ent.User) error {
 }
 
 func promoteFirstOIDCIdentityUserToAdmin(ctx context.Context, currentUser *ent.User, identity *ent.ExternalIdentity) (*ent.User, error) {
-	if currentUser == nil || identity == nil || identity.ID != 1 || currentUser.GroupUsers == 1 {
+	if currentUser == nil || identity == nil || currentUser.ID != 1 || currentUser.GroupUsers == 1 {
 		return currentUser, nil
 	}
 

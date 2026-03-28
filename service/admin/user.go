@@ -109,6 +109,9 @@ func (service *SingleUserService) Get(c *gin.Context) (*GetUserResponse, error) 
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to get user", err)
 	}
+	if inventory.IsInternalSystemUser(user) {
+		return nil, serializer.NewError(serializer.CodeNotFound, "User not found", nil)
+	}
 
 	m := manager.NewFileManager(dep, user)
 	capacity, err := m.Capacity(ctx)
@@ -129,7 +132,14 @@ func (service *SingleUserService) CalibrateStorage(c *gin.Context) (*GetUserResp
 	userClient := dep.UserClient()
 
 	ctx := context.WithValue(c, inventory.LoadUserGroup{}, true)
-	_, err := userClient.CalculateStorage(ctx, service.ID)
+	targetUser, err := userClient.GetByID(ctx, service.ID)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeDBError, "Failed to get user", err)
+	}
+	if inventory.IsInternalSystemUser(targetUser) {
+		return nil, serializer.NewError(serializer.CodeNotFound, "User not found", nil)
+	}
+	_, err = userClient.CalculateStorage(ctx, service.ID)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to calculate storage", err)
 	}
@@ -155,6 +165,9 @@ func (s *UpsertUserService) Update(c *gin.Context) (*GetUserResponse, error) {
 	existing, err := userClient.GetByID(ctx, s.User.ID)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to get user", err)
+	}
+	if inventory.IsInternalSystemUser(existing) {
+		return nil, serializer.NewError(serializer.CodeNotFound, "User not found", nil)
 	}
 
 	if s.User.ID == 1 && existing.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
@@ -232,6 +245,12 @@ func (s *BatchUserService) Delete(c *gin.Context) error {
 	for _, id := range s.IDs {
 		if current.ID == id || id == 1 {
 			ae.Add(strconv.Itoa(id), serializer.NewError(serializer.CodeInvalidActionOnDefaultUser, "Cannot delete current user", nil))
+			continue
+		}
+
+		targetUser, err := userClient.GetByID(c, id)
+		if err == nil && inventory.IsInternalSystemUser(targetUser) {
+			ae.Add(strconv.Itoa(id), serializer.NewError(serializer.CodeInvalidActionOnDefaultUser, "Cannot delete internal system user", nil))
 			continue
 		}
 

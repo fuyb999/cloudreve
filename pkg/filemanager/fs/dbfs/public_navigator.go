@@ -363,7 +363,13 @@ func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 		}
 
 		if rootModel != nil {
-			n.root = newFile(nil, rootModel)
+			displayRoot := rootModel
+			if rootModel.Name == inventory.RootFolderName {
+				cloned := *rootModel
+				cloned.Name = publicshare.DefaultRootName
+				displayRoot = &cloned
+			}
+			n.root = newFile(nil, displayRoot)
 		} else {
 			n.root = newFile(nil, &ent.File{
 				Name:    publicshare.DefaultRootName,
@@ -612,6 +618,9 @@ func (n *publicNavigator) projectPublicRootGrantChildren(ctx context.Context, vi
 			file := newFile(n.root, model)
 			if file.IsNil() {
 				continue
+			}
+			if ownerURI, ownerErr := n.ownerURIForTarget(ctx, model); ownerErr == nil {
+				file.Path[pathIndexRoot] = ownerURI
 			}
 			filtered, ok := n.filter(ctx, file)
 			if !ok {

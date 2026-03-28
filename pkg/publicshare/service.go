@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	entfile "github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
@@ -68,12 +69,6 @@ func (s *Service) Root(ctx context.Context) (*ent.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get public root: %w", err)
 	}
-	if root.Name != DefaultRootName {
-		root, err = s.fileClient.Rename(ctx, root, DefaultRootName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to normalize public root name: %w", err)
-		}
-	}
 
 	return root, nil
 }
@@ -84,34 +79,45 @@ func (s *Service) EnsureRoot(ctx context.Context, owner *ent.User) (*ent.File, e
 		return root, nil
 	}
 
-	if owner == nil {
-		return nil, err
+	tx, txErr := s.fileClient.GetClient().Tx(ctx)
+	if txErr != nil {
+		return nil, fmt.Errorf("failed to start public root transaction: %w", txErr)
 	}
 
-	ownerRoot, err := s.fileClient.Root(ctx, owner)
-	if err != nil {
-		ownerRoot, err = s.fileClient.CreateFolder(ctx, nil, &inventory.CreateFolderParameters{
-			Owner: owner.ID,
-			Name:  inventory.RootFolderName,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize owner root: %w", err)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
 		}
+	}()
+
+	txService := NewService(
+		s.l,
+		s.fileClient.SetClient(tx.Client()).(inventory.FileClient),
+		s.settingClient.SetClient(tx.Client()).(inventory.SettingClient),
+		s.hasher,
+	)
+
+	systemOwner, ensureOwnerErr := txService.ensureSystemOwner(ctx)
+	if ensureOwnerErr != nil {
+		return nil, ensureOwnerErr
 	}
 
-	publicRoot, err := s.fileClient.CreateFolder(ctx, ownerRoot, &inventory.CreateFolderParameters{
-		Owner: owner.ID,
-		Name:  DefaultRootName,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create public root: %w", err)
+	publicRoot, ensureRootErr := txService.ensureHiddenRootFile(ctx, systemOwner.ID)
+	if ensureRootErr != nil {
+		return nil, ensureRootErr
 	}
 
-	if err := s.settingClient.Set(ctx, map[string]string{
+	if err := txService.settingClient.Set(ctx, map[string]string{
 		PublicRootFileIDSetting: strconv.Itoa(publicRoot.ID),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to persist public root id: %w", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit public root transaction: %w", err)
+	}
+	committed = true
 
 	return publicRoot, nil
 }
@@ -119,6 +125,9 @@ func (s *Service) EnsureRoot(ctx context.Context, owner *ent.User) (*ent.File, e
 func (s *Service) RootOwnerURI(ctx context.Context, root *ent.File) (*fs.URI, error) {
 	if root == nil {
 		return nil, fmt.Errorf("public root not found")
+	}
+	if isHiddenPublicRoot(root) {
+		return BuildPublicURI().Join(DefaultRootName), nil
 	}
 
 	ancestors, err := s.fileClient.GetAncestorFiles(ctx, root)
@@ -140,6 +149,69 @@ func (s *Service) RootOwnerURI(ctx context.Context, root *ent.File) (*fs.URI, er
 	}
 
 	return base, nil
+}
+
+func isHiddenPublicRoot(root *ent.File) bool {
+	return root != nil && root.Name == inventory.RootFolderName && root.FileChildren == 0
+}
+
+func (s *Service) ensureSystemOwner(ctx context.Context) (*ent.User, error) {
+	return inventory.EnsurePublicSystemOwner(ctx, s.fileClient.GetClient())
+}
+
+func (s *Service) ensureHiddenRootFile(ctx context.Context, ownerID int) (*ent.File, error) {
+	root, err := s.Root(ctx)
+	if err != nil {
+		root = nil
+	}
+
+	if root == nil {
+		existingRoot, rootErr := s.fileClient.GetClient().File.Query().
+			Where(
+				entfile.OwnerIDEQ(ownerID),
+				entfile.Not(entfile.HasParent()),
+				entfile.Name(inventory.RootFolderName),
+			).
+			First(ctx)
+		if rootErr == nil {
+			root = existingRoot
+		} else if !ent.IsNotFound(rootErr) {
+			return nil, fmt.Errorf("failed to query public system root: %w", rootErr)
+		}
+	}
+
+	if root == nil {
+		created, createErr := s.fileClient.CreateFolder(ctx, nil, &inventory.CreateFolderParameters{
+			Owner: ownerID,
+			Name:  inventory.RootFolderName,
+		})
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create hidden public root: %w", createErr)
+		}
+		root = created
+	}
+
+	needsUpdate := root.OwnerID != ownerID ||
+		root.Type != int(types.FileTypeFolder) ||
+		root.IsSymbolic ||
+		root.Name != inventory.RootFolderName ||
+		root.FileChildren > 0
+	if needsUpdate {
+		updated, updateErr := s.fileClient.GetClient().File.UpdateOneID(root.ID).
+			SetOwnerID(ownerID).
+			SetType(int(types.FileTypeFolder)).
+			SetIsSymbolic(false).
+			SetName(inventory.RootFolderName).
+			SetFileExt("").
+			ClearParent().
+			Save(ctx)
+		if updateErr != nil {
+			return nil, fmt.Errorf("failed to normalize hidden public root: %w", updateErr)
+		}
+		root = updated
+	}
+
+	return root, nil
 }
 
 func (s *Service) MockState(ctx context.Context) (*MockState, error) {
@@ -233,8 +305,13 @@ func (s *Service) CreateRootFolder(ctx context.Context, owner *ent.User, name st
 		return nil, err
 	}
 
+	folderOwnerID := root.OwnerID
+	if owner != nil && owner.ID > 0 {
+		folderOwnerID = owner.ID
+	}
+
 	folder, err := s.fileClient.CreateFolder(ctx, root, &inventory.CreateFolderParameters{
-		Owner: root.OwnerID,
+		Owner: folderOwnerID,
 		Name:  strings.TrimSpace(name),
 	})
 	if err != nil {

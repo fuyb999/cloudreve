@@ -278,7 +278,8 @@ func (m *manager) fileManagerForOwner(ctx context.Context, ownerID int) (FileMan
 		return NewFileManager(m.dep, m.user), nil
 	}
 
-	owner, err := m.dep.UserClient().GetLoginUserByID(ctx, ownerID)
+	loadCtx := context.WithValue(ctx, inventory.LoadUserGroup{}, true)
+	owner, err := m.dep.UserClient().GetByID(loadCtx, ownerID)
 	if err != nil {
 		return nil, err
 	}

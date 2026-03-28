@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -538,27 +539,36 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 
 	var currentUser *ent.User
 	createdShadowUser := false
+	targetUserID, err := resolveOIDCLocalUserID(profile)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
 	if identity != nil {
 		currentUser, err = userClient.GetByID(c, identity.UserID)
 		if err != nil && !ent.IsNotFound(err) {
 			_ = tx.Rollback()
 			return nil, serializer.NewError(serializer.CodeDBError, "Failed to query linked user", err)
 		}
-	}
-
-	if currentUser == nil && profile.Username != "" {
-		currentUser, err = userClient.GetByUsername(c, profile.Username)
-		if err != nil && !ent.IsNotFound(err) {
+		if currentUser != nil && currentUser.ID != targetUserID {
 			_ = tx.Rollback()
-			return nil, serializer.NewError(serializer.CodeDBError, "Failed to query user by username", err)
+			return nil, serializer.NewError(serializer.CodeDBError,
+				fmt.Sprintf("OIDC local user id mismatch: mapped=%d external=%d", currentUser.ID, targetUserID), nil)
 		}
 	}
 
-	if currentUser == nil && profile.Email != "" {
-		currentUser, err = userClient.GetByEmail(c, profile.Email)
+	if currentUser == nil {
+		currentUser, err = userClient.GetByID(c, targetUserID)
 		if err != nil && !ent.IsNotFound(err) {
 			_ = tx.Rollback()
-			return nil, serializer.NewError(serializer.CodeDBError, "Failed to query user by email", err)
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to query user by target id", err)
+		}
+	}
+
+	if currentUser != nil {
+		if err := validateOIDCLocalUserBinding(currentUser, profile); err != nil {
+			_ = tx.Rollback()
+			return nil, err
 		}
 	}
 
@@ -567,6 +577,18 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		if email == "" {
 			// 外部身份没有邮箱时，生成一个稳定占位邮箱，避免破坏本地用户唯一键约束。
 			email = oidcPlaceholderEmail(profile.Subject)
+		}
+		existedEmail, emailErr := tx.User.Query().
+			Where(user.EmailEqualFold(email), user.IDNEQ(targetUserID)).
+			Exist(c)
+		if emailErr != nil {
+			_ = tx.Rollback()
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to check email collision", emailErr)
+		}
+		if existedEmail {
+			_ = tx.Rollback()
+			return nil, serializer.NewError(serializer.CodeDBError,
+				fmt.Sprintf("OIDC email %q already exists on another local user, target id=%d", email, targetUserID), nil)
 		}
 
 		username := selectOIDCUsername(profile)
@@ -577,6 +599,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		}
 
 		currentUser, err = userClient.Create(c, &inventory.NewUserArgs{
+			RawID:    targetUserID,
 			Username: username,
 			Email:    email,
 			Nick:     selectOIDCNickname(profile),
@@ -590,9 +613,13 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		}
 		createdShadowUser = true
 		settingClient := dep.SettingClient().SetClient(tx.Client()).(inventory.SettingClient)
-		if err := disableOpenRegistrationAfterFirstSignup(c, settingClient, currentUser); err != nil {
+		registrationDisabled, err := disableOpenRegistrationAfterFirstSignup(c, userClient, settingClient, currentUser)
+		if err != nil {
 			_ = tx.Rollback()
 			return nil, serializer.NewError(serializer.CodeDBError, "Failed to update registration setting", err)
+		}
+		if registrationDisabled {
+			util.WithValue(c, registrationDisabledCtx{}, true)
 		}
 	}
 
@@ -658,7 +685,8 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to commit OIDC login transaction", err)
 	}
 	if createdShadowUser {
-		if err := invalidateOpenRegistrationCache(dep.KV(), currentUser); err != nil {
+		registrationDisabled, _ := c.Value(registrationDisabledCtx{}).(bool)
+		if err := invalidateOpenRegistrationCache(dep.KV(), registrationDisabled); err != nil {
 			dep.Logger().Warning("Failed to clear registration setting cache after OIDC signup: %s", err)
 		}
 	}
@@ -670,6 +698,39 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 	}
 
 	return loginUser, nil
+}
+
+func resolveOIDCLocalUserID(profile *oidcIdentityProfile) (int, error) {
+	if profile == nil {
+		return 0, serializer.NewError(serializer.CodeDBError, "OIDC profile is nil", nil)
+	}
+
+	raw := strings.TrimSpace(profile.ExternalUserID)
+	if raw == "" {
+		return 0, serializer.NewError(serializer.CodeDBError, "OIDC external_user_id is empty", nil)
+	}
+
+	userID, err := strconv.Atoi(raw)
+	if err != nil || userID <= 0 {
+		return 0, serializer.NewError(serializer.CodeDBError,
+			fmt.Sprintf("OIDC external_user_id %q is not a valid positive integer", raw), err)
+	}
+
+	return userID, nil
+}
+
+func validateOIDCLocalUserBinding(currentUser *ent.User, profile *oidcIdentityProfile) error {
+	if currentUser == nil || profile == nil {
+		return nil
+	}
+
+	if profile.Email != "" && currentUser.Email != "" && !strings.EqualFold(currentUser.Email, profile.Email) {
+		return serializer.NewError(serializer.CodeDBError,
+			fmt.Sprintf("OIDC target local user %d email mismatch: local=%q external=%q",
+				currentUser.ID, currentUser.Email, profile.Email), nil)
+	}
+
+	return nil
 }
 
 // updateOIDCShadowUser 只同步允许由统一认证覆盖的可变字段，避免误伤本地业务字段。

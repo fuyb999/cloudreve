@@ -19,7 +19,14 @@ func GetUser(c *gin.Context) (*ent.User, error) {
 	dep := dependency.FromContext(c)
 	userClient := dep.UserClient()
 	ctx := context.WithValue(c, inventory.LoadUserGroup{}, true)
-	return userClient.GetByID(ctx, uid)
+	user, err := userClient.GetByID(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if inventory.IsInternalSystemUser(user) {
+		return nil, serializer.NewError(serializer.CodeUserNotFound, "User not found", nil)
+	}
+	return user, nil
 }
 
 func GetUserCapacity(c *gin.Context) (*fs.Capacity, error) {

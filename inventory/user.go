@@ -13,11 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/davaccount"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/oauthgrant"
 	"github.com/cloudreve/Cloudreve/v4/ent/passkey"
+	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/ent/schema"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
@@ -124,6 +126,7 @@ type userClient struct {
 type (
 	// NewUserArgs args to create a new user
 	NewUserArgs struct {
+		RawID         int
 		Username      string
 		Email         string
 		Nick          string // Optional
@@ -142,10 +145,11 @@ type (
 )
 
 func (c *userClient) CountByTimeRange(ctx context.Context, start, end *time.Time) (int, error) {
+	query := visibleUserQuery(c.client.User.Query())
 	if start == nil || end == nil {
-		return c.client.User.Query().Count(ctx)
+		return query.Count(ctx)
 	}
-	return c.client.User.Query().Where(user.CreatedAtGTE(*start), user.CreatedAtLT(*end)).Count(ctx)
+	return query.Where(user.CreatedAtGTE(*start), user.CreatedAtLT(*end)).Count(ctx)
 }
 
 func (c *userClient) UpdateNickname(ctx context.Context, u *ent.User, name string) (*ent.User, error) {
@@ -336,6 +340,17 @@ func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, 
 		SetGroupID(args.GroupID).
 		SetAvatar(args.Avatar)
 
+	if args.RawID != 0 {
+		existed, err := c.client.User.Query().Where(user.ID(args.RawID)).Exist(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check raw user id uniqueness: %w", err)
+		}
+		if existed {
+			return nil, fmt.Errorf("user id %d already exists", args.RawID)
+		}
+		query.SetRawID(args.RawID)
+	}
+
 	if args.PlainPassword != "" {
 		pwdDigest, err := digestPassword(args.PlainPassword)
 		if err != nil {
@@ -356,7 +371,12 @@ func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, 
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	if newUser.ID == 1 {
+	firstVisibleUser, err := isFirstVisibleUser(ctx, c.client, newUser)
+	if err != nil {
+		return newUser, fmt.Errorf("failed to determine whether user is first visible user: %w", err)
+	}
+
+	if firstVisibleUser {
 		// For the first user registered, elevate it to admin group.
 		promotedUser, err := newUser.Update().SetGroupID(1).Save(ctx)
 		if err != nil {
@@ -428,7 +448,8 @@ func (c *userClient) SearchActive(ctx context.Context, limit int, keyword string
 	ctx = context.WithValue(ctx, LoadUserGroup{}, true)
 	return withUserEagerLoading(
 		ctx,
-		c.client.User.Query().
+		visibleUserQuery(c.client.User.Query()).
+			Where(user.StatusEQ(user.StatusActive)).
 			Where(user.Or(user.UsernameContainsFold(keyword), user.EmailContainsFold(keyword), user.NickContainsFold(keyword))).
 			Limit(limit),
 	).All(ctx)
@@ -473,7 +494,7 @@ func (c *userClient) AnonymousUser(ctx context.Context) (*ent.User, error) {
 }
 
 func (c *userClient) ListUsers(ctx context.Context, args *ListUserParameters) (*ListUserResult, error) {
-	query := c.client.User.Query()
+	query := visibleUserQuery(c.client.User.Query())
 	if args.GroupID != 0 {
 		query = query.Where(user.GroupUsers(args.GroupID))
 	}
@@ -679,6 +700,46 @@ func userNameValue(username *string) string {
 	}
 
 	return *username
+}
+
+func internalSystemUserPredicate() predicate.User {
+	return user.Or(
+		user.EmailEqualFold(constants.PublicSystemOwnerEmail),
+		user.UsernameEqualFold(constants.PublicSystemOwnerUsername),
+	)
+}
+
+func visibleUserQuery(q *ent.UserQuery) *ent.UserQuery {
+	if q == nil {
+		return nil
+	}
+
+	return q.Where(user.Not(internalSystemUserPredicate()))
+}
+
+func IsInternalSystemUser(u *ent.User) bool {
+	if u == nil {
+		return false
+	}
+
+	if strings.EqualFold(strings.TrimSpace(u.Email), constants.PublicSystemOwnerEmail) {
+		return true
+	}
+
+	return NormalizeUsername(userNameValue(u.Username)) == constants.PublicSystemOwnerUsername
+}
+
+func isFirstVisibleUser(ctx context.Context, client *ent.Client, u *ent.User) (bool, error) {
+	if client == nil || u == nil || IsInternalSystemUser(u) {
+		return false, nil
+	}
+
+	count, err := visibleUserQuery(client.User.Query()).Count(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return count == 1, nil
 }
 
 // IsAnonymousUser check if given user is anonymous user.

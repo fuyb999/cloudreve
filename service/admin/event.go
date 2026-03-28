@@ -97,8 +97,20 @@ func (s *AdminListService) normalizedAuditLogOrderBy() string {
 }
 
 func buildAuditLogResponse(item *ent.AuditLog, hasher hashid.Encoder) GetAuditLogResponse {
-	res := GetAuditLogResponse{AuditLog: item}
+	if item == nil {
+		return GetAuditLogResponse{}
+	}
+
+	sanitized := *item
+	sanitized.Edges = item.Edges
+
+	res := GetAuditLogResponse{AuditLog: &sanitized}
 	if item.Edges.User != nil {
+		if inventory.IsInternalSystemUser(item.Edges.User) {
+			res.AuditLog.UserID = 0
+			res.AuditLog.Edges.User = nil
+			return res
+		}
 		res.UserHashID = hashid.EncodeUserID(hasher, item.Edges.User.ID)
 	}
 

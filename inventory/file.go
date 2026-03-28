@@ -334,11 +334,12 @@ func (f *fileClient) UpdateProps(ctx context.Context, file *ent.File, props *typ
 }
 
 func (f *fileClient) CountByTimeRange(ctx context.Context, start, end *time.Time) (int, error) {
+	query := visibleStatsFileQuery(f.client.File.Query())
 	if start == nil || end == nil {
-		return f.client.File.Query().Count(ctx)
+		return query.Count(ctx)
 	}
 
-	return f.client.File.Query().Where(file.CreatedAtGTE(*start), file.CreatedAtLT(*end)).Count(ctx)
+	return query.Where(file.CreatedAtGTE(*start), file.CreatedAtLT(*end)).Count(ctx)
 }
 
 func (f *fileClient) DeleteAllMetadataByName(ctx context.Context, name string) error {
@@ -373,6 +374,22 @@ func (f *fileClient) indexableFilesQuery() *ent.FileQuery {
 	}
 
 	return q.Order(file.ByID())
+}
+
+func hiddenPublicRootPredicate() predicate.File {
+	return file.And(
+		file.Name(RootFolderName),
+		file.Not(file.HasParent()),
+		file.HasOwnerWith(internalSystemUserPredicate()),
+	)
+}
+
+func visibleStatsFileQuery(q *ent.FileQuery) *ent.FileQuery {
+	if q == nil {
+		return nil
+	}
+
+	return q.Where(file.Not(hiddenPublicRootPredicate()))
 }
 
 func (f *fileClient) CountEntityByTimeRange(ctx context.Context, start, end *time.Time) (int, error) {

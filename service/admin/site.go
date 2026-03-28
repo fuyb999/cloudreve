@@ -72,7 +72,7 @@ func (service *BatchSettingChangeService) Change() serializer.Response {
 
 const (
 	SummaryRangeDays = 12
-	MetricCacheKey   = "admin_summary"
+	MetricCacheKey   = "admin_summary_v3"
 	metricErrMsg     = "Failed to generate metrics summary"
 )
 

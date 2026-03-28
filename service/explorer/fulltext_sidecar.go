@@ -324,7 +324,8 @@ func resolveFullTextSidecarFileURI(c *gin.Context, fileID int, objectID string) 
 		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar file not found", err)
 	}
 
-	owner, err := dep.UserClient().GetLoginUserByID(c, fileModel.OwnerID)
+	loadCtx := context.WithValue(context.Context(c), inventory.LoadUserGroup{}, true)
+	owner, err := dep.UserClient().GetByID(loadCtx, fileModel.OwnerID)
 	if err != nil {
 		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar owner not found", err)
 	}

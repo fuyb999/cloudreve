@@ -65,7 +65,7 @@ func (c *groupClient) GetClient() *ent.Client {
 }
 
 func (c *groupClient) CountUsers(ctx context.Context, id int) (int, error) {
-	return c.client.Group.Query().Where(group.ID(id)).QueryUsers().Count(ctx)
+	return visibleUserQuery(c.client.Group.Query().Where(group.ID(id)).QueryUsers()).Count(ctx)
 }
 
 func (c *groupClient) AnonymousGroup(ctx context.Context) (*ent.Group, error) {
