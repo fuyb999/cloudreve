@@ -565,13 +565,6 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		}
 	}
 
-	if currentUser != nil {
-		if err := validateOIDCLocalUserBinding(currentUser, profile); err != nil {
-			_ = tx.Rollback()
-			return nil, err
-		}
-	}
-
 	if currentUser == nil {
 		email := profile.Email
 		if email == "" {
@@ -719,21 +712,8 @@ func resolveOIDCLocalUserID(profile *oidcIdentityProfile) (int, error) {
 	return userID, nil
 }
 
-func validateOIDCLocalUserBinding(currentUser *ent.User, profile *oidcIdentityProfile) error {
-	if currentUser == nil || profile == nil {
-		return nil
-	}
-
-	if profile.Email != "" && currentUser.Email != "" && !strings.EqualFold(currentUser.Email, profile.Email) {
-		return serializer.NewError(serializer.CodeDBError,
-			fmt.Sprintf("OIDC target local user %d email mismatch: local=%q external=%q",
-				currentUser.ID, currentUser.Email, profile.Email), nil)
-	}
-
-	return nil
-}
-
 // updateOIDCShadowUser 只同步允许由统一认证覆盖的可变字段，避免误伤本地业务字段。
+// 其中邮箱以统一认证返回为准，只要不与其它本地用户冲突，就直接覆盖旧值。
 func updateOIDCShadowUser(c *gin.Context, client *ent.Client, currentUser *ent.User, profile *oidcIdentityProfile) (*ent.User, error) {
 	update := client.User.UpdateOneID(currentUser.ID)
 	changed := false
