@@ -142,16 +142,23 @@ type HomepageSummary struct {
 	Version        *Version        `json:"version"`
 }
 
+type UserUploadStat struct {
+	UserID      int    `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	FileCount   int    `json:"file_count"`
+}
+
 type MetricsSummary struct {
-	Dates         []time.Time `json:"dates"`
-	Files         []int       `json:"files"`
-	Users         []int       `json:"users"`
-	Shares        []int       `json:"shares"`
-	FileTotal     int         `json:"file_total"`
-	UserTotal     int         `json:"user_total"`
-	ShareTotal    int         `json:"share_total"`
-	EntitiesTotal int         `json:"entities_total"`
-	GeneratedAt   time.Time   `json:"generated_at"`
+	Dates          []time.Time      `json:"dates"`
+	Files          []int            `json:"files"`
+	Users          []int            `json:"users"`
+	Shares         []int            `json:"shares"`
+	TopUploadUsers []UserUploadStat `json:"top_upload_users"`
+	FileTotal      int              `json:"file_total"`
+	UserTotal      int              `json:"user_total"`
+	ShareTotal     int              `json:"share_total"`
+	EntitiesTotal  int              `json:"entities_total"`
+	GeneratedAt    time.Time        `json:"generated_at"`
 }
 
 type Version struct {

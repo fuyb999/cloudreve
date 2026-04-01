@@ -134,6 +134,14 @@ func init() {
 		NavigatorCapabilityModifyProps:    true,
 	}, myNavigatorCapability)
 	boolset.Sets(map[NavigatorCapability]bool{
+		NavigatorCapabilityDownloadFile:  true,
+		NavigatorCapabilityCreateArchive: true,
+		NavigatorCapabilityListChildren:  true,
+		NavigatorCapabilityGenerateThumb: true,
+		NavigatorCapabilityInfo:          true,
+		NavigatorCapabilityEnterFolder:   true,
+	}, myNavigatorReadonlyCapability)
+	boolset.Sets(map[NavigatorCapability]bool{
 		NavigatorCapabilityDownloadFile:   true,
 		NavigatorCapabilityCreateArchive:  true,
 		NavigatorCapabilityListChildren:   true,

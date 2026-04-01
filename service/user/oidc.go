@@ -129,7 +129,7 @@ type oidcIdentityProfile struct {
 // Prepare 读取 OIDC 配置和发现文档，生成前端登录入口地址。
 func (service *OIDCPrepareService) Prepare(c *gin.Context) (*OIDCPrepareResponse, error) {
 	dep := dependency.FromContext(c)
-	oidcSetting := dep.SettingProvider().OIDC(c)
+	oidcSetting := loadEffectiveOIDCSetting(c, dep)
 	if !oidcSetting.Enabled {
 		return nil, serializer.NewError(serializer.CodeFeatureNotEnabled, "OIDC sign-in is disabled", nil)
 	}
@@ -174,7 +174,7 @@ func (service *OIDCPrepareService) Prepare(c *gin.Context) (*OIDCPrepareResponse
 // Exchange 用授权码换取上游 access token，再同步/创建本地影子用户并把 provider token 直接返回给前端。
 func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeResponse, error) {
 	dep := dependency.FromContext(c)
-	oidcSetting := dep.SettingProvider().OIDC(c)
+	oidcSetting := loadEffectiveOIDCSetting(c, dep)
 	if !oidcSetting.Enabled {
 		return nil, serializer.NewError(serializer.CodeFeatureNotEnabled, "OIDC sign-in is disabled", nil)
 	}

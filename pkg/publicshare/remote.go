@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	oidcEnabledSettingKey   = "oidc_enabled"
-	oidcWellKnownSettingKey = "oidc_wellknown_url"
+	oidcEnabledSettingKey    = "oidc_enabled"
+	oidcConfigModeSettingKey = "oidc_config_mode"
+	oidcWellKnownSettingKey  = "oidc_wellknown_url"
 
 	remoteVisibilityPath  = "/system-api/cloudreve/authz/visibility"
 	remoteActionCheckPath = "/system-api/cloudreve/authz/action-check"
@@ -87,10 +88,17 @@ func (s *Service) UnifiedAuthzEnabled(ctx context.Context) bool {
 
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "on":
-		return true
+		// 继续检查模式；只有 remote 模式才走授权中心远程授权接口。
 	default:
 		return false
 	}
+
+	configMode, err := s.settingClient.Get(ctx, oidcConfigModeSettingKey)
+	if err != nil {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(configMode), "remote")
 }
 
 func (s *Service) resolveVisibilityRemote(ctx context.Context, accessToken string) (*VisibilityResult, error) {

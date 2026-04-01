@@ -34,6 +34,7 @@ type UserBatchService struct {
 }
 
 const (
+	userIDCondition       = "user_id"
 	userStatusCondition   = "user_status"
 	userGroupCondition    = "user_group"
 	userUsernameCondition = "user_username"
@@ -51,8 +52,15 @@ func (service *AdminListService) Users(c *gin.Context) (*ListUserResponse, error
 
 	var (
 		err     error
+		id      int
 		groupID int
 	)
+	if service.Conditions[userIDCondition] != "" {
+		id, err = strconv.Atoi(service.Conditions[userIDCondition])
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeParamErr, "Invalid user ID", err)
+		}
+	}
 	if service.Conditions[userGroupCondition] != "" {
 		groupID, err = strconv.Atoi(service.Conditions[userGroupCondition])
 		if err != nil {
@@ -67,6 +75,7 @@ func (service *AdminListService) Users(c *gin.Context) (*ListUserResponse, error
 			OrderBy:  service.OrderBy,
 			Order:    inventory.OrderDirection(service.OrderDirection),
 		},
+		ID:       id,
 		Status:   user.Status(service.Conditions[userStatusCondition]),
 		GroupID:  groupID,
 		Username: service.Conditions[userUsernameCondition],

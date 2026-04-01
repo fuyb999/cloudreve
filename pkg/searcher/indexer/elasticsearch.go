@@ -127,7 +127,7 @@ func (e *ElasticsearchIndexer) EnsureIndex(ctx context.Context) error {
 		}
 		defer res.Body.Close()
 
-		if res.IsError() && res.StatusCode != http.StatusBadRequest {
+		if res.IsError() && res.StatusCode != http.StatusOK {
 			return parseElasticsearchError("failed to create index", fmt.Sprintf("%d", res.StatusCode), res.Body)
 		}
 	}

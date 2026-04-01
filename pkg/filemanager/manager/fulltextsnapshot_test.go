@@ -312,3 +312,31 @@ func TestBuildFTSExtractionPlanReusesReadySidecarWhenSkipEnabled(t *testing.T) {
 		t.Fatal("expected no sidecar refresh when both extraction steps are skipped")
 	}
 }
+
+func TestBuildFTSExtractionPlanExtractsAttachmentsWithoutSidecarPersistence(t *testing.T) {
+	settings := testSettingProvider{
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			MaxFileSize: 20 << 20,
+		},
+	}
+
+	plan := buildFTSExtractionPlan(
+		FTSBuildOptions{},
+		tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+		&ent.File{Name: "archive.zip", Size: 1024},
+		"",
+		nil,
+		false,
+		nil,
+		false,
+		false,
+	)
+
+	if !plan.NeedAttachmentExtraction {
+		t.Fatal("expected embedded attachments to be extracted even when sidecar persistence is disabled")
+	}
+	if plan.ShouldPersistSidecar {
+		t.Fatal("expected no sidecar persistence when sidecar switches are disabled")
+	}
+}

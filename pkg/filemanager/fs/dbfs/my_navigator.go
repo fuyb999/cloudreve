@@ -20,6 +20,7 @@ import (
 )
 
 var myNavigatorCapability = &boolset.BooleanSet{}
+var myNavigatorReadonlyCapability = &boolset.BooleanSet{}
 
 type hiddenPublicRootAccessCtxKey struct{}
 
@@ -92,7 +93,7 @@ func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 		if err != nil {
 			return nil, fs.ErrPathNotExist.WithError(fmt.Errorf("invalid user id"))
 		}
-		if fsUid != n.user.ID {
+		if fsUid != n.user.ID && !n.isAdmin() {
 			return nil, ErrPermissionDenied
 		}
 
@@ -118,7 +119,7 @@ func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 		n.root.OwnerModel = targetUser
 		n.root.disableView = fsUid != n.user.ID
 		n.root.IsUserRoot = true
-		n.root.CapabilitiesBs = n.Capabilities(false).Capability
+		n.root.CapabilitiesBs = n.rootCapabilities(fsUid)
 	}
 
 	current, lastAncestor := n.root, n.root
@@ -218,6 +219,21 @@ func (n *myNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {
 	}
 
 	return res
+}
+
+func (n *myNavigator) isAdmin() bool {
+	return n.user != nil &&
+		n.user.Edges.Group != nil &&
+		n.user.Edges.Group.Permissions != nil &&
+		n.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin))
+}
+
+func (n *myNavigator) rootCapabilities(targetUserID int) *boolset.BooleanSet {
+	if targetUserID != n.user.ID {
+		return myNavigatorReadonlyCapability
+	}
+
+	return n.Capabilities(false).Capability
 }
 
 func (n *myNavigator) Walk(ctx context.Context, levelFiles []*File, limit, depth int, f WalkFunc) error {

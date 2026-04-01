@@ -200,6 +200,13 @@ type AppSetting struct {
 	SyncthingWindowsURL     string
 }
 
+type OIDCConfigMode string
+
+const (
+	OIDCConfigModeStandard OIDCConfigMode = "standard"
+	OIDCConfigModeRemote   OIDCConfigMode = "remote"
+)
+
 // OIDCSetting 对应后台“参数设置 -> 用户会话 -> OIDC”的统一认证配置。
 // 开关打开后，前后端都会切换到统一认证链路；关闭时则完全回退到原有本地登录逻辑。
 type OIDCSetting struct {
@@ -208,6 +215,10 @@ type OIDCSetting struct {
 	DisplayName string
 	// AutoRedirect 控制是否在用户打开登录页时自动跳转到统一认证入口。
 	AutoRedirect bool
+	// ConfigMode 控制是直接使用本地标准 OIDC 配置，还是通过授权中心运行时拉取配置。
+	ConfigMode OIDCConfigMode
+	// BindingCode 是授权中心统一接入绑定编码；配置后，网盘会优先按该编码拉取运行时配置。
+	BindingCode string
 	// SSOURL 是第三方前端统一登录入口；为空时根据 issuer 自动推导 /sso。
 	SSOURL string
 	// WellKnownURL 用于拉取 OIDC 发现文档，从中解析 token/userinfo 端点。

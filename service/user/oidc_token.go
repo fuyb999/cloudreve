@@ -128,11 +128,12 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 		}
 		// Cached entry still needs live introspection so cross-system logout/revoke
 		// can take effect immediately.
-		discovery, err := fetchOIDCDiscovery(c, dep, dep.SettingProvider().OIDC(c))
+		oidcCfg := loadEffectiveOIDCSetting(c, dep)
+		discovery, err := fetchOIDCDiscovery(c, dep, oidcCfg)
 		if err != nil {
 			return false, err
 		}
-		introspection, err := introspectOIDCAccessToken(c, dep, discovery, token)
+		introspection, err := introspectOIDCAccessToken(c, dep, oidcCfg, discovery, token)
 		if err != nil {
 			_ = dep.KV().Delete("", oidcAccessTokenCacheKey(token))
 			return false, err
@@ -152,12 +153,13 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 		return true, nil
 	}
 
-	discovery, err := fetchOIDCDiscovery(c, dep, dep.SettingProvider().OIDC(c))
+	oidcCfg := loadEffectiveOIDCSetting(c, dep)
+	discovery, err := fetchOIDCDiscovery(c, dep, oidcCfg)
 	if err != nil {
 		return false, err
 	}
 
-	introspection, err := introspectOIDCAccessToken(c, dep, discovery, token)
+	introspection, err := introspectOIDCAccessToken(c, dep, oidcCfg, discovery, token)
 	if err != nil {
 		return false, err
 	}
@@ -204,12 +206,13 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 
 func refreshOIDCToken(c *gin.Context, service *RefreshTokenService) (*auth.Token, error) {
 	dep := dependency.FromContext(c)
-	discovery, err := fetchOIDCDiscovery(c, dep, dep.SettingProvider().OIDC(c))
+	cfg := loadEffectiveOIDCSetting(c, dep)
+	discovery, err := fetchOIDCDiscovery(c, dep, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	payload, err := refreshProviderToken(c, dep, dep.SettingProvider().OIDC(c), discovery, service.RefreshToken)
+	payload, err := refreshProviderToken(c, dep, cfg, discovery, service.RefreshToken)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +229,7 @@ func refreshOIDCToken(c *gin.Context, service *RefreshTokenService) (*auth.Token
 
 func deleteOIDCToken(c *gin.Context, service *RefreshTokenService) (string, error) {
 	dep := dependency.FromContext(c)
-	cfg := dep.SettingProvider().OIDC(c)
+	cfg := loadEffectiveOIDCSetting(c, dep)
 	discovery, err := fetchOIDCDiscovery(c, dep, cfg)
 	if err != nil {
 		return "", err
@@ -249,7 +252,7 @@ func deleteOIDCToken(c *gin.Context, service *RefreshTokenService) (string, erro
 // HandleOIDCRevokeCallback 接收 Yudao 发送的 token 失效通知，并使 Cloudreve 本地缓存立即失效。
 func HandleOIDCRevokeCallback(c *gin.Context) error {
 	dep := dependency.FromContext(c)
-	cfg := dep.SettingProvider().OIDC(c)
+	cfg := loadEffectiveOIDCSetting(c, dep)
 	if !cfg.Enabled {
 		return serializer.NewError(serializer.CodeFeatureNotEnabled, "OIDC sign-in is disabled", nil)
 	}
@@ -287,7 +290,7 @@ func HandleOIDCRevokeCallback(c *gin.Context) error {
 // 这里不依赖业务自定义签名，而是校验 provider 签发的 logout_token。
 func HandleOIDCBackChannelLogout(c *gin.Context) error {
 	dep := dependency.FromContext(c)
-	cfg := dep.SettingProvider().OIDC(c)
+	cfg := loadEffectiveOIDCSetting(c, dep)
 	if !cfg.Enabled {
 		return serializer.NewError(serializer.CodeFeatureNotEnabled, "OIDC sign-in is disabled", nil)
 	}
@@ -333,7 +336,7 @@ func HandleOIDCBackChannelLogout(c *gin.Context) error {
 	return nil
 }
 
-func introspectOIDCAccessToken(c *gin.Context, dep dependency.Dep, discovery *oidcDiscovery, accessToken string) (*oidcIntrospectionPayload, error) {
+func introspectOIDCAccessToken(c *gin.Context, dep dependency.Dep, cfg *setting.OIDCSetting, discovery *oidcDiscovery, accessToken string) (*oidcIntrospectionPayload, error) {
 	endpoint := discovery.IntrospectionEndpoint
 	if endpoint == "" && strings.HasSuffix(discovery.TokenEndpoint, "/token") {
 		endpoint = strings.TrimSuffix(discovery.TokenEndpoint, "/token") + "/check-token"
@@ -346,8 +349,7 @@ func introspectOIDCAccessToken(c *gin.Context, dep dependency.Dep, discovery *oi
 	form.Set("token", accessToken)
 	header := http.Header{}
 	header.Set("Content-Type", "application/x-www-form-urlencoded")
-	oidcCfg := dep.SettingProvider().OIDC(c)
-	header.Set("Authorization", "Basic "+basicOIDCCredential(oidcCfg.ClientID, oidcCfg.ClientSecret))
+	header.Set("Authorization", "Basic "+basicOIDCCredential(cfg.ClientID, cfg.ClientSecret))
 
 	body, err := doOIDCRequest(c, dep, http.MethodPost, endpoint, strings.NewReader(form.Encode()), header)
 	if err != nil {

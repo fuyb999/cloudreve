@@ -15,7 +15,11 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
+	"github.com/cloudreve/Cloudreve/v4/ent"
+	entfile "github.com/cloudreve/Cloudreve/v4/ent/file"
+	entuser "github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
@@ -72,13 +76,15 @@ func (service *BatchSettingChangeService) Change() serializer.Response {
 
 const (
 	SummaryRangeDays = 12
-	MetricCacheKey   = "admin_summary_v3"
+	MetricCacheKey   = "admin_summary_v5"
 	metricErrMsg     = "Failed to generate metrics summary"
+	topUploadUsers   = 10
 )
 
 type (
 	SummaryService struct {
-		Generate bool `form:"generate"`
+		Generate        bool `form:"generate"`
+		UploadRangeDays int  `form:"upload_range_days"`
 	}
 	SummaryParamCtx struct{}
 )
@@ -87,6 +93,8 @@ type (
 func (s *SummaryService) Summary(c *gin.Context) (*HomepageSummary, error) {
 	dep := dependency.FromContext(c)
 	kv := dep.KV()
+	uploadRangeDays := normalizeTopUploadRangeDays(s.UploadRangeDays)
+	cacheKey := summaryCacheKey(uploadRangeDays)
 	res := &HomepageSummary{
 		Version: &Version{
 			Version: constants.BackendVersion,
@@ -98,13 +106,13 @@ func (s *SummaryService) Summary(c *gin.Context) (*HomepageSummary, error) {
 		}),
 	}
 
-	if summary, ok := kv.Get(MetricCacheKey); ok {
-		summaryCasted := summary.(MetricsSummary)
-		res.MetricsSummary = &summaryCasted
-		return res, nil
-	}
-
 	if !s.Generate {
+		if summary, ok := kv.Get(cacheKey); ok {
+			summaryCasted := summary.(MetricsSummary)
+			res.MetricsSummary = &summaryCasted
+			return res, nil
+		}
+
 		return res, nil
 	}
 
@@ -160,11 +168,111 @@ func (s *SummaryService) Summary(c *gin.Context) (*HomepageSummary, error) {
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, metricErrMsg, nil)
 	}
+	summary.TopUploadUsers, err = s.topUploadUsers(c, dep, uploadRangeDays)
+	if err != nil {
+		dep.Logger().Warning("Failed to load top upload users for admin summary: %s", err)
+		summary.TopUploadUsers = []UserUploadStat{}
+	}
 
-	_ = kv.Set(MetricCacheKey, *summary, 86400)
+	_ = kv.Set(cacheKey, *summary, 86400)
 	res.MetricsSummary = summary
 
 	return res, nil
+}
+
+func summaryCacheKey(uploadRangeDays int) string {
+	return fmt.Sprintf("%s:%d", MetricCacheKey, normalizeTopUploadRangeDays(uploadRangeDays))
+}
+
+func normalizeTopUploadRangeDays(days int) int {
+	switch days {
+	case 7, 30:
+		return days
+	default:
+		return 0
+	}
+}
+
+func (s *SummaryService) topUploadUsers(ctx context.Context, dep dependency.Dep, uploadRangeDays int) ([]UserUploadStat, error) {
+	query := dep.DBClient().File.Query().Where(
+		entfile.TypeEQ(int(types.FileTypeFile)),
+		entfile.OwnerIDNEQ(constants.PublicSystemOwnerID),
+	)
+	if uploadRangeDays > 0 {
+		query = query.Where(entfile.CreatedAtGTE(time.Now().AddDate(0, 0, -uploadRangeDays)))
+	}
+
+	grouped := make([]struct {
+		OwnerID   int `json:"owner_id"`
+		FileCount int `json:"count"`
+	}, 0, topUploadUsers)
+	err := query.GroupBy(entfile.FieldOwnerID).Aggregate(ent.Count()).Scan(ctx, &grouped)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(grouped, func(i, j int) bool {
+		if grouped[i].FileCount == grouped[j].FileCount {
+			return grouped[i].OwnerID < grouped[j].OwnerID
+		}
+		return grouped[i].FileCount > grouped[j].FileCount
+	})
+	if len(grouped) > topUploadUsers {
+		grouped = grouped[:topUploadUsers]
+	}
+	if len(grouped) == 0 {
+		return []UserUploadStat{}, nil
+	}
+
+	userIDs := make([]int, 0, len(grouped))
+	for _, item := range grouped {
+		userIDs = append(userIDs, item.OwnerID)
+	}
+
+	users, err := dep.DBClient().User.Query().Where(entuser.IDIn(userIDs...)).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	userByID := make(map[int]*ent.User, len(users))
+	for _, u := range users {
+		userByID[u.ID] = u
+	}
+
+	result := make([]UserUploadStat, 0, len(grouped))
+	for _, item := range grouped {
+		displayName := fmt.Sprintf("用户 #%d", item.OwnerID)
+		if u, ok := userByID[item.OwnerID]; ok {
+			displayName = userUploadDisplayName(u)
+		}
+
+		result = append(result, UserUploadStat{
+			UserID:      item.OwnerID,
+			DisplayName: displayName,
+			FileCount:   item.FileCount,
+		})
+	}
+
+	return result, nil
+}
+
+func userUploadDisplayName(u *ent.User) string {
+	if u == nil {
+		return ""
+	}
+
+	if nick := strings.TrimSpace(u.Nick); nick != "" {
+		return nick
+	}
+	if u.Username != nil {
+		if username := strings.TrimSpace(*u.Username); username != "" {
+			return username
+		}
+	}
+	if email := strings.TrimSpace(u.Email); email != "" {
+		return email
+	}
+
+	return fmt.Sprintf("用户 #%d", u.ID)
 }
 
 // ThumbGeneratorTestService 缩略图生成测试服务
@@ -273,6 +381,7 @@ var (
 		"queue_remote_download_retry_delay":             remoteDownloadQueuePostProcessor,
 		"secret_key":                                    secretKeyPostProcessor,
 		"fts_enabled":                                   meilisearchPostProcessor,
+		"fts_sync_folders":                              meilisearchPostProcessor,
 		"fts_index_type":                                meilisearchPostProcessor,
 		"fts_chunk_size":                                meilisearchPostProcessor,
 		"fts_meilisearch_embed_config":                  meilisearchPostProcessor,

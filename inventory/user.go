@@ -103,6 +103,7 @@ type (
 	}
 	ListUserParameters struct {
 		*PaginationArgs
+		ID       int
 		GroupID  int
 		Status   user.Status
 		Username string
@@ -495,6 +496,9 @@ func (c *userClient) AnonymousUser(ctx context.Context) (*ent.User, error) {
 
 func (c *userClient) ListUsers(ctx context.Context, args *ListUserParameters) (*ListUserResult, error) {
 	query := visibleUserQuery(c.client.User.Query())
+	if args.ID != 0 {
+		query = query.Where(user.ID(args.ID))
+	}
 	if args.GroupID != 0 {
 		query = query.Where(user.GroupUsers(args.GroupID))
 	}

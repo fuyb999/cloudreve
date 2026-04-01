@@ -1,0 +1,57 @@
+source:
+  driver: mysql
+  dsn: legacy_user:legacy_pass@tcp(127.0.0.1:3306)/legacy_cloud?charset=utf8mb4&parseTime=true&loc=Local
+  query: |
+    SELECT
+      CAST(f.id AS CHAR) AS legacy_id,
+      CASE WHEN f.is_public = 1 THEN 'public' ELSE 'personal' END AS scope,
+      f.owner_id AS owner_id,
+      u.email AS owner_email,
+      u.username AS owner_username,
+      CASE WHEN f.is_dir = 1 THEN 'folder' ELSE 'file' END AS kind,
+      f.target_path AS target_path,
+      f.object_key AS object_key,
+      f.size AS size,
+      f.storage_policy_id AS storage_policy_id,
+      f.created_at AS created_at,
+      f.updated_at AS updated_at,
+      f.metadata_json AS metadata_json
+    FROM legacy_files f
+    LEFT JOIN legacy_users u ON u.id = f.owner_id
+    WHERE f.deleted_at IS NULL
+    ORDER BY f.target_path ASC, f.id ASC
+
+target:
+  driver: postgres
+  dsn: host=127.0.0.1 port=5432 user=cloudreve password=cloudreve dbname=cloudreve sslmode=disable
+  db_type: postgres
+  hashid_salt: change-me
+
+migration:
+  dry_run: true
+  continue_on_error: true
+  skip_existing: true
+
+  # 优先用旧 owner_id 显式映射到新 Cloudreve 用户 ID。
+  # 这是本工具对齐 owner_id 的主路径。
+  user_id_map:
+    1001: 12
+    1002: 18
+    1003: 25
+
+  # 仅当 user_id_map 没命中时才会考虑下面这些兜底。
+  same_id_fallback: false
+  allow_email_lookup: true
+  allow_username_lookup: false
+
+  # 公共文件如果源数据没有 owner_id / 邮箱 / 用户名，可以兜底挂到一个默认用户下。
+  default_public_owner_id: 12
+
+  # 文件没有单独给出 storage_policy_id 时，按 scope 使用默认策略。
+  default_personal_policy_id: 3
+  default_public_policy_id: 4
+
+  # 工具会额外写一个私有元数据，记录旧系统来源，便于后续追溯。
+  marker_key: sys:legacy_mysql_migrator
+  private_metadata_keys:
+    - sys:legacy_mysql_migrator

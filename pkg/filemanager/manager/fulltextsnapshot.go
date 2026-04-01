@@ -423,21 +423,36 @@ func buildFTSExtractionPlan(
 
 	textReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.TextReady
 	assetsReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.AssetsReady
+	attachmentsSupported := supportsFTSAttachmentExtraction(extractor, fileModel)
 
 	plan.NeedTextExtraction = !opts.SkipTextExtraction &&
 		(!plan.ReuseSidecarText || strings.TrimSpace(currentText) == "") &&
 		ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
 
-	plan.NeedAttachmentExtraction = !opts.SkipAttachmentExtraction &&
-		assetSidecarEnabled &&
-		(opts.ForceAttachmentExtraction || (len(currentAttachments) == 0 && !assetsReady))
+	plan.NeedAttachmentExtraction = attachmentsSupported &&
+		!opts.SkipAttachmentExtraction &&
+		(opts.ForceAttachmentExtraction ||
+			!plan.ReuseSidecarAttachments ||
+			(len(currentAttachments) == 0 && !assetsReady))
 
-	plan.ShouldPersistSidecar = !opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
+	plan.ShouldPersistSidecar = (textSidecarEnabled || assetSidecarEnabled) &&
+		!opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
 		(!hasCurrentSidecar ||
 			(textSidecarEnabled && (opts.ForceTextExtraction || !textReady)) ||
 			(assetSidecarEnabled && (opts.ForceAttachmentExtraction || !assetsReady)))
 
 	return plan
+}
+
+func supportsFTSAttachmentExtraction(extractor searcher.TextExtractor, fileModel *ent.File) bool {
+	if extractor == nil || fileModel == nil {
+		return false
+	}
+	if _, ok := extractor.(*tikaextractor.TikaExtractor); !ok {
+		return false
+	}
+
+	return ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
 }
 
 func (m *manager) loadFTSContentFromSidecar(
@@ -513,9 +528,6 @@ func extractFTSEmbeddedAttachments(
 	}
 
 	cfg := internal.settings.FTSTikaExtractor(ctx)
-	if !cfg.SidecarEnabled || !cfg.SidecarAssetsEnabled {
-		return nil
-	}
 
 	artifactOpts := tikaextractor.ArtifactOptions{
 		ExtractInlineImages: cfg.ExtractInlineImages,

@@ -920,6 +920,47 @@ func TestPerformIndexingFailsWhenSearchIndexerIsNoop(t *testing.T) {
 	}
 }
 
+func TestPerformIndexingSkipsFoldersWhenFolderSyncDisabled(t *testing.T) {
+	settings := testSettingProvider{
+		enabled:     true,
+		syncFolders: false,
+	}
+	indexer := &testSearchIndexer{}
+	dep := testDep{
+		settings:      settings,
+		searchIndexer: indexer,
+		fileClient: &testFileClient{
+			fileByID: map[int]*ent.File{
+				801: {
+					ID:      801,
+					OwnerID: 701,
+					Type:    int(inventorytypes.FileTypeFolder),
+					Name:    "reports",
+				},
+			},
+		},
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	status, err := performIndexing(ctx, &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		dep:      dep,
+		settings: settings,
+	}, 801)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != 801 {
+		t.Fatalf("expected folder index to be deleted, got %v", indexer.deleted)
+	}
+	if indexer.upserted != 0 {
+		t.Fatalf("expected no upsert when folder sync is disabled, got %d", indexer.upserted)
+	}
+}
+
 func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
 	settings := testSettingProvider{
 		enabled: true,
@@ -1495,12 +1536,17 @@ func (f testWalkFile) ID() int {
 
 type testSettingProvider struct {
 	setting.Provider
-	enabled bool
-	tikaCfg *setting.FTSTikaExtractorSetting
+	enabled     bool
+	tikaCfg     *setting.FTSTikaExtractorSetting
+	syncFolders bool
 }
 
 func (s testSettingProvider) FTSEnabled(ctx context.Context) bool {
 	return s.enabled
+}
+
+func (s testSettingProvider) FTSSyncFolders(ctx context.Context) bool {
+	return s.syncFolders
 }
 
 func (s testSettingProvider) FTSTikaExtractor(ctx context.Context) *setting.FTSTikaExtractorSetting {

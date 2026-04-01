@@ -232,6 +232,8 @@ type (
 		AuditLogEnabled(ctx context.Context, eventType int) bool
 		// FTSEnabled returns true if full-text search is enabled.
 		FTSEnabled(ctx context.Context) bool
+		// FTSSyncFolders returns true if folders should be synchronized into the full-text index.
+		FTSSyncFolders(ctx context.Context) bool
 		// FTSIndexType returns the full-text search index type.
 		FTSIndexType(ctx context.Context) FTSIndexType
 		// FTSExtractorType returns the full-text search extractor type.
@@ -395,6 +397,8 @@ func (s *settingProvider) OIDC(ctx context.Context) *OIDCSetting {
 		Enabled:      s.getBoolean(ctx, "oidc_enabled", false),
 		DisplayName:  s.getString(ctx, "oidc_display_name", "统一认证"),
 		AutoRedirect: s.getBoolean(ctx, "oidc_auto_redirect", false),
+		ConfigMode:   OIDCConfigMode(s.getString(ctx, "oidc_config_mode", string(OIDCConfigModeRemote))),
+		BindingCode:  s.getString(ctx, "oidc_binding_code", "cloudreve-main"),
 		SSOURL:       s.getString(ctx, "oidc_sso_url", ""),
 		WellKnownURL: s.getString(ctx, "oidc_wellknown_url", ""),
 		ClientID:     s.getString(ctx, "oidc_client_id", ""),
@@ -704,6 +708,10 @@ func (s *settingProvider) AuditLogEnabled(ctx context.Context, eventType int) bo
 
 func (s *settingProvider) FTSEnabled(ctx context.Context) bool {
 	return s.getBoolean(ctx, "fts_enabled", false)
+}
+
+func (s *settingProvider) FTSSyncFolders(ctx context.Context) bool {
+	return s.getBoolean(ctx, "fts_sync_folders", false)
 }
 
 func (s *settingProvider) FTSIndexType(ctx context.Context) FTSIndexType {

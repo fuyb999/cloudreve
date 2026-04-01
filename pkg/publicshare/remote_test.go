@@ -1,10 +1,30 @@
 package publicshare
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory"
 )
+
+type testSettingClient struct {
+	values map[string]string
+}
+
+func (t testSettingClient) SetClient(newClient *ent.Client) inventory.TxOperator { return t }
+func (t testSettingClient) GetClient() *ent.Client                               { return nil }
+func (t testSettingClient) Get(ctx context.Context, name string) (string, error) {
+	return t.values[name], nil
+}
+func (t testSettingClient) Set(ctx context.Context, settings map[string]string) error { return nil }
+func (t testSettingClient) Gets(ctx context.Context, names []string) (map[string]string, error) {
+	res := make(map[string]string, len(names))
+	for _, name := range names {
+		res[name] = t.values[name]
+	}
+	return res, nil
+}
 
 func TestConstrainRemoteDecisionToVisibilityRejectsInvisibleTarget(t *testing.T) {
 	target := &ent.File{ID: 30, TreePath: "10.20.30"}
@@ -116,5 +136,26 @@ func TestVirtualPublicRootDecisionIsReadonly(t *testing.T) {
 	}
 	if decision.Actions[ActionCreate] || decision.Actions[ActionUpload] {
 		t.Fatalf("expected virtual public root write actions to be disabled")
+	}
+}
+
+func TestUnifiedAuthzEnabledRequiresRemoteMode(t *testing.T) {
+	service := &Service{
+		settingClient: testSettingClient{values: map[string]string{
+			oidcEnabledSettingKey:    "1",
+			oidcConfigModeSettingKey: "remote",
+		}},
+	}
+
+	if !service.UnifiedAuthzEnabled(context.Background()) {
+		t.Fatal("expected remote mode to enable unified authz")
+	}
+
+	service.settingClient = testSettingClient{values: map[string]string{
+		oidcEnabledSettingKey:    "1",
+		oidcConfigModeSettingKey: "standard",
+	}}
+	if service.UnifiedAuthzEnabled(context.Background()) {
+		t.Fatal("expected standard mode to disable unified authz")
 	}
 }

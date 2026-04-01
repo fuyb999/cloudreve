@@ -68,6 +68,30 @@ func TestNormalizeTikaExtsTrimsDotsSpacesAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestFTSSyncFoldersDefaultsDisabled(t *testing.T) {
+	provider := NewProvider(&staticSettingStore{
+		settings: map[string]any{},
+		next:     NewDbDefaultStore(nil),
+	})
+
+	if provider.FTSSyncFolders(context.Background()) {
+		t.Fatal("expected folder sync to be disabled by default")
+	}
+}
+
+func TestFTSSyncFoldersCanBeEnabled(t *testing.T) {
+	provider := NewProvider(&staticSettingStore{
+		settings: map[string]any{
+			"fts_sync_folders": "1",
+		},
+		next: NewDbDefaultStore(nil),
+	})
+
+	if !provider.FTSSyncFolders(context.Background()) {
+		t.Fatal("expected folder sync to be enabled")
+	}
+}
+
 func TestDefaultFTSTikaDocumentExtsCoverExpandedOfficialFormats(t *testing.T) {
 	for _, ext := range []string{
 		"fb2", "chm", "mif",

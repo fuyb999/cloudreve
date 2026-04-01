@@ -6,8 +6,12 @@ import (
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	entuser "github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
@@ -118,6 +122,96 @@ func TestMyNavigatorWalkAllowsPublicSubtreeWhenExplicitlyBypassed(t *testing.T) 
 	}
 }
 
+func TestMyNavigatorToRejectsOtherUserRootForNonAdmin(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	targetUser := &ent.User{ID: 2, Status: entuser.StatusActive}
+	rootModel := testFolderModel(10, 2, 0, "")
+	fileClient := &testMyNavigatorFileClient{
+		children: map[int][]*ent.File{},
+		roots:    map[int]*ent.File{2: rootModel},
+	}
+	navigator := &myNavigator{
+		user:       &ent.User{ID: 1, Edges: ent.UserEdges{Group: &ent.Group{Permissions: testPermissions()}}},
+		l:          logging.NewConsoleLogger(logging.LevelError),
+		fileClient: fileClient,
+		userClient: &testMyNavigatorUserClient{users: map[int]*ent.User{2: targetUser}},
+		config:     &setting.DBFS{MaxPageSize: 100},
+	}
+	navigator.baseNavigator = newBaseNavigator(fileClient, navigator.filter, navigator.user, hasher, navigator.config)
+
+	targetPath, err := fs.NewUriFromString(fs.NewMyUri(hashid.EncodeUserID(hasher, 2)))
+	if err != nil {
+		t.Fatalf("failed to build target uri: %v", err)
+	}
+
+	if _, err := navigator.To(context.Background(), targetPath); err == nil {
+		t.Fatal("expected non-admin access to other user root to be rejected")
+	}
+}
+
+func TestMyNavigatorToAllowsAdminAccessToOtherUserRootReadOnly(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	targetUser := &ent.User{ID: 2, Status: entuser.StatusActive}
+	rootModel := testFolderModel(10, 2, 0, "")
+	fileClient := &testMyNavigatorFileClient{
+		children: map[int][]*ent.File{},
+		roots:    map[int]*ent.File{2: rootModel},
+	}
+	adminUser := &ent.User{
+		ID: 1,
+		Edges: ent.UserEdges{
+			Group: &ent.Group{Permissions: testPermissions(types.GroupPermissionIsAdmin)},
+		},
+	}
+	navigator := &myNavigator{
+		user:       adminUser,
+		l:          logging.NewConsoleLogger(logging.LevelError),
+		fileClient: fileClient,
+		userClient: &testMyNavigatorUserClient{users: map[int]*ent.User{2: targetUser}},
+		config:     &setting.DBFS{MaxPageSize: 100},
+	}
+	navigator.baseNavigator = newBaseNavigator(fileClient, navigator.filter, navigator.user, hasher, navigator.config)
+
+	targetPath, err := fs.NewUriFromString(fs.NewMyUri(hashid.EncodeUserID(hasher, 2)))
+	if err != nil {
+		t.Fatalf("failed to build target uri: %v", err)
+	}
+
+	root, err := navigator.To(context.Background(), targetPath)
+	if err != nil {
+		t.Fatalf("expected admin access to other user root, got error: %v", err)
+	}
+	if root == nil {
+		t.Fatal("expected root file")
+	}
+	if root.Owner() == nil || root.Owner().ID != 2 {
+		t.Fatalf("unexpected root owner: %+v", root.Owner())
+	}
+	if root.View() != nil {
+		t.Fatal("expected foreign user root to disable view sync")
+	}
+	if root.Capabilities() == nil {
+		t.Fatal("expected root capabilities")
+	}
+	if root.Capabilities().Enabled(int(NavigatorCapabilityCreateFile)) {
+		t.Fatal("expected foreign user root to be read-only for create_file")
+	}
+	if !root.Capabilities().Enabled(int(NavigatorCapabilityDownloadFile)) {
+		t.Fatal("expected foreign user root to allow downloads")
+	}
+	if !root.Capabilities().Enabled(int(NavigatorCapabilityListChildren)) {
+		t.Fatal("expected foreign user root to allow listing children")
+	}
+}
+
 func newTestMyNavigator(children map[int][]*ent.File, publicRootID int) *myNavigator {
 	fileClient := &testMyNavigatorFileClient{children: children}
 	publicService := publicshare.NewService(
@@ -163,6 +257,7 @@ func testFileModel(id, ownerID, parentID int, name string) *ent.File {
 type testMyNavigatorFileClient struct {
 	inventory.FileClient
 	children map[int][]*ent.File
+	roots    map[int]*ent.File
 }
 
 func (c *testMyNavigatorFileClient) GetChildFiles(ctx context.Context, args *inventory.ListFileParameters, ownerID int, roots ...*ent.File) (*inventory.ListFileResult, error) {
@@ -184,6 +279,30 @@ func (c *testMyNavigatorFileClient) GetSubtreeFiles(ctx context.Context, root *e
 	return nil, inventory.ErrTreePathQueryUnavailable
 }
 
+func (c *testMyNavigatorFileClient) Root(ctx context.Context, user *ent.User) (*ent.File, error) {
+	if c.roots == nil {
+		return nil, fmt.Errorf("root not found")
+	}
+	root, ok := c.roots[user.ID]
+	if !ok {
+		return nil, fmt.Errorf("root not found")
+	}
+	return root, nil
+}
+
+type testMyNavigatorUserClient struct {
+	inventory.UserClient
+	users map[int]*ent.User
+}
+
+func (c *testMyNavigatorUserClient) GetByID(ctx context.Context, id int) (*ent.User, error) {
+	user, ok := c.users[id]
+	if !ok {
+		return nil, fmt.Errorf("user %d not found", id)
+	}
+	return user, nil
+}
+
 type testMyNavigatorSettingClient struct {
 	inventory.SettingClient
 	values map[string]string
@@ -195,4 +314,12 @@ func (c *testMyNavigatorSettingClient) Get(ctx context.Context, name string) (st
 	}
 
 	return "", fmt.Errorf("setting %q not found", name)
+}
+
+func testPermissions(perms ...types.GroupPermission) *boolset.BooleanSet {
+	bs := &boolset.BooleanSet{}
+	for _, perm := range perms {
+		boolset.Set(perm, true, bs)
+	}
+	return bs
 }

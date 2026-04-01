@@ -1,6 +1,10 @@
 package user
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+)
 
 func TestNormalizeOIDCLoginEntryURL_RewritesYudaoAuthorizeEndpoint(t *testing.T) {
 	discovery := &oidcDiscovery{
@@ -57,5 +61,69 @@ func TestResolveOIDCLocalUserIDRejectsInvalidValue(t *testing.T) {
 	}
 	if _, err := resolveOIDCLocalUserID(&oidcIdentityProfile{ExternalUserID: "0"}); err == nil {
 		t.Fatal("expected non-positive external_user_id to be rejected")
+	}
+}
+
+func TestOIDCRuntimeBindingConfigURL(t *testing.T) {
+	got, err := oidcRuntimeBindingConfigURL("http://localhost:48080/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("oidcRuntimeBindingConfigURL() returned error: %v", err)
+	}
+
+	want := "http://localhost:48080/app-api/authz/integration/runtime/binding-config"
+	if got != want {
+		t.Fatalf("oidcRuntimeBindingConfigURL() = %q, want %q", got, want)
+	}
+}
+
+func TestApplyOIDCRuntimeBindingConfigOverridesLocalEndpoints(t *testing.T) {
+	cfg := &setting.OIDCSetting{
+		BindingCode:  "cloudreve-main",
+		SSOURL:       "http://localhost:5173/sso-local",
+		WellKnownURL: "http://localhost:48080/.well-known/openid-configuration",
+		ClientID:     "cloudreve-local",
+		ClientSecret: "cloudreve-secret",
+		Scope:        "openid user_info user.read",
+	}
+
+	applyOIDCRuntimeBindingConfig(cfg, &oidcRuntimeBindingConfig{
+		BindingCode: "cloudreve-main",
+		ClientID:    "cloudreve",
+		ScopeText:   "openid profile email user.read",
+		AuthProvider: &oidcRuntimeAuthProvider{
+			DiscoveryURL: "http://localhost:48080/.well-known/openid-configuration",
+			SsoURL:       "http://localhost:5173/sso",
+		},
+	})
+
+	if cfg.ClientID != "cloudreve" {
+		t.Fatalf("cfg.ClientID = %q, want %q", cfg.ClientID, "cloudreve")
+	}
+	if cfg.Scope != "openid profile email user.read" {
+		t.Fatalf("cfg.Scope = %q, want remote scope", cfg.Scope)
+	}
+	if cfg.SSOURL != "http://localhost:5173/sso" {
+		t.Fatalf("cfg.SSOURL = %q, want remote sso url", cfg.SSOURL)
+	}
+	if cfg.ClientSecret != "cloudreve-secret" {
+		t.Fatalf("cfg.ClientSecret = %q, want local secret preserved", cfg.ClientSecret)
+	}
+}
+
+func TestShouldUseOIDCRuntimeConfig(t *testing.T) {
+	if shouldUseOIDCRuntimeConfig(&setting.OIDCSetting{
+		Enabled:      true,
+		ConfigMode:   setting.OIDCConfigModeRemote,
+		WellKnownURL: "http://localhost:48080/.well-known/openid-configuration",
+	}) != true {
+		t.Fatal("expected remote mode with well-known url to enable runtime config")
+	}
+
+	if shouldUseOIDCRuntimeConfig(&setting.OIDCSetting{
+		Enabled:      true,
+		ConfigMode:   setting.OIDCConfigModeStandard,
+		WellKnownURL: "http://localhost:48080/.well-known/openid-configuration",
+	}) {
+		t.Fatal("expected standard mode to disable runtime config")
 	}
 }

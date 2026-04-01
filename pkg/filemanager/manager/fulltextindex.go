@@ -859,7 +859,7 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 		return task.StatusError, fmt.Errorf("search indexer is unavailable")
 	}
 
-	uri, err := fm.resolveFTSFileURI(ctx, fileID)
+	fileModel, err := fm.loadFTSFileModel(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
@@ -869,6 +869,28 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 			l.Debug("File %d disappeared before full text sync finished, removed stale index entry.", fileID)
 			return task.StatusCompleted, nil
 		}
+		return task.StatusError, fmt.Errorf("failed to load search file %d: %w", fileID, err)
+	}
+
+	if fileModel.Type == int(types.FileTypeFolder) && !fm.settings.FTSSyncFolders(ctx) {
+		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			return task.StatusError, fmt.Errorf("failed to delete index for folder %d: %w", fileID, err)
+		}
+
+		if fm.canResolveFTSFileURI() {
+			if uri, err := fm.resolveFTSFileURIByModel(ctx, fileModel); err != nil {
+				l.Warning("Failed to resolve uri for skipped folder %d when clearing full text metadata: %s", fileID, err)
+			} else {
+				clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
+			}
+		}
+
+		l.Debug("File %d is a folder and folder synchronization is disabled, removed full text index entry.", fileID)
+		return task.StatusCompleted, nil
+	}
+
+	uri, err := fm.resolveFTSFileURIByModel(ctx, fileModel)
+	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to resolve search uri for file %d: %w", fileID, err)
 	}
 
@@ -1025,13 +1047,21 @@ func (m *manager) resolveFTSFileURI(ctx context.Context, fileID int) (*fs.URI, e
 		return nil, fmt.Errorf("failed to load file model: %w", err)
 	}
 
+	return m.resolveFTSFileURIByModel(ctx, fileModel)
+}
+
+func (m *manager) resolveFTSFileURIByModel(ctx context.Context, fileModel *ent.File) (*fs.URI, error) {
+	if fileModel == nil {
+		return nil, fmt.Errorf("failed to resolve file uri: file model is nil")
+	}
+
 	ownerManager, err := m.fileManagerForOwner(ctx, fileModel.OwnerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load file owner context: %w", err)
 	}
 	defer ownerManager.Recycle()
 
-	traversed, err := ownerManager.TraverseFile(ctx, fileID)
+	traversed, err := ownerManager.TraverseFile(ctx, fileModel.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve file uri: %w", err)
 	}
@@ -1042,6 +1072,20 @@ func (m *manager) resolveFTSFileURI(ctx context.Context, fileID int) (*fs.URI, e
 	}
 
 	return uri, nil
+}
+
+func (m *manager) canResolveFTSFileURI() bool {
+	if m == nil || m.dep == nil {
+		return false
+	}
+	if m.dep.FileClient() == nil || m.dep.ConfigProvider() == nil || m.dep.HashIDEncoder() == nil {
+		return false
+	}
+	if m.user == nil && m.dep.UserClient() == nil {
+		return false
+	}
+
+	return true
 }
 
 func shouldIgnoreFTSSyncError(err error) bool {
