@@ -40,6 +40,9 @@ func TestNewIniConfigProviderValidConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(confPath, []byte(`
 [System]
 Listen = :3000
+ForceColor = true
+CallerMode = on
+StacktraceMode = error
 SessionSecret = test-secret
 
 [Database]
@@ -55,6 +58,9 @@ TablePrefix = v3_
 	provider, err := NewIniConfigProvider(confPath, logging.NewConsoleLogger(logging.LevelError))
 	require.NoError(t, err)
 	require.Equal(t, ":3000", provider.System().Listen)
+	require.True(t, provider.System().ForceColor)
+	require.Equal(t, "on", provider.System().CallerMode)
+	require.Equal(t, "error", provider.System().StacktraceMode)
 	require.Equal(t, MySqlDB, provider.Database().Type)
 }
 

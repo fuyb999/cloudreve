@@ -150,6 +150,14 @@ func (i *iniConfigProvider) OptionOverwrite() map[string]any {
 
 const defaultConf = `[System]
 Debug = false
+; 强制输出 ANSI 颜色。IDEA Debug Console 等非 TTY 场景可开启。
+ForceColor = false
+; 调用点显示策略：auto=仅 debug 模式显示；on=始终显示；off=始终关闭。
+CallerMode = off
+; 堆栈输出策略：off=关闭；panic=仅 panic/recover 输出；error=error/panic 输出；all=所有级别输出。
+StacktraceMode = panic
+; 日志级别：debug/info/warning/error
+LogLevel = info
 Mode = master
 Listen = :5212
 SessionSecret = {SessionSecret}

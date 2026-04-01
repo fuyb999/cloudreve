@@ -329,8 +329,20 @@ func (d *dependency) Logger() logging.Logger {
 		logLevel = logging.LevelDebug
 	}
 
-	d.logger = logging.NewConsoleLogger(logLevel)
-	d.logger.Info("Logger initialized with LogLevel=%q.", logLevel)
+	d.logger = logging.NewConsoleLogger(
+		logLevel,
+		logging.WithForceColor(config.System().ForceColor),
+		logging.WithCallerMode(logging.CallerMode(config.System().CallerMode)),
+		logging.WithStacktraceMode(logging.StacktraceMode(config.System().StacktraceMode)),
+	)
+	logging.SetDefaultLogger(d.logger)
+	d.logger.Info(
+		"Logger initialized with LogLevel=%q, ForceColor=%t, CallerMode=%q, StacktraceMode=%q.",
+		logLevel,
+		config.System().ForceColor,
+		config.System().CallerMode,
+		config.System().StacktraceMode,
+	)
 	return d.logger
 }
 

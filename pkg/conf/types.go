@@ -40,15 +40,18 @@ var (
 
 // System 系统通用配置
 type System struct {
-	Mode          SysMode `validate:"eq=master|eq=slave"`
-	Listen        string  `validate:"required"`
-	Debug         bool
-	SessionSecret string
-	HashIDSalt    string // deprecated
-	GracePeriod   int    `validate:"gte=0"`
-	ProxyHeader   string
-	LogLevel      string `validate:"oneof=debug info warning error"`
-	Pprof         string // Address to listen for pprof, e.g. "localhost:6060". Empty to disable.
+	Mode           SysMode `validate:"eq=master|eq=slave"`
+	Listen         string  `validate:"required"`
+	Debug          bool
+	ForceColor     bool
+	CallerMode     string `validate:"omitempty,oneof=auto on off"`
+	StacktraceMode string `validate:"omitempty,oneof=off panic error all"`
+	SessionSecret  string
+	HashIDSalt     string // deprecated
+	GracePeriod    int    `validate:"gte=0"`
+	ProxyHeader    string
+	LogLevel       string `validate:"oneof=debug info warning error"`
+	Pprof          string // Address to listen for pprof, e.g. "localhost:6060". Empty to disable.
 }
 
 type SSL struct {
@@ -208,11 +211,13 @@ var DatabaseConfig = &Database{
 
 // SystemConfig 系统公用配置
 var SystemConfig = &System{
-	Debug:       false,
-	Mode:        MasterMode,
-	Listen:      ":5212",
-	ProxyHeader: "",
-	LogLevel:    "info",
+	Debug:          false,
+	Mode:           MasterMode,
+	Listen:         ":5212",
+	CallerMode:     "off",
+	StacktraceMode: "panic",
+	ProxyHeader:    "",
+	LogLevel:       "info",
 }
 
 // CORSConfig 跨域配置

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -285,7 +284,7 @@ func (q *queue) run(ctx context.Context, t Task) (task.Status, error) {
 		// handle panic issue
 		defer func() {
 			if p := recover(); p != nil {
-				q.logger.Error("panic in queue %q: %s", q.name, debug.Stack())
+				logging.Recover(q.logger, "panic in queue %q: %v", q.name, p)
 				panicChan <- p
 			}
 		}()

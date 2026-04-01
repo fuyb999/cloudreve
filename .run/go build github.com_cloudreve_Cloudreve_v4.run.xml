@@ -4,6 +4,7 @@
     <working_directory value="$PROJECT_DIR$" />
     <envs>
       <env name="CR_CONF_System.Debug" value="true" />
+      <env name="CR_CONF_System.ForceColor" value="true" />
       <env name="CR_CONF_Database.Type" value="postgres" />
       <env name="CR_CONF_Database.Host" value="127.0.0.1" />
       <env name="CR_CONF_Database.Port" value="5432" />

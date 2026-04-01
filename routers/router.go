@@ -45,7 +45,7 @@ func InitRouter(dep dependency.Dep) *gin.Engine {
 func newGinEngine(dep dependency.Dep) *gin.Engine {
 	r := gin.New()
 	r.ContextWithFallback = true
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery())
 	r.Use(middleware.InitializeHandling(dep))
 	if dep.ConfigProvider().System().Mode == conf.SlaveMode {
 		r.Use(middleware.InitializeHandlingSlave())

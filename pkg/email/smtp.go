@@ -116,7 +116,7 @@ func (client *SMTPPool) Init() {
 		defer func() {
 			if err := recover(); err != nil {
 				client.chOpen = false
-				client.l.Error("Exception while sending email: %s, queue will be reset in 10 seconds.", err)
+				logging.Recover(client.l, "Exception while sending email: %v, queue will be reset in 10 seconds.", err)
 				time.Sleep(time.Duration(10) * time.Second)
 				client.Init()
 			}
