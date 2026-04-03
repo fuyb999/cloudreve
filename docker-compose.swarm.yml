@@ -192,7 +192,7 @@ services:
         max_replicas_per_node: 1
 
   postgresql-1:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -230,7 +230,7 @@ services:
           - ${PG_NODE_1_CONSTRAINT:-node.labels.cloudreve.pg1==true}
 
   postgresql-2:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -268,7 +268,7 @@ services:
           - ${PG_NODE_2_CONSTRAINT:-node.labels.cloudreve.pg2==true}
 
   postgresql-3:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -306,7 +306,7 @@ services:
           - ${PG_NODE_3_CONSTRAINT:-node.labels.cloudreve.pg3==true}
 
   pgpool:
-    image: ${PGPOOL_IMAGE:-bitnami/pgpool:4}
+    image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
     environment:
       PGPOOL_BACKEND_NODES: 0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432
       PGPOOL_POSTGRES_USERNAME: postgres
@@ -346,7 +346,7 @@ services:
         max_replicas_per_node: 1
 
   redis-1:
-    image: ${REDIS_IMAGE:-bitnami/redis:7.4}
+    image: ${REDIS_IMAGE:-bitnami/redis:latest}
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_REPLICATION_MODE: master
@@ -375,7 +375,7 @@ services:
           - ${REDIS_NODE_1_CONSTRAINT:-node.labels.cloudreve.redis1==true}
 
   redis-2:
-    image: ${REDIS_IMAGE:-bitnami/redis:7.4}
+    image: ${REDIS_IMAGE:-bitnami/redis:latest}
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_REPLICATION_MODE: slave
@@ -407,7 +407,7 @@ services:
           - ${REDIS_NODE_2_CONSTRAINT:-node.labels.cloudreve.redis2==true}
 
   redis-3:
-    image: ${REDIS_IMAGE:-bitnami/redis:7.4}
+    image: ${REDIS_IMAGE:-bitnami/redis:latest}
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_REPLICATION_MODE: slave
@@ -439,7 +439,7 @@ services:
           - ${REDIS_NODE_3_CONSTRAINT:-node.labels.cloudreve.redis3==true}
 
   redis-sentinel:
-    image: ${REDIS_SENTINEL_IMAGE:-bitnami/redis-sentinel:7.4}
+    image: ${REDIS_SENTINEL_IMAGE:-bitnami/redis-sentinel:latest}
     environment:
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
@@ -525,11 +525,11 @@ services:
       ES_JAVA_OPTS: -Xms512m -Xmx512m
     ports:
       - target: 9200
-        published: 9200
+        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
         protocol: tcp
         mode: ingress
       - target: 9300
-        published: 9300
+        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
         protocol: tcp
         mode: ingress
     volumes:
@@ -582,6 +582,9 @@ networks:
   cloudreve_backend:
     driver: overlay
     attachable: true
+    ipam:
+      config:
+        - subnet: ${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}
 
 volumes:
   cloudreve_master_runtime:
