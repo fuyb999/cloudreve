@@ -24,6 +24,8 @@ type Tx struct {
 	Entity *EntityClient
 	// ExternalIdentity is the client for interacting with the ExternalIdentity builders.
 	ExternalIdentity *ExternalIdentityClient
+	// FTSExternalJob is the client for interacting with the FTSExternalJob builders.
+	FTSExternalJob *FTSExternalJobClient
 	// File is the client for interacting with the File builders.
 	File *FileClient
 	// FsEvent is the client for interacting with the FsEvent builders.
@@ -188,6 +190,7 @@ func (tx *Tx) init() {
 	tx.DirectLink = NewDirectLinkClient(tx.config)
 	tx.Entity = NewEntityClient(tx.config)
 	tx.ExternalIdentity = NewExternalIdentityClient(tx.config)
+	tx.FTSExternalJob = NewFTSExternalJobClient(tx.config)
 	tx.File = NewFileClient(tx.config)
 	tx.FsEvent = NewFsEventClient(tx.config)
 	tx.Group = NewGroupClient(tx.config)

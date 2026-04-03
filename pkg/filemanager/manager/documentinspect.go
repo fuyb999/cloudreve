@@ -73,7 +73,7 @@ func NewDocumentInspectTask(ctx context.Context, uri *fs.URI, fileID, ownerID, e
 			DirectOwner: creator,
 			Task: &ent.Task{
 				Type:          queue.DocumentInspectTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},

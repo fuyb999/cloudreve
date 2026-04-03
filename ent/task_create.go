@@ -298,7 +298,7 @@ func (tc *TaskCreate) createSpec() (*Task, *sqlgraph.CreateSpec) {
 	}
 	if value, ok := tc.mutation.CorrelationID(); ok {
 		_spec.SetField(task.FieldCorrelationID, field.TypeUUID, value)
-		_node.CorrelationID = value
+		_node.CorrelationID = &value
 	}
 	if nodes := tc.mutation.UserIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

@@ -64,7 +64,7 @@ func NewMediaMetaTask(ctx context.Context, uri *fs.URI, fileID, ownerID, entityI
 			DirectOwner: creator,
 			Task: &ent.Task{
 				Type:          queue.MediaMetaTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},

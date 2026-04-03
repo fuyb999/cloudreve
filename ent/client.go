@@ -22,6 +22,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
+	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
 	"github.com/cloudreve/Cloudreve/v4/ent/metadata"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
@@ -53,6 +54,8 @@ type Client struct {
 	Entity *EntityClient
 	// ExternalIdentity is the client for interacting with the ExternalIdentity builders.
 	ExternalIdentity *ExternalIdentityClient
+	// FTSExternalJob is the client for interacting with the FTSExternalJob builders.
+	FTSExternalJob *FTSExternalJobClient
 	// File is the client for interacting with the File builders.
 	File *FileClient
 	// FsEvent is the client for interacting with the FsEvent builders.
@@ -97,6 +100,7 @@ func (c *Client) init() {
 	c.DirectLink = NewDirectLinkClient(c.config)
 	c.Entity = NewEntityClient(c.config)
 	c.ExternalIdentity = NewExternalIdentityClient(c.config)
+	c.FTSExternalJob = NewFTSExternalJobClient(c.config)
 	c.File = NewFileClient(c.config)
 	c.FsEvent = NewFsEventClient(c.config)
 	c.Group = NewGroupClient(c.config)
@@ -208,6 +212,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		DirectLink:       NewDirectLinkClient(cfg),
 		Entity:           NewEntityClient(cfg),
 		ExternalIdentity: NewExternalIdentityClient(cfg),
+		FTSExternalJob:   NewFTSExternalJobClient(cfg),
 		File:             NewFileClient(cfg),
 		FsEvent:          NewFsEventClient(cfg),
 		Group:            NewGroupClient(cfg),
@@ -246,6 +251,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		DirectLink:       NewDirectLinkClient(cfg),
 		Entity:           NewEntityClient(cfg),
 		ExternalIdentity: NewExternalIdentityClient(cfg),
+		FTSExternalJob:   NewFTSExternalJobClient(cfg),
 		File:             NewFileClient(cfg),
 		FsEvent:          NewFsEventClient(cfg),
 		Group:            NewGroupClient(cfg),
@@ -289,9 +295,10 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.ExternalIdentity, c.File,
-		c.FsEvent, c.Group, c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey,
-		c.Setting, c.Share, c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
+		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.ExternalIdentity,
+		c.FTSExternalJob, c.File, c.FsEvent, c.Group, c.Metadata, c.Node,
+		c.OAuthClient, c.OAuthGrant, c.Passkey, c.Setting, c.Share, c.StoragePolicy,
+		c.SyncthingDevice, c.Task, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -301,9 +308,10 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.ExternalIdentity, c.File,
-		c.FsEvent, c.Group, c.Metadata, c.Node, c.OAuthClient, c.OAuthGrant, c.Passkey,
-		c.Setting, c.Share, c.StoragePolicy, c.SyncthingDevice, c.Task, c.User,
+		c.AuditLog, c.DavAccount, c.DirectLink, c.Entity, c.ExternalIdentity,
+		c.FTSExternalJob, c.File, c.FsEvent, c.Group, c.Metadata, c.Node,
+		c.OAuthClient, c.OAuthGrant, c.Passkey, c.Setting, c.Share, c.StoragePolicy,
+		c.SyncthingDevice, c.Task, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -322,6 +330,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Entity.mutate(ctx, m)
 	case *ExternalIdentityMutation:
 		return c.ExternalIdentity.mutate(ctx, m)
+	case *FTSExternalJobMutation:
+		return c.FTSExternalJob.mutate(ctx, m)
 	case *FileMutation:
 		return c.File.mutate(ctx, m)
 	case *FsEventMutation:
@@ -1203,6 +1213,141 @@ func (c *ExternalIdentityClient) mutate(ctx context.Context, m *ExternalIdentity
 		return (&ExternalIdentityDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown ExternalIdentity mutation op: %q", m.Op())
+	}
+}
+
+// FTSExternalJobClient is a client for the FTSExternalJob schema.
+type FTSExternalJobClient struct {
+	config
+}
+
+// NewFTSExternalJobClient returns a client for the FTSExternalJob from the given config.
+func NewFTSExternalJobClient(c config) *FTSExternalJobClient {
+	return &FTSExternalJobClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `ftsexternaljob.Hooks(f(g(h())))`.
+func (c *FTSExternalJobClient) Use(hooks ...Hook) {
+	c.hooks.FTSExternalJob = append(c.hooks.FTSExternalJob, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `ftsexternaljob.Intercept(f(g(h())))`.
+func (c *FTSExternalJobClient) Intercept(interceptors ...Interceptor) {
+	c.inters.FTSExternalJob = append(c.inters.FTSExternalJob, interceptors...)
+}
+
+// Create returns a builder for creating a FTSExternalJob entity.
+func (c *FTSExternalJobClient) Create() *FTSExternalJobCreate {
+	mutation := newFTSExternalJobMutation(c.config, OpCreate)
+	return &FTSExternalJobCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of FTSExternalJob entities.
+func (c *FTSExternalJobClient) CreateBulk(builders ...*FTSExternalJobCreate) *FTSExternalJobCreateBulk {
+	return &FTSExternalJobCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FTSExternalJobClient) MapCreateBulk(slice any, setFunc func(*FTSExternalJobCreate, int)) *FTSExternalJobCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FTSExternalJobCreateBulk{err: fmt.Errorf("calling to FTSExternalJobClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FTSExternalJobCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FTSExternalJobCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for FTSExternalJob.
+func (c *FTSExternalJobClient) Update() *FTSExternalJobUpdate {
+	mutation := newFTSExternalJobMutation(c.config, OpUpdate)
+	return &FTSExternalJobUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FTSExternalJobClient) UpdateOne(fej *FTSExternalJob) *FTSExternalJobUpdateOne {
+	mutation := newFTSExternalJobMutation(c.config, OpUpdateOne, withFTSExternalJob(fej))
+	return &FTSExternalJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FTSExternalJobClient) UpdateOneID(id int) *FTSExternalJobUpdateOne {
+	mutation := newFTSExternalJobMutation(c.config, OpUpdateOne, withFTSExternalJobID(id))
+	return &FTSExternalJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for FTSExternalJob.
+func (c *FTSExternalJobClient) Delete() *FTSExternalJobDelete {
+	mutation := newFTSExternalJobMutation(c.config, OpDelete)
+	return &FTSExternalJobDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FTSExternalJobClient) DeleteOne(fej *FTSExternalJob) *FTSExternalJobDeleteOne {
+	return c.DeleteOneID(fej.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FTSExternalJobClient) DeleteOneID(id int) *FTSExternalJobDeleteOne {
+	builder := c.Delete().Where(ftsexternaljob.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FTSExternalJobDeleteOne{builder}
+}
+
+// Query returns a query builder for FTSExternalJob.
+func (c *FTSExternalJobClient) Query() *FTSExternalJobQuery {
+	return &FTSExternalJobQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFTSExternalJob},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a FTSExternalJob entity by its id.
+func (c *FTSExternalJobClient) Get(ctx context.Context, id int) (*FTSExternalJob, error) {
+	return c.Query().Where(ftsexternaljob.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FTSExternalJobClient) GetX(ctx context.Context, id int) *FTSExternalJob {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FTSExternalJobClient) Hooks() []Hook {
+	hooks := c.hooks.FTSExternalJob
+	return append(hooks[:len(hooks):len(hooks)], ftsexternaljob.Hooks[:]...)
+}
+
+// Interceptors returns the client interceptors.
+func (c *FTSExternalJobClient) Interceptors() []Interceptor {
+	inters := c.inters.FTSExternalJob
+	return append(inters[:len(inters):len(inters)], ftsexternaljob.Interceptors[:]...)
+}
+
+func (c *FTSExternalJobClient) mutate(ctx context.Context, m *FTSExternalJobMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FTSExternalJobCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FTSExternalJobUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FTSExternalJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FTSExternalJobDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown FTSExternalJob mutation op: %q", m.Op())
 	}
 }
 
@@ -3722,14 +3867,14 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AuditLog, DavAccount, DirectLink, Entity, ExternalIdentity, File, FsEvent,
-		Group, Metadata, Node, OAuthClient, OAuthGrant, Passkey, Setting, Share,
-		StoragePolicy, SyncthingDevice, Task, User []ent.Hook
+		AuditLog, DavAccount, DirectLink, Entity, ExternalIdentity, FTSExternalJob,
+		File, FsEvent, Group, Metadata, Node, OAuthClient, OAuthGrant, Passkey,
+		Setting, Share, StoragePolicy, SyncthingDevice, Task, User []ent.Hook
 	}
 	inters struct {
-		AuditLog, DavAccount, DirectLink, Entity, ExternalIdentity, File, FsEvent,
-		Group, Metadata, Node, OAuthClient, OAuthGrant, Passkey, Setting, Share,
-		StoragePolicy, SyncthingDevice, Task, User []ent.Interceptor
+		AuditLog, DavAccount, DirectLink, Entity, ExternalIdentity, FTSExternalJob,
+		File, FsEvent, Group, Metadata, Node, OAuthClient, OAuthGrant, Passkey,
+		Setting, Share, StoragePolicy, SyncthingDevice, Task, User []ent.Interceptor
 	}
 )
 

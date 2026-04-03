@@ -21,6 +21,9 @@ type Entity func(*sql.Selector)
 // ExternalIdentity is the predicate function for externalidentity builders.
 type ExternalIdentity func(*sql.Selector)
 
+// FTSExternalJob is the predicate function for ftsexternaljob builders.
+type FTSExternalJob func(*sql.Selector)
+
 // File is the predicate function for file builders.
 type File func(*sql.Selector)
 

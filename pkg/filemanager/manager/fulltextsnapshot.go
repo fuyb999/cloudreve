@@ -320,16 +320,24 @@ func extractFTSContent(
 		sidecarManifest    *FTSSidecarManifest
 		internal           *manager
 		sidecarCfg         = struct {
-			textEnabled   bool
-			assetsEnabled bool
+			reuseTextEnabled     bool
+			reuseAssetsEnabled   bool
+			persistTextEnabled   bool
+			persistAssetsEnabled bool
 		}{}
 	)
 	if loaded, ok := ownerManager.(*manager); ok {
 		internal = loaded
 		cfg := internal.settings.FTSTikaExtractor(ctx)
-		sidecarCfg.textEnabled = cfg.SidecarTextEnabled
-		sidecarCfg.assetsEnabled = cfg.SidecarAssetsEnabled
 		sidecarContent, sidecarAttachments, sidecarManifest, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri)
+		sidecarCfg.reuseTextEnabled = cfg.SidecarTextEnabled
+		sidecarCfg.reuseAssetsEnabled = cfg.SidecarAssetsEnabled
+		sidecarCfg.persistTextEnabled = cfg.SidecarTextEnabled
+		sidecarCfg.persistAssetsEnabled = cfg.SidecarAssetsEnabled
+		if sidecarManifest != nil && sidecarManifest.Provider == ftsSidecarProviderExternal {
+			sidecarCfg.reuseTextEnabled = true
+			sidecarCfg.reuseAssetsEnabled = true
+		}
 	}
 
 	plan := buildFTSExtractionPlan(
@@ -340,8 +348,10 @@ func extractFTSContent(
 		sidecarAttachments,
 		hasCurrentSidecar,
 		sidecarManifest,
-		sidecarCfg.textEnabled,
-		sidecarCfg.assetsEnabled,
+		sidecarCfg.reuseTextEnabled,
+		sidecarCfg.reuseAssetsEnabled,
+		sidecarCfg.persistTextEnabled,
+		sidecarCfg.persistAssetsEnabled,
 	)
 
 	text := ""
@@ -383,9 +393,9 @@ func extractFTSContent(
 	}
 	if plan.ShouldPersistSidecar {
 		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, uri, primaryEntity, source, text)
-		if internal != nil && sidecarCfg.assetsEnabled && len(attachments) > 0 {
+		if internal != nil && sidecarCfg.persistAssetsEnabled && len(attachments) > 0 {
 			if refreshedText, refreshedAttachments, _, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri); ok {
-				if sidecarCfg.textEnabled && text == "" {
+				if sidecarCfg.persistTextEnabled && text == "" {
 					text = refreshedText
 				}
 				if len(refreshedAttachments) > 0 {
@@ -413,12 +423,14 @@ func buildFTSExtractionPlan(
 	currentAttachments []searcher.SearchAttachmentDocument,
 	hasCurrentSidecar bool,
 	sidecarManifest *FTSSidecarManifest,
-	textSidecarEnabled bool,
-	assetSidecarEnabled bool,
+	reuseTextSidecarEnabled bool,
+	reuseAssetSidecarEnabled bool,
+	persistTextSidecarEnabled bool,
+	persistAssetSidecarEnabled bool,
 ) ftsExtractionPlan {
 	plan := ftsExtractionPlan{
-		ReuseSidecarText:        textSidecarEnabled && !opts.ForceTextExtraction,
-		ReuseSidecarAttachments: assetSidecarEnabled && !opts.ForceAttachmentExtraction,
+		ReuseSidecarText:        reuseTextSidecarEnabled && !opts.ForceTextExtraction,
+		ReuseSidecarAttachments: reuseAssetSidecarEnabled && !opts.ForceAttachmentExtraction,
 	}
 
 	textReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.TextReady
@@ -435,11 +447,11 @@ func buildFTSExtractionPlan(
 			!plan.ReuseSidecarAttachments ||
 			(len(currentAttachments) == 0 && !assetsReady))
 
-	plan.ShouldPersistSidecar = (textSidecarEnabled || assetSidecarEnabled) &&
+	plan.ShouldPersistSidecar = (persistTextSidecarEnabled || persistAssetSidecarEnabled) &&
 		!opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
 		(!hasCurrentSidecar ||
-			(textSidecarEnabled && (opts.ForceTextExtraction || !textReady)) ||
-			(assetSidecarEnabled && (opts.ForceAttachmentExtraction || !assetsReady)))
+			(persistTextSidecarEnabled && (opts.ForceTextExtraction || !textReady)) ||
+			(persistAssetSidecarEnabled && (opts.ForceAttachmentExtraction || !assetsReady)))
 
 	return plan
 }
@@ -477,6 +489,15 @@ func (m *manager) loadFTSContentFromSidecar(
 
 	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "content.txt"); ok {
 		content = strings.TrimSpace(string(raw))
+	}
+	if manifest.Provider == ftsSidecarProviderExternal {
+		if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "attachments.json"); ok {
+			var attachments []searcher.SearchAttachmentDocument
+			if err := json.Unmarshal(raw, &attachments); err == nil {
+				return content, attachments, manifest, true
+			}
+		}
+		return content, nil, manifest, true
 	}
 	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "rmeta.json"); ok {
 		rmetaRaw = raw

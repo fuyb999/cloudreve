@@ -15,6 +15,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
+	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
 	"github.com/cloudreve/Cloudreve/v4/ent/metadata"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
@@ -219,6 +220,33 @@ func (f TraverseExternalIdentity) Traverse(ctx context.Context, q ent.Query) err
 		return f(ctx, q)
 	}
 	return fmt.Errorf("unexpected query type %T. expect *ent.ExternalIdentityQuery", q)
+}
+
+// The FTSExternalJobFunc type is an adapter to allow the use of ordinary function as a Querier.
+type FTSExternalJobFunc func(context.Context, *ent.FTSExternalJobQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f FTSExternalJobFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.FTSExternalJobQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.FTSExternalJobQuery", q)
+}
+
+// The TraverseFTSExternalJob type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseFTSExternalJob func(context.Context, *ent.FTSExternalJobQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseFTSExternalJob) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseFTSExternalJob) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.FTSExternalJobQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.FTSExternalJobQuery", q)
 }
 
 // The FileFunc type is an adapter to allow the use of ordinary function as a Querier.
@@ -612,6 +640,8 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.EntityQuery, predicate.Entity, entity.OrderOption]{typ: ent.TypeEntity, tq: q}, nil
 	case *ent.ExternalIdentityQuery:
 		return &query[*ent.ExternalIdentityQuery, predicate.ExternalIdentity, externalidentity.OrderOption]{typ: ent.TypeExternalIdentity, tq: q}, nil
+	case *ent.FTSExternalJobQuery:
+		return &query[*ent.FTSExternalJobQuery, predicate.FTSExternalJob, ftsexternaljob.OrderOption]{typ: ent.TypeFTSExternalJob, tq: q}, nil
 	case *ent.FileQuery:
 		return &query[*ent.FileQuery, predicate.File, file.OrderOption]{typ: ent.TypeFile, tq: q}, nil
 	case *ent.FsEventQuery:

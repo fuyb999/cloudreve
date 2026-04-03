@@ -34,6 +34,12 @@ func (m *ExternalIdentityMutation) SetRawID(t int) {
 
 // SetUpdatedAt sets the "updated_at" field.
 
+func (m *FTSExternalJobMutation) SetRawID(t int) {
+	m.id = &t
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+
 func (m *FileMutation) SetRawID(t int) {
 	m.id = &t
 }

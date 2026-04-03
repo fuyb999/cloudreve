@@ -91,7 +91,7 @@ func NewExtractArchiveTask(ctx context.Context, src, dst, encoding, password str
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.ExtractArchiveTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},
@@ -584,7 +584,7 @@ func NewSlaveExtractArchiveTask(ctx context.Context, props *types.SlaveTaskProps
 			DBTask: &queue.DBTask{
 				Task: &ent.Task{
 					ID:            id,
-					CorrelationID: logging.CorrelationID(ctx),
+					CorrelationID: logging.NillableCorrelationID(ctx),
 					PublicState: &types.TaskPublicState{
 						SlaveTaskProps: props,
 					},

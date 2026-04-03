@@ -70,7 +70,7 @@ func NewImportTask(ctx context.Context, u *ent.User, src string, recursive bool,
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.ImportTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},

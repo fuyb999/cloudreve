@@ -539,7 +539,7 @@ func newUploadSentinelCheckTask(ctx context.Context, uploadSession *fs.UploadSes
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.UploadSentinelCheckTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState: &types.TaskPublicState{
 					ResumeTime: resumeAfter.Unix(),

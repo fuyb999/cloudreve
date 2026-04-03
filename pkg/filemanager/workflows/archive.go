@@ -90,7 +90,7 @@ func NewCreateArchiveTask(ctx context.Context, src []string, dst string) (queue.
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.CreateArchiveTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},
@@ -549,7 +549,7 @@ func NewSlaveCreateArchiveTask(ctx context.Context, props *types.SlaveTaskProps,
 			DBTask: &queue.DBTask{
 				Task: &ent.Task{
 					ID:            id,
-					CorrelationID: logging.CorrelationID(ctx),
+					CorrelationID: logging.NillableCorrelationID(ctx),
 					PublicState: &types.TaskPublicState{
 						SlaveTaskProps: props,
 					},

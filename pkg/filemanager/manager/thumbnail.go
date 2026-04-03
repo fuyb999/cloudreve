@@ -257,7 +257,7 @@ func newGenerateThumbTask(ctx context.Context, m *manager, uri *fs.URI, ext stri
 		InMemoryTask: &queue.InMemoryTask{
 			DBTask: &queue.DBTask{
 				Task: &ent.Task{
-					CorrelationID: logging.CorrelationID(ctx),
+					CorrelationID: logging.NillableCorrelationID(ctx),
 					PublicState:   &types.TaskPublicState{},
 				},
 			},

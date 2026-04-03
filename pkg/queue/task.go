@@ -353,7 +353,9 @@ func (t *DBTask) CorrelationID() uuid.UUID {
 	defer t.mu.Unlock()
 
 	if t.Task != nil {
-		return t.Task.CorrelationID
+		if t.Task.CorrelationID != nil {
+			return *t.Task.CorrelationID
+		}
 	}
 	return uuid.Nil
 }

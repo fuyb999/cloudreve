@@ -12,6 +12,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
+	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
 	"github.com/cloudreve/Cloudreve/v4/ent/metadata"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
@@ -175,6 +176,45 @@ func init() {
 	externalidentityDescClaims := externalidentityFields[10].Descriptor()
 	// externalidentity.DefaultClaims holds the default value on creation for the claims field.
 	externalidentity.DefaultClaims = externalidentityDescClaims.Default.(map[string]interface{})
+	ftsexternaljobMixin := schema.FTSExternalJob{}.Mixin()
+	ftsexternaljobMixinHooks0 := ftsexternaljobMixin[0].Hooks()
+	ftsexternaljob.Hooks[0] = ftsexternaljobMixinHooks0[0]
+	ftsexternaljobMixinInters0 := ftsexternaljobMixin[0].Interceptors()
+	ftsexternaljob.Interceptors[0] = ftsexternaljobMixinInters0[0]
+	ftsexternaljobMixinFields0 := ftsexternaljobMixin[0].Fields()
+	_ = ftsexternaljobMixinFields0
+	ftsexternaljobFields := schema.FTSExternalJob{}.Fields()
+	_ = ftsexternaljobFields
+	// ftsexternaljobDescCreatedAt is the schema descriptor for created_at field.
+	ftsexternaljobDescCreatedAt := ftsexternaljobMixinFields0[0].Descriptor()
+	// ftsexternaljob.DefaultCreatedAt holds the default value on creation for the created_at field.
+	ftsexternaljob.DefaultCreatedAt = ftsexternaljobDescCreatedAt.Default.(func() time.Time)
+	// ftsexternaljobDescUpdatedAt is the schema descriptor for updated_at field.
+	ftsexternaljobDescUpdatedAt := ftsexternaljobMixinFields0[1].Descriptor()
+	// ftsexternaljob.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	ftsexternaljob.DefaultUpdatedAt = ftsexternaljobDescUpdatedAt.Default.(func() time.Time)
+	// ftsexternaljob.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	ftsexternaljob.UpdateDefaultUpdatedAt = ftsexternaljobDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// ftsexternaljobDescStatus is the schema descriptor for status field.
+	ftsexternaljobDescStatus := ftsexternaljobFields[1].Descriptor()
+	// ftsexternaljob.DefaultStatus holds the default value on creation for the status field.
+	ftsexternaljob.DefaultStatus = ftsexternaljobDescStatus.Default.(string)
+	// ftsexternaljobDescMode is the schema descriptor for mode field.
+	ftsexternaljobDescMode := ftsexternaljobFields[6].Descriptor()
+	// ftsexternaljob.DefaultMode holds the default value on creation for the mode field.
+	ftsexternaljob.DefaultMode = ftsexternaljobDescMode.Default.(string)
+	// ftsexternaljobDescTriggerReason is the schema descriptor for trigger_reason field.
+	ftsexternaljobDescTriggerReason := ftsexternaljobFields[7].Descriptor()
+	// ftsexternaljob.DefaultTriggerReason holds the default value on creation for the trigger_reason field.
+	ftsexternaljob.DefaultTriggerReason = ftsexternaljobDescTriggerReason.Default.(string)
+	// ftsexternaljobDescAttempt is the schema descriptor for attempt field.
+	ftsexternaljobDescAttempt := ftsexternaljobFields[8].Descriptor()
+	// ftsexternaljob.DefaultAttempt holds the default value on creation for the attempt field.
+	ftsexternaljob.DefaultAttempt = ftsexternaljobDescAttempt.Default.(int)
+	// ftsexternaljobDescRequestedAt is the schema descriptor for requested_at field.
+	ftsexternaljobDescRequestedAt := ftsexternaljobFields[13].Descriptor()
+	// ftsexternaljob.DefaultRequestedAt holds the default value on creation for the requested_at field.
+	ftsexternaljob.DefaultRequestedAt = ftsexternaljobDescRequestedAt.Default.(func() time.Time)
 	fileHooks := schema.File{}.Hooks()
 	file.Hooks[0] = fileHooks[0]
 	fileFields := schema.File{}.Fields()

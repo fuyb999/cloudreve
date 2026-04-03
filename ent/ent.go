@@ -19,6 +19,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
+	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
 	"github.com/cloudreve/Cloudreve/v4/ent/metadata"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
@@ -96,6 +97,7 @@ func checkColumn(table, column string) error {
 			directlink.Table:       directlink.ValidColumn,
 			entity.Table:           entity.ValidColumn,
 			externalidentity.Table: externalidentity.ValidColumn,
+			ftsexternaljob.Table:   ftsexternaljob.ValidColumn,
 			file.Table:             file.ValidColumn,
 			fsevent.Table:          fsevent.ValidColumn,
 			group.Table:            group.ValidColumn,

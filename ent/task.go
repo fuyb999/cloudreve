@@ -36,7 +36,7 @@ type Task struct {
 	// PrivateState holds the value of the "private_state" field.
 	PrivateState string `json:"private_state,omitempty"`
 	// CorrelationID holds the value of the "correlation_id" field.
-	CorrelationID uuid.UUID `json:"correlation_id,omitempty"`
+	CorrelationID *uuid.UUID `json:"correlation_id,omitempty"`
 	// UserTasks holds the value of the "user_tasks" field.
 	UserTasks int `json:"user_tasks,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -72,6 +72,8 @@ func (*Task) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case task.FieldCorrelationID:
+			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case task.FieldPublicState:
 			values[i] = new([]byte)
 		case task.FieldID, task.FieldUserTasks:
@@ -80,8 +82,6 @@ func (*Task) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullString)
 		case task.FieldCreatedAt, task.FieldUpdatedAt, task.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
-		case task.FieldCorrelationID:
-			values[i] = new(uuid.UUID)
 		default:
 			values[i] = new(sql.UnknownType)
 		}
@@ -149,10 +149,11 @@ func (t *Task) assignValues(columns []string, values []any) error {
 				t.PrivateState = value.String
 			}
 		case task.FieldCorrelationID:
-			if value, ok := values[i].(*uuid.UUID); !ok {
+			if value, ok := values[i].(*sql.NullScanner); !ok {
 				return fmt.Errorf("unexpected type %T for field correlation_id", values[i])
-			} else if value != nil {
-				t.CorrelationID = *value
+			} else if value.Valid {
+				t.CorrelationID = new(uuid.UUID)
+				*t.CorrelationID = *value.S.(*uuid.UUID)
 			}
 		case task.FieldUserTasks:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -224,8 +225,10 @@ func (t *Task) String() string {
 	builder.WriteString("private_state=")
 	builder.WriteString(t.PrivateState)
 	builder.WriteString(", ")
-	builder.WriteString("correlation_id=")
-	builder.WriteString(fmt.Sprintf("%v", t.CorrelationID))
+	if v := t.CorrelationID; v != nil {
+		builder.WriteString("correlation_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("user_tasks=")
 	builder.WriteString(fmt.Sprintf("%v", t.UserTasks))

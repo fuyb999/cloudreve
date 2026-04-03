@@ -69,6 +69,18 @@ func (f ExternalIdentityFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.V
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ExternalIdentityMutation", m)
 }
 
+// The FTSExternalJobFunc type is an adapter to allow the use of ordinary
+// function as FTSExternalJob mutator.
+type FTSExternalJobFunc func(context.Context, *ent.FTSExternalJobMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FTSExternalJobFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.FTSExternalJobMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.FTSExternalJobMutation", m)
+}
+
 // The FileFunc type is an adapter to allow the use of ordinary
 // function as File mutator.
 type FileFunc func(context.Context, *ent.FileMutation) (ent.Value, error)

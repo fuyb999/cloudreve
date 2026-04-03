@@ -48,7 +48,7 @@ func NewSlaveContentProcessingTask(ctx context.Context, props *types.SlaveTaskPr
 				Task: &ent.Task{
 					ID:            id,
 					Type:          queue.SlaveContentProcessingTaskType,
-					CorrelationID: logging.CorrelationID(ctx),
+					CorrelationID: logging.NillableCorrelationID(ctx),
 					PublicState: &types.TaskPublicState{
 						SlaveTaskProps: props,
 					},

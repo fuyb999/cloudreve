@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-cat >/usr/local/etc/haproxy/haproxy.cfg <<EOF
+cfg_file="${HAPROXY_CFG_PATH:-/tmp/haproxy.cfg}"
+
+cat >"$cfg_file" <<EOF
 global
   log stdout format raw local0
 
@@ -31,4 +33,4 @@ backend redis_master
   server redis3 redis-3:6379 check inter 2s fall 3 rise 2 on-marked-down shutdown-sessions
 EOF
 
-exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg
+exec haproxy -W -db -f "$cfg_file"

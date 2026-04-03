@@ -261,6 +261,8 @@ func TestBuildFTSExtractionPlanForcesFreshExtractionWhenRebuildDoesNotSkip(t *te
 		&FTSSidecarManifest{TextReady: true, AssetsReady: true},
 		true,
 		true,
+		true,
+		true,
 	)
 
 	if plan.ReuseSidecarText {
@@ -292,6 +294,8 @@ func TestBuildFTSExtractionPlanReusesReadySidecarWhenSkipEnabled(t *testing.T) {
 		[]searcher.SearchAttachmentDocument{{ID: "cached-attachment"}},
 		true,
 		&FTSSidecarManifest{TextReady: true, AssetsReady: true},
+		true,
+		true,
 		true,
 		true,
 	)
@@ -329,6 +333,8 @@ func TestBuildFTSExtractionPlanExtractsAttachmentsWithoutSidecarPersistence(t *t
 		nil,
 		false,
 		nil,
+		false,
+		false,
 		false,
 		false,
 	)

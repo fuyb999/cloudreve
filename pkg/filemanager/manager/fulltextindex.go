@@ -48,16 +48,17 @@ type (
 	}
 
 	FullTextIndexTaskState struct {
-		Uri      *fs.URI                 `json:"uri,omitempty"`
-		EntityID int                     `json:"entity_id,omitempty"`
-		FileID   int                     `json:"file_id,omitempty"`
-		OwnerID  int                     `json:"owner_id,omitempty"`
-		FileIDs  []int                   `json:"file_ids,omitempty"`
-		Files    []FullTextIndexTaskItem `json:"files,omitempty"`
-		Phase    FullTextIndexTaskPhase  `json:"phase,omitempty"`
-		NodeID   int                     `json:"node_id,omitempty"`
-		SlaveID  int                     `json:"slave_id,omitempty"`
-		Active   *FullTextIndexTaskItem  `json:"active,omitempty"`
+		Uri               *fs.URI                 `json:"uri,omitempty"`
+		EntityID          int                     `json:"entity_id,omitempty"`
+		FileID            int                     `json:"file_id,omitempty"`
+		OwnerID           int                     `json:"owner_id,omitempty"`
+		FileIDs           []int                   `json:"file_ids,omitempty"`
+		Files             []FullTextIndexTaskItem `json:"files,omitempty"`
+		Phase             FullTextIndexTaskPhase  `json:"phase,omitempty"`
+		NodeID            int                     `json:"node_id,omitempty"`
+		SlaveID           int                     `json:"slave_id,omitempty"`
+		ExternalRequestID string                  `json:"external_request_id,omitempty"`
+		Active            *FullTextIndexTaskItem  `json:"active,omitempty"`
 	}
 
 	ftsFileInfo struct {
@@ -79,8 +80,9 @@ var fullTextPerformIndexing = performIndexing
 const (
 	fullTextMaxFilesPerTask = 64
 
-	fullTextIndexPhasePending    FullTextIndexTaskPhase = ""
-	fullTextIndexPhaseAwaitSlave FullTextIndexTaskPhase = "await_slave_extract"
+	fullTextIndexPhasePending       FullTextIndexTaskPhase = ""
+	fullTextIndexPhaseAwaitSlave    FullTextIndexTaskPhase = "await_slave_extract"
+	fullTextIndexPhaseAwaitExternal FullTextIndexTaskPhase = "await_external_extract"
 )
 
 func (m *manager) SearchFullText(ctx context.Context, query string, offset int, base *fs.URI) (*FullTextSearchResults, error) {
@@ -186,7 +188,7 @@ func NewFullTextIndexTask(ctx context.Context, uri *fs.URI, entityID, fileID, ow
 			DirectOwner: creator,
 			Task: &ent.Task{
 				Type:          queue.FullTextIndexTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},
@@ -326,6 +328,7 @@ func (s *FullTextIndexTaskState) Remove(fileID int) bool {
 		s.Phase = fullTextIndexPhasePending
 		s.SlaveID = 0
 		s.NodeID = 0
+		s.ExternalRequestID = ""
 	}
 	s.normalize()
 	return true
@@ -343,7 +346,7 @@ func (s *FullTextIndexTaskState) Contains(fileID int) bool {
 
 func (s *FullTextIndexTaskState) Mergeable() bool {
 	s.normalize()
-	return s.Active == nil && s.Phase == fullTextIndexPhasePending && s.NodeID == 0 && s.SlaveID == 0
+	return s.Active == nil && s.Phase == fullTextIndexPhasePending && s.NodeID == 0 && s.SlaveID == 0 && s.ExternalRequestID == ""
 }
 
 func (s *FullTextIndexTaskState) Items() []FullTextIndexTaskItem {
@@ -404,6 +407,7 @@ func (s *FullTextIndexTaskState) CompleteActive() {
 	s.Phase = fullTextIndexPhasePending
 	s.SlaveID = 0
 	s.NodeID = 0
+	s.ExternalRequestID = ""
 	s.normalize()
 }
 
@@ -439,7 +443,7 @@ func NewFullTextCopyTask(ctx context.Context, uri *fs.URI, originalFileID, fileI
 			DirectOwner: creator,
 			Task: &ent.Task{
 				Type:          queue.FullTextCopyTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},
@@ -509,7 +513,7 @@ func NewFullTextChangeOwnerTask(ctx context.Context, uri *fs.URI, entityID, file
 			DirectOwner: creator,
 			Task: &ent.Task{
 				Type:          queue.FullTextChangeOwnerTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},
@@ -571,7 +575,7 @@ func NewFullTextDeleteTask(ctx context.Context, fileIDs []int, creator *ent.User
 			DirectOwner: creator,
 			Task: &ent.Task{
 				Type:          queue.FullTextDeleteTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},
@@ -670,6 +674,14 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 			if next == task.StatusSuspending {
 				return t.persistAndSuspend(state)
 			}
+		case fullTextIndexPhaseAwaitExternal:
+			next, err := t.awaitExternalExtraction(ctx, fm, state)
+			if err != nil {
+				return task.StatusError, err
+			}
+			if next == task.StatusSuspending {
+				return t.persistAndSuspend(state)
+			}
 		default:
 			return task.StatusError, fmt.Errorf("unknown full text task phase %q: %w", state.Phase, queue.CriticalErr)
 		}
@@ -677,6 +689,10 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 }
 
 func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *manager, state *FullTextIndexTaskState, item FullTextIndexTaskItem) (task.Status, error) {
+	if next, handled, err := t.dispatchExternalIfConfigured(ctx, fm, state, item); handled || err != nil {
+		return next, err
+	}
+
 	node, err := allocateContentProcessingNode(ctx, fm.dep, state.NodeID)
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to allocate content processing node: %w", err)

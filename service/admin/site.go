@@ -407,7 +407,20 @@ var (
 		"fts_tika_sidecar_text_enabled":                 tikaPostProcessor,
 		"fts_tika_sidecar_assets_enabled":               tikaPostProcessor,
 		"fts_tika_extract_inline_images":                tikaPostProcessor,
+		"fts_external_enabled":                          externalFTSPostProcessor,
+		"fts_external_use_global_kafka":                 externalFTSPostProcessor,
+		"fts_external_kafka_brokers":                    externalFTSPostProcessor,
+		"fts_external_kafka_security_protocol":          externalFTSPostProcessor,
+		"fts_external_kafka_sasl_mechanism":             externalFTSPostProcessor,
+		"fts_external_kafka_username":                   externalFTSPostProcessor,
+		"fts_external_kafka_password":                   externalFTSPostProcessor,
+		"fts_external_kafka_tls_skip_verify":            externalFTSPostProcessor,
+		"fts_external_kafka_process_topic":              externalFTSPostProcessor,
+		"fts_external_kafka_result_topic":               externalFTSPostProcessor,
+		"fts_external_kafka_error_topic":                externalFTSPostProcessor,
+		"fts_external_kafka_consumer_group":             externalFTSPostProcessor,
 	}
+	reloadFTSExternalKafka = manager.ReloadFTSExternalKafka
 )
 
 func (s *SetSettingService) SetSetting(c *gin.Context) (map[string]string, error) {
@@ -630,4 +643,9 @@ func tikaPostProcessor(ctx context.Context, settings map[string]string) error {
 	dep := dependency.FromContext(ctx)
 	dep.TextExtractor(context.WithValue(ctx, dependency.ReloadCtx{}, true))
 	return nil
+}
+
+func externalFTSPostProcessor(ctx context.Context, settings map[string]string) error {
+	dep := dependency.FromContext(ctx)
+	return reloadFTSExternalKafka(ctx, dep)
 }

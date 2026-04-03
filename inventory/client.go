@@ -79,8 +79,38 @@ func InitializeDBClient(l logging.Logger,
 		"queue_content_processing_backoff_max_duration",
 		"queue_content_processing_max_retry",
 		"queue_content_processing_retry_delay",
+		"fts_external_enabled",
+		"fts_external_mode",
+		"fts_external_use_global_kafka",
+		"fts_external_kafka_brokers",
+		"fts_external_kafka_security_protocol",
+		"fts_external_kafka_sasl_mechanism",
+		"fts_external_kafka_username",
+		"fts_external_kafka_password",
+		"fts_external_kafka_tls_skip_verify",
+		"fts_external_kafka_process_topic",
+		"fts_external_kafka_result_topic",
+		"fts_external_kafka_error_topic",
+		"fts_external_kafka_consumer_group",
+		"fts_external_timeout_seconds",
+		"fts_external_retry_max",
+		"fts_external_quality_enabled",
+		"fts_external_quality_min_text_length",
+		"fts_external_quality_max_replacement_ratio",
+		"fts_external_quality_max_control_char_ratio",
+		"fts_external_quality_min_printable_ratio",
+		"fts_external_quality_font_box_min_count",
+		"fts_external_quality_font_box_min_run",
+		"fts_external_quality_font_box_min_ratio",
+		"fts_external_recursive_attachments",
+		"fts_external_skip_encrypted_files",
 	); err != nil {
 		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)
+	}
+	if err := removeDeprecatedSettings(ctx, l, client,
+		"fts_external_quality_font_issue_keywords",
+	); err != nil {
+		return nil, fmt.Errorf("failed to remove deprecated settings: %w", err)
 	}
 	if err := ensureSystemPublicRootSupport(ctx, l, client, dbType); err != nil {
 		return nil, fmt.Errorf("failed to ensure hidden public root: %w", err)

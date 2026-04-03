@@ -306,6 +306,51 @@ type FTSTikaExtractorSetting struct {
 	ExtractInlineImages  bool
 }
 
+type FTSExternalMode string
+
+const (
+	FTSExternalModeDisabled                 = FTSExternalMode("disabled")
+	FTSExternalModePrimary                  = FTSExternalMode("primary")
+	FTSExternalModeFallbackOnError          = FTSExternalMode("fallback_on_error")
+	FTSExternalModeFallbackOnErrorOrQuality = FTSExternalMode("fallback_on_error_or_quality")
+)
+
+type FTSExternalKafkaSetting struct {
+	UseGlobalKafka   bool
+	Brokers          []string
+	SecurityProtocol string
+	SASLMechanism    string
+	Username         string
+	Password         string
+	TLSSkipVerify    bool
+	ProcessTopic     string
+	ResultTopic      string
+	ErrorTopic       string
+	ConsumerGroup    string
+}
+
+type FTSExternalQualitySetting struct {
+	Enabled             bool
+	MinTextLength       int
+	MaxReplacementRatio float64
+	MaxControlCharRatio float64
+	MinPrintableRatio   float64
+	FontBoxMinCount     int
+	FontBoxMinRun       int
+	FontBoxMinRatio     float64
+}
+
+type FTSExternalExtractorSetting struct {
+	Enabled              bool
+	Mode                 FTSExternalMode
+	TimeoutSeconds       int
+	RetryMax             int
+	RecursiveAttachments bool
+	SkipEncryptedFiles   bool
+	Kafka                FTSExternalKafkaSetting
+	Quality              FTSExternalQualitySetting
+}
+
 type MasterEncryptKeyVaultType string
 
 const (

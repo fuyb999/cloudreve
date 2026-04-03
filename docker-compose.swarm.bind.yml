@@ -1,0 +1,13 @@
+services:
+  cloudreve-master:
+    volumes:
+      - type: bind
+        source: ${CLOUDREVE_SHARED_DATA_PATH:?set CLOUDREVE_SHARED_DATA_PATH}
+        target: /cloudreve/data
+
+  tika:
+    volumes:
+      - type: bind
+        source: ${TIKA_CUSTOM_FONTS_HOST_PATH:?set TIKA_CUSTOM_FONTS_HOST_PATH}
+        target: /tika-fonts/custom
+        read_only: true

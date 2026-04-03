@@ -213,6 +213,15 @@ func CorrelationID(ctx context.Context) uuid.UUID {
 	return v
 }
 
+// NillableCorrelationID returns a pointer only when the context carries a real correlation ID.
+func NillableCorrelationID(ctx context.Context) *uuid.UUID {
+	v := CorrelationID(ctx)
+	if v == uuid.Nil {
+		return nil
+	}
+	return &v
+}
+
 type consoleLogger struct {
 	warning    loggingFunc
 	panic      loggingFunc

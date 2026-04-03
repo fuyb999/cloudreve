@@ -33,3 +33,17 @@ func ensureDefaultSettings(ctx context.Context, l logging.Logger, client *ent.Cl
 
 	return nil
 }
+
+func removeDeprecatedSettings(ctx context.Context, l logging.Logger, client *ent.Client, keys ...string) error {
+	for _, key := range keys {
+		affected, err := client.Setting.Delete().Where(setting.NameEQ(key)).Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to delete deprecated setting %q: %w", key, err)
+		}
+		if affected > 0 {
+			l.Info("Removed deprecated setting %q.", key)
+		}
+	}
+
+	return nil
+}

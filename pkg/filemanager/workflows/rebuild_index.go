@@ -82,7 +82,7 @@ func NewRebuildIndexTask(
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.FullTextRebuildTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},

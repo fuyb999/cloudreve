@@ -53,7 +53,7 @@ func NewSlaveUploadTask(ctx context.Context, props *types.SlaveTaskProps, id int
 			DBTask: &queue.DBTask{
 				Task: &ent.Task{
 					ID:            id,
-					CorrelationID: logging.CorrelationID(ctx),
+					CorrelationID: logging.NillableCorrelationID(ctx),
 					PublicState: &types.TaskPublicState{
 						SlaveTaskProps: props,
 					},

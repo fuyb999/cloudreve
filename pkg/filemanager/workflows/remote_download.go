@@ -97,7 +97,7 @@ func NewRemoteDownloadTask(ctx context.Context, src string, srcFile, dst string)
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.RemoteDownloadTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState:   &types.TaskPublicState{},
 			},

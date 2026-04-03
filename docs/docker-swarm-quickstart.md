@@ -4,6 +4,7 @@
 
 - 详细文档：`docs/docker-swarm-deployment.md`
 - Swarm 栈文件：`docker-compose.swarm.yml`
+- 可选 bind override：`docker-compose.swarm.bind.yml`
 - 环境变量模板：`.env.swarm.example`
 
 ## 1. 最短结论
@@ -35,10 +36,11 @@ cp .env.swarm.example .env.swarm
 - `PGPOOL_ADMIN_PASSWORD`
 - `REDIS_PASSWORD`
 - `TIKA_IMAGE`
-- `CLOUDREVE_SHARED_DATA_PATH`
-- `TIKA_CUSTOM_FONTS_HOST_PATH`
 - `MINIO_ROOT_USER`
 - `MINIO_ROOT_PASSWORD`
+
+默认栈不再直接挂宿主机目录，首次部署只需要 `docker-compose.swarm.yml`。
+如果你已经准备好共享 POSIX 文件系统或宿主机字体目录，再额外使用 `docker-compose.swarm.bind.yml`。
 
 ## 3. 首次部署顺序
 
@@ -55,6 +57,12 @@ source ./.env.swarm
 set +a
 
 docker stack deploy -c docker-compose.swarm.yml cloudreve
+```
+
+只有在所有候选节点都已经创建并验证好这些目录后，才额外加上 bind override：
+
+```bash
+docker stack deploy -c docker-compose.swarm.yml -c docker-compose.swarm.bind.yml cloudreve
 ```
 
 检查：
@@ -110,7 +118,7 @@ docker service scale cloudreve_tika=4
 
 只有满足下面条件，才建议把 `cloudreve-master` 扩到 `2` 或以上：
 
-- `CLOUDREVE_SHARED_DATA_PATH` 已经是可靠共享 POSIX 文件系统
+- 你已经把默认命名卷替换成可靠共享 POSIX 文件系统或等价共享卷
 - 所有可能运行 `cloudreve-master` 的节点都挂载了同一路径
 - 你已经验证过多副本滚动更新和故障切换
 

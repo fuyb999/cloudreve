@@ -18,6 +18,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/fsevent"
+	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	"github.com/cloudreve/Cloudreve/v4/ent/group"
 	"github.com/cloudreve/Cloudreve/v4/ent/metadata"
 	"github.com/cloudreve/Cloudreve/v4/ent/node"
@@ -51,6 +52,7 @@ const (
 	TypeDirectLink       = "DirectLink"
 	TypeEntity           = "Entity"
 	TypeExternalIdentity = "ExternalIdentity"
+	TypeFTSExternalJob   = "FTSExternalJob"
 	TypeFile             = "File"
 	TypeFsEvent          = "FsEvent"
 	TypeGroup            = "Group"
@@ -5600,6 +5602,1556 @@ func (m *ExternalIdentityMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown ExternalIdentity edge %s", name)
+}
+
+// FTSExternalJobMutation represents an operation that mutates the FTSExternalJob nodes in the graph.
+type FTSExternalJobMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *int
+	created_at     *time.Time
+	updated_at     *time.Time
+	deleted_at     *time.Time
+	request_id     *string
+	status         *string
+	file_id        *int
+	addfile_id     *int
+	owner_id       *int
+	addowner_id    *int
+	entity_id      *int
+	addentity_id   *int
+	snapshot_token *string
+	mode           *string
+	trigger_reason *string
+	attempt        *int
+	addattempt     *int
+	result_payload *string
+	error_payload  *string
+	manifest_path  *string
+	quality_report *string
+	requested_at   *time.Time
+	deadline_at    *time.Time
+	completed_at   *time.Time
+	clearedFields  map[string]struct{}
+	done           bool
+	oldValue       func(context.Context) (*FTSExternalJob, error)
+	predicates     []predicate.FTSExternalJob
+}
+
+var _ ent.Mutation = (*FTSExternalJobMutation)(nil)
+
+// ftsexternaljobOption allows management of the mutation configuration using functional options.
+type ftsexternaljobOption func(*FTSExternalJobMutation)
+
+// newFTSExternalJobMutation creates new mutation for the FTSExternalJob entity.
+func newFTSExternalJobMutation(c config, op Op, opts ...ftsexternaljobOption) *FTSExternalJobMutation {
+	m := &FTSExternalJobMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeFTSExternalJob,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withFTSExternalJobID sets the ID field of the mutation.
+func withFTSExternalJobID(id int) ftsexternaljobOption {
+	return func(m *FTSExternalJobMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *FTSExternalJob
+		)
+		m.oldValue = func(ctx context.Context) (*FTSExternalJob, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().FTSExternalJob.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withFTSExternalJob sets the old FTSExternalJob of the mutation.
+func withFTSExternalJob(node *FTSExternalJob) ftsexternaljobOption {
+	return func(m *FTSExternalJobMutation) {
+		m.oldValue = func(context.Context) (*FTSExternalJob, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m FTSExternalJobMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m FTSExternalJobMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *FTSExternalJobMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *FTSExternalJobMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().FTSExternalJob.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *FTSExternalJobMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *FTSExternalJobMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *FTSExternalJobMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *FTSExternalJobMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *FTSExternalJobMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *FTSExternalJobMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetDeletedAt sets the "deleted_at" field.
+func (m *FTSExternalJobMutation) SetDeletedAt(t time.Time) {
+	m.deleted_at = &t
+}
+
+// DeletedAt returns the value of the "deleted_at" field in the mutation.
+func (m *FTSExternalJobMutation) DeletedAt() (r time.Time, exists bool) {
+	v := m.deleted_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeletedAt returns the old "deleted_at" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldDeletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeletedAt: %w", err)
+	}
+	return oldValue.DeletedAt, nil
+}
+
+// ClearDeletedAt clears the value of the "deleted_at" field.
+func (m *FTSExternalJobMutation) ClearDeletedAt() {
+	m.deleted_at = nil
+	m.clearedFields[ftsexternaljob.FieldDeletedAt] = struct{}{}
+}
+
+// DeletedAtCleared returns if the "deleted_at" field was cleared in this mutation.
+func (m *FTSExternalJobMutation) DeletedAtCleared() bool {
+	_, ok := m.clearedFields[ftsexternaljob.FieldDeletedAt]
+	return ok
+}
+
+// ResetDeletedAt resets all changes to the "deleted_at" field.
+func (m *FTSExternalJobMutation) ResetDeletedAt() {
+	m.deleted_at = nil
+	delete(m.clearedFields, ftsexternaljob.FieldDeletedAt)
+}
+
+// SetRequestID sets the "request_id" field.
+func (m *FTSExternalJobMutation) SetRequestID(s string) {
+	m.request_id = &s
+}
+
+// RequestID returns the value of the "request_id" field in the mutation.
+func (m *FTSExternalJobMutation) RequestID() (r string, exists bool) {
+	v := m.request_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestID returns the old "request_id" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldRequestID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestID: %w", err)
+	}
+	return oldValue.RequestID, nil
+}
+
+// ResetRequestID resets all changes to the "request_id" field.
+func (m *FTSExternalJobMutation) ResetRequestID() {
+	m.request_id = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *FTSExternalJobMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *FTSExternalJobMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *FTSExternalJobMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetFileID sets the "file_id" field.
+func (m *FTSExternalJobMutation) SetFileID(i int) {
+	m.file_id = &i
+	m.addfile_id = nil
+}
+
+// FileID returns the value of the "file_id" field in the mutation.
+func (m *FTSExternalJobMutation) FileID() (r int, exists bool) {
+	v := m.file_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFileID returns the old "file_id" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldFileID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFileID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFileID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFileID: %w", err)
+	}
+	return oldValue.FileID, nil
+}
+
+// AddFileID adds i to the "file_id" field.
+func (m *FTSExternalJobMutation) AddFileID(i int) {
+	if m.addfile_id != nil {
+		*m.addfile_id += i
+	} else {
+		m.addfile_id = &i
+	}
+}
+
+// AddedFileID returns the value that was added to the "file_id" field in this mutation.
+func (m *FTSExternalJobMutation) AddedFileID() (r int, exists bool) {
+	v := m.addfile_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetFileID resets all changes to the "file_id" field.
+func (m *FTSExternalJobMutation) ResetFileID() {
+	m.file_id = nil
+	m.addfile_id = nil
+}
+
+// SetOwnerID sets the "owner_id" field.
+func (m *FTSExternalJobMutation) SetOwnerID(i int) {
+	m.owner_id = &i
+	m.addowner_id = nil
+}
+
+// OwnerID returns the value of the "owner_id" field in the mutation.
+func (m *FTSExternalJobMutation) OwnerID() (r int, exists bool) {
+	v := m.owner_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerID returns the old "owner_id" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldOwnerID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerID: %w", err)
+	}
+	return oldValue.OwnerID, nil
+}
+
+// AddOwnerID adds i to the "owner_id" field.
+func (m *FTSExternalJobMutation) AddOwnerID(i int) {
+	if m.addowner_id != nil {
+		*m.addowner_id += i
+	} else {
+		m.addowner_id = &i
+	}
+}
+
+// AddedOwnerID returns the value that was added to the "owner_id" field in this mutation.
+func (m *FTSExternalJobMutation) AddedOwnerID() (r int, exists bool) {
+	v := m.addowner_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetOwnerID resets all changes to the "owner_id" field.
+func (m *FTSExternalJobMutation) ResetOwnerID() {
+	m.owner_id = nil
+	m.addowner_id = nil
+}
+
+// SetEntityID sets the "entity_id" field.
+func (m *FTSExternalJobMutation) SetEntityID(i int) {
+	m.entity_id = &i
+	m.addentity_id = nil
+}
+
+// EntityID returns the value of the "entity_id" field in the mutation.
+func (m *FTSExternalJobMutation) EntityID() (r int, exists bool) {
+	v := m.entity_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEntityID returns the old "entity_id" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldEntityID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEntityID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEntityID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEntityID: %w", err)
+	}
+	return oldValue.EntityID, nil
+}
+
+// AddEntityID adds i to the "entity_id" field.
+func (m *FTSExternalJobMutation) AddEntityID(i int) {
+	if m.addentity_id != nil {
+		*m.addentity_id += i
+	} else {
+		m.addentity_id = &i
+	}
+}
+
+// AddedEntityID returns the value that was added to the "entity_id" field in this mutation.
+func (m *FTSExternalJobMutation) AddedEntityID() (r int, exists bool) {
+	v := m.addentity_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetEntityID resets all changes to the "entity_id" field.
+func (m *FTSExternalJobMutation) ResetEntityID() {
+	m.entity_id = nil
+	m.addentity_id = nil
+}
+
+// SetSnapshotToken sets the "snapshot_token" field.
+func (m *FTSExternalJobMutation) SetSnapshotToken(s string) {
+	m.snapshot_token = &s
+}
+
+// SnapshotToken returns the value of the "snapshot_token" field in the mutation.
+func (m *FTSExternalJobMutation) SnapshotToken() (r string, exists bool) {
+	v := m.snapshot_token
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSnapshotToken returns the old "snapshot_token" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldSnapshotToken(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSnapshotToken is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSnapshotToken requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSnapshotToken: %w", err)
+	}
+	return oldValue.SnapshotToken, nil
+}
+
+// ResetSnapshotToken resets all changes to the "snapshot_token" field.
+func (m *FTSExternalJobMutation) ResetSnapshotToken() {
+	m.snapshot_token = nil
+}
+
+// SetMode sets the "mode" field.
+func (m *FTSExternalJobMutation) SetMode(s string) {
+	m.mode = &s
+}
+
+// Mode returns the value of the "mode" field in the mutation.
+func (m *FTSExternalJobMutation) Mode() (r string, exists bool) {
+	v := m.mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMode returns the old "mode" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMode: %w", err)
+	}
+	return oldValue.Mode, nil
+}
+
+// ResetMode resets all changes to the "mode" field.
+func (m *FTSExternalJobMutation) ResetMode() {
+	m.mode = nil
+}
+
+// SetTriggerReason sets the "trigger_reason" field.
+func (m *FTSExternalJobMutation) SetTriggerReason(s string) {
+	m.trigger_reason = &s
+}
+
+// TriggerReason returns the value of the "trigger_reason" field in the mutation.
+func (m *FTSExternalJobMutation) TriggerReason() (r string, exists bool) {
+	v := m.trigger_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggerReason returns the old "trigger_reason" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldTriggerReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggerReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggerReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggerReason: %w", err)
+	}
+	return oldValue.TriggerReason, nil
+}
+
+// ResetTriggerReason resets all changes to the "trigger_reason" field.
+func (m *FTSExternalJobMutation) ResetTriggerReason() {
+	m.trigger_reason = nil
+}
+
+// SetAttempt sets the "attempt" field.
+func (m *FTSExternalJobMutation) SetAttempt(i int) {
+	m.attempt = &i
+	m.addattempt = nil
+}
+
+// Attempt returns the value of the "attempt" field in the mutation.
+func (m *FTSExternalJobMutation) Attempt() (r int, exists bool) {
+	v := m.attempt
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAttempt returns the old "attempt" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldAttempt(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAttempt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAttempt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAttempt: %w", err)
+	}
+	return oldValue.Attempt, nil
+}
+
+// AddAttempt adds i to the "attempt" field.
+func (m *FTSExternalJobMutation) AddAttempt(i int) {
+	if m.addattempt != nil {
+		*m.addattempt += i
+	} else {
+		m.addattempt = &i
+	}
+}
+
+// AddedAttempt returns the value that was added to the "attempt" field in this mutation.
+func (m *FTSExternalJobMutation) AddedAttempt() (r int, exists bool) {
+	v := m.addattempt
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetAttempt resets all changes to the "attempt" field.
+func (m *FTSExternalJobMutation) ResetAttempt() {
+	m.attempt = nil
+	m.addattempt = nil
+}
+
+// SetResultPayload sets the "result_payload" field.
+func (m *FTSExternalJobMutation) SetResultPayload(s string) {
+	m.result_payload = &s
+}
+
+// ResultPayload returns the value of the "result_payload" field in the mutation.
+func (m *FTSExternalJobMutation) ResultPayload() (r string, exists bool) {
+	v := m.result_payload
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResultPayload returns the old "result_payload" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldResultPayload(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResultPayload is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResultPayload requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResultPayload: %w", err)
+	}
+	return oldValue.ResultPayload, nil
+}
+
+// ClearResultPayload clears the value of the "result_payload" field.
+func (m *FTSExternalJobMutation) ClearResultPayload() {
+	m.result_payload = nil
+	m.clearedFields[ftsexternaljob.FieldResultPayload] = struct{}{}
+}
+
+// ResultPayloadCleared returns if the "result_payload" field was cleared in this mutation.
+func (m *FTSExternalJobMutation) ResultPayloadCleared() bool {
+	_, ok := m.clearedFields[ftsexternaljob.FieldResultPayload]
+	return ok
+}
+
+// ResetResultPayload resets all changes to the "result_payload" field.
+func (m *FTSExternalJobMutation) ResetResultPayload() {
+	m.result_payload = nil
+	delete(m.clearedFields, ftsexternaljob.FieldResultPayload)
+}
+
+// SetErrorPayload sets the "error_payload" field.
+func (m *FTSExternalJobMutation) SetErrorPayload(s string) {
+	m.error_payload = &s
+}
+
+// ErrorPayload returns the value of the "error_payload" field in the mutation.
+func (m *FTSExternalJobMutation) ErrorPayload() (r string, exists bool) {
+	v := m.error_payload
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorPayload returns the old "error_payload" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldErrorPayload(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorPayload is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorPayload requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorPayload: %w", err)
+	}
+	return oldValue.ErrorPayload, nil
+}
+
+// ClearErrorPayload clears the value of the "error_payload" field.
+func (m *FTSExternalJobMutation) ClearErrorPayload() {
+	m.error_payload = nil
+	m.clearedFields[ftsexternaljob.FieldErrorPayload] = struct{}{}
+}
+
+// ErrorPayloadCleared returns if the "error_payload" field was cleared in this mutation.
+func (m *FTSExternalJobMutation) ErrorPayloadCleared() bool {
+	_, ok := m.clearedFields[ftsexternaljob.FieldErrorPayload]
+	return ok
+}
+
+// ResetErrorPayload resets all changes to the "error_payload" field.
+func (m *FTSExternalJobMutation) ResetErrorPayload() {
+	m.error_payload = nil
+	delete(m.clearedFields, ftsexternaljob.FieldErrorPayload)
+}
+
+// SetManifestPath sets the "manifest_path" field.
+func (m *FTSExternalJobMutation) SetManifestPath(s string) {
+	m.manifest_path = &s
+}
+
+// ManifestPath returns the value of the "manifest_path" field in the mutation.
+func (m *FTSExternalJobMutation) ManifestPath() (r string, exists bool) {
+	v := m.manifest_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldManifestPath returns the old "manifest_path" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldManifestPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldManifestPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldManifestPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldManifestPath: %w", err)
+	}
+	return oldValue.ManifestPath, nil
+}
+
+// ClearManifestPath clears the value of the "manifest_path" field.
+func (m *FTSExternalJobMutation) ClearManifestPath() {
+	m.manifest_path = nil
+	m.clearedFields[ftsexternaljob.FieldManifestPath] = struct{}{}
+}
+
+// ManifestPathCleared returns if the "manifest_path" field was cleared in this mutation.
+func (m *FTSExternalJobMutation) ManifestPathCleared() bool {
+	_, ok := m.clearedFields[ftsexternaljob.FieldManifestPath]
+	return ok
+}
+
+// ResetManifestPath resets all changes to the "manifest_path" field.
+func (m *FTSExternalJobMutation) ResetManifestPath() {
+	m.manifest_path = nil
+	delete(m.clearedFields, ftsexternaljob.FieldManifestPath)
+}
+
+// SetQualityReport sets the "quality_report" field.
+func (m *FTSExternalJobMutation) SetQualityReport(s string) {
+	m.quality_report = &s
+}
+
+// QualityReport returns the value of the "quality_report" field in the mutation.
+func (m *FTSExternalJobMutation) QualityReport() (r string, exists bool) {
+	v := m.quality_report
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQualityReport returns the old "quality_report" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldQualityReport(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQualityReport is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQualityReport requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQualityReport: %w", err)
+	}
+	return oldValue.QualityReport, nil
+}
+
+// ClearQualityReport clears the value of the "quality_report" field.
+func (m *FTSExternalJobMutation) ClearQualityReport() {
+	m.quality_report = nil
+	m.clearedFields[ftsexternaljob.FieldQualityReport] = struct{}{}
+}
+
+// QualityReportCleared returns if the "quality_report" field was cleared in this mutation.
+func (m *FTSExternalJobMutation) QualityReportCleared() bool {
+	_, ok := m.clearedFields[ftsexternaljob.FieldQualityReport]
+	return ok
+}
+
+// ResetQualityReport resets all changes to the "quality_report" field.
+func (m *FTSExternalJobMutation) ResetQualityReport() {
+	m.quality_report = nil
+	delete(m.clearedFields, ftsexternaljob.FieldQualityReport)
+}
+
+// SetRequestedAt sets the "requested_at" field.
+func (m *FTSExternalJobMutation) SetRequestedAt(t time.Time) {
+	m.requested_at = &t
+}
+
+// RequestedAt returns the value of the "requested_at" field in the mutation.
+func (m *FTSExternalJobMutation) RequestedAt() (r time.Time, exists bool) {
+	v := m.requested_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestedAt returns the old "requested_at" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldRequestedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestedAt: %w", err)
+	}
+	return oldValue.RequestedAt, nil
+}
+
+// ResetRequestedAt resets all changes to the "requested_at" field.
+func (m *FTSExternalJobMutation) ResetRequestedAt() {
+	m.requested_at = nil
+}
+
+// SetDeadlineAt sets the "deadline_at" field.
+func (m *FTSExternalJobMutation) SetDeadlineAt(t time.Time) {
+	m.deadline_at = &t
+}
+
+// DeadlineAt returns the value of the "deadline_at" field in the mutation.
+func (m *FTSExternalJobMutation) DeadlineAt() (r time.Time, exists bool) {
+	v := m.deadline_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeadlineAt returns the old "deadline_at" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldDeadlineAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeadlineAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeadlineAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeadlineAt: %w", err)
+	}
+	return oldValue.DeadlineAt, nil
+}
+
+// ResetDeadlineAt resets all changes to the "deadline_at" field.
+func (m *FTSExternalJobMutation) ResetDeadlineAt() {
+	m.deadline_at = nil
+}
+
+// SetCompletedAt sets the "completed_at" field.
+func (m *FTSExternalJobMutation) SetCompletedAt(t time.Time) {
+	m.completed_at = &t
+}
+
+// CompletedAt returns the value of the "completed_at" field in the mutation.
+func (m *FTSExternalJobMutation) CompletedAt() (r time.Time, exists bool) {
+	v := m.completed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCompletedAt returns the old "completed_at" field's value of the FTSExternalJob entity.
+// If the FTSExternalJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FTSExternalJobMutation) OldCompletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCompletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCompletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCompletedAt: %w", err)
+	}
+	return oldValue.CompletedAt, nil
+}
+
+// ClearCompletedAt clears the value of the "completed_at" field.
+func (m *FTSExternalJobMutation) ClearCompletedAt() {
+	m.completed_at = nil
+	m.clearedFields[ftsexternaljob.FieldCompletedAt] = struct{}{}
+}
+
+// CompletedAtCleared returns if the "completed_at" field was cleared in this mutation.
+func (m *FTSExternalJobMutation) CompletedAtCleared() bool {
+	_, ok := m.clearedFields[ftsexternaljob.FieldCompletedAt]
+	return ok
+}
+
+// ResetCompletedAt resets all changes to the "completed_at" field.
+func (m *FTSExternalJobMutation) ResetCompletedAt() {
+	m.completed_at = nil
+	delete(m.clearedFields, ftsexternaljob.FieldCompletedAt)
+}
+
+// Where appends a list predicates to the FTSExternalJobMutation builder.
+func (m *FTSExternalJobMutation) Where(ps ...predicate.FTSExternalJob) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the FTSExternalJobMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *FTSExternalJobMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.FTSExternalJob, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *FTSExternalJobMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *FTSExternalJobMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (FTSExternalJob).
+func (m *FTSExternalJobMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *FTSExternalJobMutation) Fields() []string {
+	fields := make([]string, 0, 19)
+	if m.created_at != nil {
+		fields = append(fields, ftsexternaljob.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, ftsexternaljob.FieldUpdatedAt)
+	}
+	if m.deleted_at != nil {
+		fields = append(fields, ftsexternaljob.FieldDeletedAt)
+	}
+	if m.request_id != nil {
+		fields = append(fields, ftsexternaljob.FieldRequestID)
+	}
+	if m.status != nil {
+		fields = append(fields, ftsexternaljob.FieldStatus)
+	}
+	if m.file_id != nil {
+		fields = append(fields, ftsexternaljob.FieldFileID)
+	}
+	if m.owner_id != nil {
+		fields = append(fields, ftsexternaljob.FieldOwnerID)
+	}
+	if m.entity_id != nil {
+		fields = append(fields, ftsexternaljob.FieldEntityID)
+	}
+	if m.snapshot_token != nil {
+		fields = append(fields, ftsexternaljob.FieldSnapshotToken)
+	}
+	if m.mode != nil {
+		fields = append(fields, ftsexternaljob.FieldMode)
+	}
+	if m.trigger_reason != nil {
+		fields = append(fields, ftsexternaljob.FieldTriggerReason)
+	}
+	if m.attempt != nil {
+		fields = append(fields, ftsexternaljob.FieldAttempt)
+	}
+	if m.result_payload != nil {
+		fields = append(fields, ftsexternaljob.FieldResultPayload)
+	}
+	if m.error_payload != nil {
+		fields = append(fields, ftsexternaljob.FieldErrorPayload)
+	}
+	if m.manifest_path != nil {
+		fields = append(fields, ftsexternaljob.FieldManifestPath)
+	}
+	if m.quality_report != nil {
+		fields = append(fields, ftsexternaljob.FieldQualityReport)
+	}
+	if m.requested_at != nil {
+		fields = append(fields, ftsexternaljob.FieldRequestedAt)
+	}
+	if m.deadline_at != nil {
+		fields = append(fields, ftsexternaljob.FieldDeadlineAt)
+	}
+	if m.completed_at != nil {
+		fields = append(fields, ftsexternaljob.FieldCompletedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *FTSExternalJobMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case ftsexternaljob.FieldCreatedAt:
+		return m.CreatedAt()
+	case ftsexternaljob.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case ftsexternaljob.FieldDeletedAt:
+		return m.DeletedAt()
+	case ftsexternaljob.FieldRequestID:
+		return m.RequestID()
+	case ftsexternaljob.FieldStatus:
+		return m.Status()
+	case ftsexternaljob.FieldFileID:
+		return m.FileID()
+	case ftsexternaljob.FieldOwnerID:
+		return m.OwnerID()
+	case ftsexternaljob.FieldEntityID:
+		return m.EntityID()
+	case ftsexternaljob.FieldSnapshotToken:
+		return m.SnapshotToken()
+	case ftsexternaljob.FieldMode:
+		return m.Mode()
+	case ftsexternaljob.FieldTriggerReason:
+		return m.TriggerReason()
+	case ftsexternaljob.FieldAttempt:
+		return m.Attempt()
+	case ftsexternaljob.FieldResultPayload:
+		return m.ResultPayload()
+	case ftsexternaljob.FieldErrorPayload:
+		return m.ErrorPayload()
+	case ftsexternaljob.FieldManifestPath:
+		return m.ManifestPath()
+	case ftsexternaljob.FieldQualityReport:
+		return m.QualityReport()
+	case ftsexternaljob.FieldRequestedAt:
+		return m.RequestedAt()
+	case ftsexternaljob.FieldDeadlineAt:
+		return m.DeadlineAt()
+	case ftsexternaljob.FieldCompletedAt:
+		return m.CompletedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *FTSExternalJobMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case ftsexternaljob.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case ftsexternaljob.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case ftsexternaljob.FieldDeletedAt:
+		return m.OldDeletedAt(ctx)
+	case ftsexternaljob.FieldRequestID:
+		return m.OldRequestID(ctx)
+	case ftsexternaljob.FieldStatus:
+		return m.OldStatus(ctx)
+	case ftsexternaljob.FieldFileID:
+		return m.OldFileID(ctx)
+	case ftsexternaljob.FieldOwnerID:
+		return m.OldOwnerID(ctx)
+	case ftsexternaljob.FieldEntityID:
+		return m.OldEntityID(ctx)
+	case ftsexternaljob.FieldSnapshotToken:
+		return m.OldSnapshotToken(ctx)
+	case ftsexternaljob.FieldMode:
+		return m.OldMode(ctx)
+	case ftsexternaljob.FieldTriggerReason:
+		return m.OldTriggerReason(ctx)
+	case ftsexternaljob.FieldAttempt:
+		return m.OldAttempt(ctx)
+	case ftsexternaljob.FieldResultPayload:
+		return m.OldResultPayload(ctx)
+	case ftsexternaljob.FieldErrorPayload:
+		return m.OldErrorPayload(ctx)
+	case ftsexternaljob.FieldManifestPath:
+		return m.OldManifestPath(ctx)
+	case ftsexternaljob.FieldQualityReport:
+		return m.OldQualityReport(ctx)
+	case ftsexternaljob.FieldRequestedAt:
+		return m.OldRequestedAt(ctx)
+	case ftsexternaljob.FieldDeadlineAt:
+		return m.OldDeadlineAt(ctx)
+	case ftsexternaljob.FieldCompletedAt:
+		return m.OldCompletedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown FTSExternalJob field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FTSExternalJobMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case ftsexternaljob.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case ftsexternaljob.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case ftsexternaljob.FieldDeletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeletedAt(v)
+		return nil
+	case ftsexternaljob.FieldRequestID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestID(v)
+		return nil
+	case ftsexternaljob.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case ftsexternaljob.FieldFileID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFileID(v)
+		return nil
+	case ftsexternaljob.FieldOwnerID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerID(v)
+		return nil
+	case ftsexternaljob.FieldEntityID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEntityID(v)
+		return nil
+	case ftsexternaljob.FieldSnapshotToken:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSnapshotToken(v)
+		return nil
+	case ftsexternaljob.FieldMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMode(v)
+		return nil
+	case ftsexternaljob.FieldTriggerReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggerReason(v)
+		return nil
+	case ftsexternaljob.FieldAttempt:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAttempt(v)
+		return nil
+	case ftsexternaljob.FieldResultPayload:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResultPayload(v)
+		return nil
+	case ftsexternaljob.FieldErrorPayload:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorPayload(v)
+		return nil
+	case ftsexternaljob.FieldManifestPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetManifestPath(v)
+		return nil
+	case ftsexternaljob.FieldQualityReport:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQualityReport(v)
+		return nil
+	case ftsexternaljob.FieldRequestedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestedAt(v)
+		return nil
+	case ftsexternaljob.FieldDeadlineAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeadlineAt(v)
+		return nil
+	case ftsexternaljob.FieldCompletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCompletedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FTSExternalJob field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *FTSExternalJobMutation) AddedFields() []string {
+	var fields []string
+	if m.addfile_id != nil {
+		fields = append(fields, ftsexternaljob.FieldFileID)
+	}
+	if m.addowner_id != nil {
+		fields = append(fields, ftsexternaljob.FieldOwnerID)
+	}
+	if m.addentity_id != nil {
+		fields = append(fields, ftsexternaljob.FieldEntityID)
+	}
+	if m.addattempt != nil {
+		fields = append(fields, ftsexternaljob.FieldAttempt)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *FTSExternalJobMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case ftsexternaljob.FieldFileID:
+		return m.AddedFileID()
+	case ftsexternaljob.FieldOwnerID:
+		return m.AddedOwnerID()
+	case ftsexternaljob.FieldEntityID:
+		return m.AddedEntityID()
+	case ftsexternaljob.FieldAttempt:
+		return m.AddedAttempt()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FTSExternalJobMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case ftsexternaljob.FieldFileID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddFileID(v)
+		return nil
+	case ftsexternaljob.FieldOwnerID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddOwnerID(v)
+		return nil
+	case ftsexternaljob.FieldEntityID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddEntityID(v)
+		return nil
+	case ftsexternaljob.FieldAttempt:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAttempt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FTSExternalJob numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *FTSExternalJobMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(ftsexternaljob.FieldDeletedAt) {
+		fields = append(fields, ftsexternaljob.FieldDeletedAt)
+	}
+	if m.FieldCleared(ftsexternaljob.FieldResultPayload) {
+		fields = append(fields, ftsexternaljob.FieldResultPayload)
+	}
+	if m.FieldCleared(ftsexternaljob.FieldErrorPayload) {
+		fields = append(fields, ftsexternaljob.FieldErrorPayload)
+	}
+	if m.FieldCleared(ftsexternaljob.FieldManifestPath) {
+		fields = append(fields, ftsexternaljob.FieldManifestPath)
+	}
+	if m.FieldCleared(ftsexternaljob.FieldQualityReport) {
+		fields = append(fields, ftsexternaljob.FieldQualityReport)
+	}
+	if m.FieldCleared(ftsexternaljob.FieldCompletedAt) {
+		fields = append(fields, ftsexternaljob.FieldCompletedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *FTSExternalJobMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *FTSExternalJobMutation) ClearField(name string) error {
+	switch name {
+	case ftsexternaljob.FieldDeletedAt:
+		m.ClearDeletedAt()
+		return nil
+	case ftsexternaljob.FieldResultPayload:
+		m.ClearResultPayload()
+		return nil
+	case ftsexternaljob.FieldErrorPayload:
+		m.ClearErrorPayload()
+		return nil
+	case ftsexternaljob.FieldManifestPath:
+		m.ClearManifestPath()
+		return nil
+	case ftsexternaljob.FieldQualityReport:
+		m.ClearQualityReport()
+		return nil
+	case ftsexternaljob.FieldCompletedAt:
+		m.ClearCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FTSExternalJob nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *FTSExternalJobMutation) ResetField(name string) error {
+	switch name {
+	case ftsexternaljob.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case ftsexternaljob.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case ftsexternaljob.FieldDeletedAt:
+		m.ResetDeletedAt()
+		return nil
+	case ftsexternaljob.FieldRequestID:
+		m.ResetRequestID()
+		return nil
+	case ftsexternaljob.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case ftsexternaljob.FieldFileID:
+		m.ResetFileID()
+		return nil
+	case ftsexternaljob.FieldOwnerID:
+		m.ResetOwnerID()
+		return nil
+	case ftsexternaljob.FieldEntityID:
+		m.ResetEntityID()
+		return nil
+	case ftsexternaljob.FieldSnapshotToken:
+		m.ResetSnapshotToken()
+		return nil
+	case ftsexternaljob.FieldMode:
+		m.ResetMode()
+		return nil
+	case ftsexternaljob.FieldTriggerReason:
+		m.ResetTriggerReason()
+		return nil
+	case ftsexternaljob.FieldAttempt:
+		m.ResetAttempt()
+		return nil
+	case ftsexternaljob.FieldResultPayload:
+		m.ResetResultPayload()
+		return nil
+	case ftsexternaljob.FieldErrorPayload:
+		m.ResetErrorPayload()
+		return nil
+	case ftsexternaljob.FieldManifestPath:
+		m.ResetManifestPath()
+		return nil
+	case ftsexternaljob.FieldQualityReport:
+		m.ResetQualityReport()
+		return nil
+	case ftsexternaljob.FieldRequestedAt:
+		m.ResetRequestedAt()
+		return nil
+	case ftsexternaljob.FieldDeadlineAt:
+		m.ResetDeadlineAt()
+		return nil
+	case ftsexternaljob.FieldCompletedAt:
+		m.ResetCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FTSExternalJob field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *FTSExternalJobMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *FTSExternalJobMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *FTSExternalJobMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *FTSExternalJobMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *FTSExternalJobMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *FTSExternalJobMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *FTSExternalJobMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown FTSExternalJob unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *FTSExternalJobMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown FTSExternalJob edge %s", name)
 }
 
 // FileMutation represents an operation that mutates the File nodes in the graph.
@@ -19218,7 +20770,7 @@ func (m *TaskMutation) CorrelationID() (r uuid.UUID, exists bool) {
 // OldCorrelationID returns the old "correlation_id" field's value of the Task entity.
 // If the Task object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *TaskMutation) OldCorrelationID(ctx context.Context) (v uuid.UUID, err error) {
+func (m *TaskMutation) OldCorrelationID(ctx context.Context) (v *uuid.UUID, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldCorrelationID is only allowed on UpdateOne operations")
 	}

@@ -1538,6 +1538,7 @@ type testSettingProvider struct {
 	setting.Provider
 	enabled     bool
 	tikaCfg     *setting.FTSTikaExtractorSetting
+	externalCfg *setting.FTSExternalExtractorSetting
 	syncFolders bool
 }
 
@@ -1554,6 +1555,13 @@ func (s testSettingProvider) FTSTikaExtractor(ctx context.Context) *setting.FTST
 		return s.tikaCfg
 	}
 	return &setting.FTSTikaExtractorSetting{}
+}
+
+func (s testSettingProvider) FTSExternalExtractor(ctx context.Context) *setting.FTSExternalExtractorSetting {
+	if s.externalCfg != nil {
+		return s.externalCfg
+	}
+	return &setting.FTSExternalExtractorSetting{}
 }
 
 func (s testSettingProvider) MediaMetaExifEnabled(ctx context.Context) bool {

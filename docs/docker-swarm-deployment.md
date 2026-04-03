@@ -142,6 +142,8 @@ Cloudreve 主站多副本时，仍然需要一个共享运行目录：
 - `CLOUDREVE_SHARED_DATA_PATH`
 
 这个目录主要用于主站运行时数据同步，不应该作为用户文件 Blob 的长期存储方案。
+为了避免首次部署因为宿主机目录不存在而直接失败，默认 `docker-compose.swarm.yml` 改为使用命名卷。
+只有当你已经准备好共享 POSIX 文件系统时，再叠加 `docker-compose.swarm.bind.yml`。
 
 ### 5.3 Cloudreve 文件数据
 
@@ -158,6 +160,9 @@ Cloudreve 文件数据推荐放到 MinIO。
 Tika 只需要字体目录：
 
 - `TIKA_CUSTOM_FONTS_HOST_PATH`
+
+默认栈会挂一个空的命名卷到 `/tika-fonts/custom`，这样不依赖宿主机目录也能启动。
+如果你确实要加载宿主机上的自定义字体，再准备目录并启用 bind override。
 
 建议目录：
 
@@ -205,8 +210,6 @@ cp .env.swarm.example .env.swarm
 - `PGPOOL_ADMIN_PASSWORD`
 - `REDIS_PASSWORD`
 - `TIKA_IMAGE`
-- `CLOUDREVE_SHARED_DATA_PATH`
-- `TIKA_CUSTOM_FONTS_HOST_PATH`
 
 首次部署建议保持：
 
@@ -214,6 +217,12 @@ cp .env.swarm.example .env.swarm
 - `CLOUDREVE_SLAVE_SECRET` 保持占位值，等主站起来后再回填正式值
 
 如果你还没有为 `CLOUDREVE_SHARED_DATA_PATH` 准备稳定的共享 POSIX 文件系统，那么先不要把 master 扩到 `2`。
+如果你已经准备好了共享 POSIX 文件系统或宿主机字体目录，再额外设置：
+
+- `CLOUDREVE_SHARED_DATA_PATH`
+- `TIKA_CUSTOM_FONTS_HOST_PATH`
+
+并在部署时叠加 `docker-compose.swarm.bind.yml`。
 
 ## 8. 首次部署
 
@@ -225,6 +234,12 @@ source ./.env.swarm
 set +a
 
 docker stack deploy -c docker-compose.swarm.yml cloudreve
+```
+
+如果你已经准备好所有宿主机目录并确认每个候选节点都能访问，再执行：
+
+```bash
+docker stack deploy -c docker-compose.swarm.yml -c docker-compose.swarm.bind.yml cloudreve
 ```
 
 查看服务状态：

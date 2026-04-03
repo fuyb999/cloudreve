@@ -244,6 +244,8 @@ type (
 		FTSIndexElasticsearch(ctx context.Context) *FTSIndexElasticsearchSetting
 		// FTSTikaExtractor returns Tika extractor settings.
 		FTSTikaExtractor(ctx context.Context) *FTSTikaExtractorSetting
+		// FTSExternalExtractor returns third-party Kafka extractor settings.
+		FTSExternalExtractor(ctx context.Context) *FTSExternalExtractorSetting
 		// FTSChunkSize returns the maximum chunk size in bytes for full-text search indexing.
 		FTSChunkSize(ctx context.Context) int
 		// DefaultViewerMapping returns the default viewer mapping.
@@ -766,6 +768,40 @@ func (s *settingProvider) FTSTikaExtractor(ctx context.Context) *FTSTikaExtracto
 	}
 }
 
+func (s *settingProvider) FTSExternalExtractor(ctx context.Context) *FTSExternalExtractorSetting {
+	return &FTSExternalExtractorSetting{
+		Enabled:              s.getBoolean(ctx, "fts_external_enabled", false),
+		Mode:                 FTSExternalMode(s.getString(ctx, "fts_external_mode", string(FTSExternalModeFallbackOnErrorOrQuality))),
+		TimeoutSeconds:       s.getInt(ctx, "fts_external_timeout_seconds", 300),
+		RetryMax:             s.getInt(ctx, "fts_external_retry_max", 2),
+		RecursiveAttachments: s.getBoolean(ctx, "fts_external_recursive_attachments", true),
+		SkipEncryptedFiles:   s.getBoolean(ctx, "fts_external_skip_encrypted_files", true),
+		Kafka: FTSExternalKafkaSetting{
+			UseGlobalKafka:   s.getBoolean(ctx, "fts_external_use_global_kafka", true),
+			Brokers:          getNonEmptyStringList(s.getStringList(ctx, "fts_external_kafka_brokers", []string{})),
+			SecurityProtocol: s.getString(ctx, "fts_external_kafka_security_protocol", "PLAINTEXT"),
+			SASLMechanism:    s.getString(ctx, "fts_external_kafka_sasl_mechanism", "PLAIN"),
+			Username:         s.getString(ctx, "fts_external_kafka_username", ""),
+			Password:         s.getString(ctx, "fts_external_kafka_password", ""),
+			TLSSkipVerify:    s.getBoolean(ctx, "fts_external_kafka_tls_skip_verify", false),
+			ProcessTopic:     s.getString(ctx, "fts_external_kafka_process_topic", "process"),
+			ResultTopic:      s.getString(ctx, "fts_external_kafka_result_topic", "result"),
+			ErrorTopic:       s.getString(ctx, "fts_external_kafka_error_topic", "error"),
+			ConsumerGroup:    s.getString(ctx, "fts_external_kafka_consumer_group", "cloudreve-fts-external"),
+		},
+		Quality: FTSExternalQualitySetting{
+			Enabled:             s.getBoolean(ctx, "fts_external_quality_enabled", true),
+			MinTextLength:       s.getInt(ctx, "fts_external_quality_min_text_length", 32),
+			MaxReplacementRatio: s.getFloat64(ctx, "fts_external_quality_max_replacement_ratio", 0.02),
+			MaxControlCharRatio: s.getFloat64(ctx, "fts_external_quality_max_control_char_ratio", 0.01),
+			MinPrintableRatio:   s.getFloat64(ctx, "fts_external_quality_min_printable_ratio", 0.85),
+			FontBoxMinCount:     s.getInt(ctx, "fts_external_quality_font_box_min_count", 4),
+			FontBoxMinRun:       s.getInt(ctx, "fts_external_quality_font_box_min_run", 3),
+			FontBoxMinRatio:     s.getFloat64(ctx, "fts_external_quality_font_box_min_ratio", 0.35),
+		},
+	}
+}
+
 func (s *settingProvider) FTSChunkSize(ctx context.Context) int {
 	return s.getInt(ctx, "fts_chunk_size", 2000)
 }
@@ -799,6 +835,19 @@ func activeTikaExts(docEnabled bool, docExts []string, archiveEnabled bool, arch
 	}
 
 	return normalizeTikaExts(active)
+}
+
+func getNonEmptyStringList(items []string) []string {
+	res := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		res = append(res, item)
+	}
+
+	return res
 }
 
 func (s *settingProvider) Queue(ctx context.Context, queueType QueueType) *QueueSetting {

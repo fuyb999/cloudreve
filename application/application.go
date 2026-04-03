@@ -18,6 +18,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/crontab"
 	"github.com/cloudreve/Cloudreve/v4/pkg/email"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver/onedrive"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
@@ -135,6 +136,11 @@ func (s *server) Start() error {
 	if err := s.dep.KafkaClient().Start(context.Background()); err != nil {
 		return fmt.Errorf("failed to start kafka client: %w", err)
 	}
+	if s.config.System().Mode == conf.MasterMode {
+		if err := manager.StartFTSExternalKafka(context.Background(), s.dep); err != nil {
+			s.logger.Warning("Failed to start external fts kafka runtime: %s", err)
+		}
+	}
 
 	api := routers.InitRouter(s.dep)
 	api.TrustedPlatform = s.config.System().ProxyHeader
@@ -207,6 +213,9 @@ func (s *server) Close() {
 
 	s.dep.EventHub().Close()
 	audit.CloseDefault()
+	if err := manager.CloseFTSExternalKafka(); err != nil {
+		s.logger.Warning("Failed to close external fts kafka runtime: %s", err)
+	}
 
 	// Shutdown http server
 	if s.server != nil {

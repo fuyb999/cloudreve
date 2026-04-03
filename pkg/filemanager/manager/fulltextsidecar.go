@@ -41,6 +41,8 @@ const (
 var ftsSidecarFiles = []string{
 	"content.txt",
 	"rmeta.json",
+	"attachments.json",
+	"diagnostics.json",
 	"assets.zip",
 	"docx-media.zip",
 	"manifest.json",
@@ -52,14 +54,16 @@ const (
 )
 
 type FTSSidecarManifest struct {
-	Version     int                  `json:"version"`
-	FileID      int                  `json:"file_id"`
-	EntityID    int                  `json:"entity_id"`
-	SourcePath  string               `json:"source_path"`
-	ExtractedAt time.Time            `json:"extracted_at"`
-	TextReady   bool                 `json:"text_ready,omitempty"`
-	AssetsReady bool                 `json:"assets_ready,omitempty"`
-	Objects     []FTSSidecarArtifact `json:"objects,omitempty"`
+	Version       int                  `json:"version"`
+	Provider      string               `json:"provider,omitempty"`
+	SnapshotToken string               `json:"snapshot_token,omitempty"`
+	FileID        int                  `json:"file_id"`
+	EntityID      int                  `json:"entity_id"`
+	SourcePath    string               `json:"source_path"`
+	ExtractedAt   time.Time            `json:"extracted_at"`
+	TextReady     bool                 `json:"text_ready,omitempty"`
+	AssetsReady   bool                 `json:"assets_ready,omitempty"`
+	Objects       []FTSSidecarArtifact `json:"objects,omitempty"`
 }
 
 type FTSSidecarArtifact struct {
@@ -277,6 +281,7 @@ func (m *manager) persistFTSSidecarsToHandler(
 	prefix := ftsSidecarPrefix(fileModel.OwnerID, fileModel.ID, primaryEntity.ID())
 	manifest := &FTSSidecarManifest{
 		Version:     ftsSidecarVersion,
+		Provider:    ftsSidecarProviderTika,
 		FileID:      fileModel.ID,
 		EntityID:    primaryEntity.ID(),
 		SourcePath:  sourcePath,
@@ -373,6 +378,170 @@ func (m *manager) persistFTSSidecarsToHandler(
 	savePath := path.Join(prefix, "manifest.json")
 	if err := putSidecarBytes(ctx, handler, savePath, "manifest.json", "application/json", raw); err != nil {
 		return nil, "", fmt.Errorf("failed to save tika sidecar manifest: %w", err)
+	}
+
+	return manifest, savePath, nil
+}
+
+func (m *manager) persistExternalFTSSidecars(
+	ctx context.Context,
+	fileModel *ent.File,
+	uri *fs.URI,
+	primaryEntity fs.Entity,
+	result *externalFTSResultMessage,
+) (*FTSSidecarManifest, string, error) {
+	if m == nil || fileModel == nil || uri == nil || primaryEntity == nil || result == nil {
+		return nil, "", fmt.Errorf("failed to persist external fts sidecars: invalid arguments")
+	}
+
+	_, handler, err := m.getEntityPolicyDriver(ctx, primaryEntity, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to resolve storage driver for external fts sidecar: %w", err)
+	}
+
+	manifest, savePath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, primaryEntity, handler, result)
+	if err != nil {
+		return nil, "", err
+	}
+
+	existingMetadata := metadataMap(fileModel.Edges.Metadata)
+	existingManifestPath := existingMetadata[dbfs.FTSSidecarManifestKey]
+	existingEntityID := existingMetadata[dbfs.FTSSidecarEntityIDKey]
+
+	patches := []fs.MetadataPatch{
+		{
+			Key:     dbfs.FTSSidecarManifestKey,
+			Remove:  true,
+			Private: true,
+		},
+		{
+			Key:     dbfs.FTSSidecarEntityIDKey,
+			Remove:  true,
+			Private: true,
+		},
+	}
+
+	if manifest != nil && savePath != "" {
+		patches = []fs.MetadataPatch{
+			{
+				Key:     dbfs.FTSSidecarManifestKey,
+				Value:   savePath,
+				Private: true,
+			},
+			{
+				Key:     dbfs.FTSSidecarEntityIDKey,
+				Value:   strconv.Itoa(primaryEntity.ID()),
+				Private: true,
+			},
+		}
+	}
+
+	if existingManifestPath != "" && (existingEntityID != strconv.Itoa(primaryEntity.ID()) || manifest == nil || savePath == "") {
+		if err := cleanupFTSSidecarsByMetadata(ctx, m, existingManifestPath, existingEntityID, primaryEntity); err != nil {
+			m.l.Warning("Failed to cleanup stale external fts sidecars for file %d: %s", fileModel.ID, err)
+		}
+	}
+
+	if err := m.fs.PatchMetadata(ctx, []*fs.URI{uri}, patches...); err != nil {
+		return nil, "", fmt.Errorf("failed to update external fts sidecar metadata: %w", err)
+	}
+
+	return manifest, savePath, nil
+}
+
+func (m *manager) persistExternalFTSSidecarsToHandler(
+	ctx context.Context,
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	handler driver.Handler,
+	result *externalFTSResultMessage,
+) (*FTSSidecarManifest, string, error) {
+	if m == nil || fileModel == nil || primaryEntity == nil || handler == nil || result == nil {
+		return nil, "", fmt.Errorf("failed to persist external fts sidecars: invalid arguments")
+	}
+
+	prefix := ftsSidecarPrefix(fileModel.OwnerID, fileModel.ID, primaryEntity.ID())
+	manifest := &FTSSidecarManifest{
+		Version:       ftsSidecarVersion,
+		Provider:      ftsSidecarProviderExternal,
+		SnapshotToken: strings.TrimSpace(result.SnapshotToken),
+		FileID:        fileModel.ID,
+		EntityID:      primaryEntity.ID(),
+		SourcePath:    primaryEntity.Source(),
+		ExtractedAt:   time.Now(),
+	}
+
+	if content := strings.TrimSpace(result.Root.Content); content != "" {
+		savePath := path.Join(prefix, "content.txt")
+		if err := putSidecarBytes(ctx, handler, savePath, "content.txt", "text/plain; charset=utf-8", []byte(content)); err != nil {
+			return nil, "", fmt.Errorf("failed to save external fts content sidecar: %w", err)
+		}
+		manifest.TextReady = true
+		manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+			ID:       "content.txt",
+			Depth:    0,
+			Kind:     "text",
+			Name:     "content.txt",
+			Path:     savePath,
+			MimeType: "text/plain; charset=utf-8",
+			Size:     int64(len(content)),
+		})
+	}
+
+	attachments := normalizeExternalAttachments(fileModel, primaryEntity, result.Attachments)
+	if len(attachments) > 0 {
+		raw, err := json.Marshal(attachments)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to marshal external fts attachments: %w", err)
+		}
+		savePath := path.Join(prefix, "attachments.json")
+		if err := putSidecarBytes(ctx, handler, savePath, "attachments.json", "application/json", raw); err != nil {
+			return nil, "", fmt.Errorf("failed to save external fts attachments sidecar: %w", err)
+		}
+		manifest.AssetsReady = true
+		manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+			ID:       "attachments.json",
+			Depth:    0,
+			Kind:     "external_attachments",
+			Name:     "attachments.json",
+			Path:     savePath,
+			MimeType: "application/json",
+			Size:     int64(len(raw)),
+		})
+	}
+
+	diagnostics := externalFTSDiagnostics{
+		Provider:      result.Provider,
+		SnapshotToken: result.SnapshotToken,
+		Warnings:      append([]string(nil), result.Root.Warnings...),
+		QualityScore:  result.Root.QualityScore,
+	}
+	diagnosticsRaw, err := json.Marshal(diagnostics)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal external fts diagnostics: %w", err)
+	}
+	diagnosticsPath := path.Join(prefix, "diagnostics.json")
+	if err := putSidecarBytes(ctx, handler, diagnosticsPath, "diagnostics.json", "application/json", diagnosticsRaw); err != nil {
+		return nil, "", fmt.Errorf("failed to save external fts diagnostics sidecar: %w", err)
+	}
+	manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+		ID:       "diagnostics.json",
+		Depth:    0,
+		Kind:     "diagnostics",
+		Name:     "diagnostics.json",
+		Path:     diagnosticsPath,
+		MimeType: "application/json",
+		Size:     int64(len(diagnosticsRaw)),
+	})
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal external fts sidecar manifest: %w", err)
+	}
+
+	savePath := path.Join(prefix, "manifest.json")
+	if err := putSidecarBytes(ctx, handler, savePath, "manifest.json", "application/json", raw); err != nil {
+		return nil, "", fmt.Errorf("failed to save external fts sidecar manifest: %w", err)
 	}
 
 	return manifest, savePath, nil

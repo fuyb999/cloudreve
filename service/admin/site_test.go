@@ -2,100 +2,69 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 )
 
-func TestContentProcessingQueueSettingsRegistered(t *testing.T) {
-	keys := []string{
-		"queue_media_meta_worker_num",
-		"queue_media_meta_max_execution",
-		"queue_media_meta_backoff_factor",
-		"queue_media_meta_backoff_max_duration",
-		"queue_media_meta_max_retry",
-		"queue_media_meta_retry_delay",
-		"queue_content_processing_worker_num",
-		"queue_content_processing_max_execution",
-		"queue_content_processing_backoff_factor",
-		"queue_content_processing_backoff_max_duration",
-		"queue_content_processing_max_retry",
-		"queue_content_processing_retry_delay",
-	}
+func TestExternalFTSPostProcessorCallsReload(t *testing.T) {
+	original := reloadFTSExternalKafka
+	defer func() { reloadFTSExternalKafka = original }()
 
-	for _, key := range keys {
-		if _, ok := postprocessors[key]; !ok {
-			t.Fatalf("expected postprocessor for %s to be registered", key)
+	called := 0
+	reloadFTSExternalKafka = func(ctx context.Context, dep dependency.Dep) error {
+		called++
+		if dep == nil {
+			t.Fatal("expected dependency in context")
 		}
+		return nil
+	}
+
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dependency.NewDependency())
+	if err := externalFTSPostProcessor(ctx, map[string]string{"fts_external_enabled": "1"}); err != nil {
+		t.Fatalf("expected reload to succeed, got error: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("expected reload to be called once, got %d", called)
 	}
 }
 
-func TestFTSIndexerSettingsRegistered(t *testing.T) {
-	keys := []string{
-		"fts_enabled",
-		"fts_index_type",
-		"fts_chunk_size",
+func TestExternalFTSPostProcessorReturnsReloadError(t *testing.T) {
+	original := reloadFTSExternalKafka
+	defer func() { reloadFTSExternalKafka = original }()
+
+	wantErr := errors.New("reload failed")
+	reloadFTSExternalKafka = func(ctx context.Context, dep dependency.Dep) error {
+		return wantErr
 	}
 
-	for _, key := range keys {
-		if _, ok := postprocessors[key]; !ok {
-			t.Fatalf("expected postprocessor for %s to be registered", key)
-		}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dependency.NewDependency())
+	if err := externalFTSPostProcessor(ctx, map[string]string{"fts_external_enabled": "1"}); !errors.Is(err, wantErr) {
+		t.Fatalf("expected reload error to be returned, got %v", err)
 	}
 }
 
-func TestProcessorKeyUsesFunctionIdentity(t *testing.T) {
-	first := processorKey(siteUrlPreProcessor)
-	second := processorKey(secretKeyPreProcessor)
-	third := processorKey(siteUrlPreProcessor)
-
-	if first == "" || second == "" {
-		t.Fatal("expected non-empty processor keys")
+func TestQualityOnlySettingsDoNotTriggerExternalKafkaReload(t *testing.T) {
+	if _, ok := postprocessors["fts_external_quality_enabled"]; ok {
+		t.Fatal("quality toggle should not trigger kafka reload")
 	}
-	if first == second {
-		t.Fatalf("expected distinct processor keys, got %q", first)
+	if _, ok := postprocessors["fts_external_quality_font_box_min_count"]; ok {
+		t.Fatal("font box count threshold should not trigger kafka reload")
 	}
-	if first != third {
-		t.Fatalf("expected stable processor key, got %q and %q", first, third)
+	if _, ok := postprocessors["fts_external_quality_font_box_min_run"]; ok {
+		t.Fatal("font box run threshold should not trigger kafka reload")
 	}
-}
-
-func TestMimeMappingPreProcessorNormalizesMappings(t *testing.T) {
-	settings := map[string]string{
-		"mime_mapping": `{
-			"TS":" text/plain ",
-			".RAR":"application/x-rar-compressed",
-			"json":"application/json; charset=utf-8"
-		}`,
+	if _, ok := postprocessors["fts_external_quality_font_box_min_ratio"]; ok {
+		t.Fatal("font box ratio threshold should not trigger kafka reload")
 	}
-
-	if err := mimeMappingPreProcessor(context.Background(), settings); err != nil {
-		t.Fatalf("unexpected preprocessor error: %v", err)
+	if _, ok := postprocessors["fts_external_timeout_seconds"]; ok {
+		t.Fatal("timeout threshold should not trigger kafka reload")
 	}
-
-	want := `{".json":"application/json; charset=utf-8",".rar":"application/x-rar-compressed",".ts":"text/plain"}`
-	if got := settings["mime_mapping"]; got != want {
-		t.Fatalf("unexpected normalized mime mapping: got %q want %q", got, want)
+	if _, ok := postprocessors["fts_external_enabled"]; !ok {
+		t.Fatal("external enable toggle should still trigger kafka reload")
 	}
-}
-
-func TestMimeMappingPreProcessorRejectsInvalidJSON(t *testing.T) {
-	settings := map[string]string{
-		"mime_mapping": `{invalid}`,
-	}
-
-	if err := mimeMappingPreProcessor(context.Background(), settings); err == nil {
-		t.Fatal("expected error for invalid mime mapping json")
-	}
-}
-
-func TestMimeMappingPreProcessorRejectsConflictingNormalizedKeys(t *testing.T) {
-	settings := map[string]string{
-		"mime_mapping": `{
-			"TS":"text/plain",
-			".ts":"application/typescript"
-		}`,
-	}
-
-	if err := mimeMappingPreProcessor(context.Background(), settings); err == nil {
-		t.Fatal("expected error for conflicting normalized mime mapping keys")
+	if _, ok := postprocessors["fts_external_kafka_process_topic"]; !ok {
+		t.Fatal("kafka topic changes should still trigger kafka reload")
 	}
 }

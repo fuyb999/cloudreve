@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -104,7 +105,8 @@ func (m *memorySidecarHandler) MediaMeta(ctx context.Context, path, ext, languag
 }
 
 type testEntity struct {
-	id int
+	id     int
+	source string
 }
 
 func (e *testEntity) ID() int                     { return e.id }
@@ -112,7 +114,7 @@ func (e *testEntity) Type() types.EntityType      { return types.EntityTypeVersi
 func (e *testEntity) Size() int64                 { return 0 }
 func (e *testEntity) UpdatedAt() time.Time        { return time.Unix(0, 0) }
 func (e *testEntity) CreatedAt() time.Time        { return time.Unix(0, 0) }
-func (e *testEntity) Source() string              { return "" }
+func (e *testEntity) Source() string              { return e.source }
 func (e *testEntity) ReferenceCount() int         { return 0 }
 func (e *testEntity) PolicyID() int               { return 0 }
 func (e *testEntity) UploadSessionID() *uuid.UUID { return nil }
@@ -344,6 +346,104 @@ func TestFTSSidecarCleanupDirectoriesFallsBackToBaseDirs(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected cleanup directories without manifest: got %#v want %#v", got, want)
+	}
+}
+
+func TestPersistExternalFTSSidecarsToHandlerWritesExpectedArtifacts(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	m := &manager{}
+
+	fileModel := &ent.File{ID: 42, OwnerID: 9, Name: "report.pdf"}
+	entity := &testEntity{id: 7, source: "tenant-a/u9/report.pdf"}
+	result := &externalFTSResultMessage{
+		SnapshotToken: "snapshot-42",
+		Provider: externalFTSProviderInfo{
+			Name:    "vendor-x",
+			Version: "1.0.0",
+		},
+		Root: externalFTSResultRoot{
+			Content:      "hello from external extractor",
+			Warnings:     []string{"font fallback used"},
+			QualityScore: 0.97,
+		},
+		Attachments: []externalFTSAttachment{{
+			ID:       "att-1",
+			ParentID: "file:42",
+			Depth:    1,
+			Type:     "attachment",
+			Name:     "embedded.txt",
+			Path:     "embedded/embedded.txt",
+			MimeType: "text/plain",
+			Content:  "embedded content",
+		}},
+	}
+
+	manifest, manifestPath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, entity, handler, result)
+	if err != nil {
+		t.Fatalf("persistExternalFTSSidecarsToHandler returned error: %v", err)
+	}
+	if manifest == nil {
+		t.Fatal("expected manifest")
+	}
+	if got, want := manifest.Provider, ftsSidecarProviderExternal; got != want {
+		t.Fatalf("unexpected manifest provider: got %q want %q", got, want)
+	}
+	if !manifest.TextReady || !manifest.AssetsReady {
+		t.Fatalf("expected text and assets to be ready: %+v", manifest)
+	}
+	if got, want := manifest.SourcePath, entity.Source(); got != want {
+		t.Fatalf("unexpected source path: got %q want %q", got, want)
+	}
+	if manifestPath == "" {
+		t.Fatal("expected manifest path")
+	}
+
+	loaded := loadFTSSidecarManifestByPath(ctx, handler, manifestPath)
+	if loaded == nil {
+		t.Fatal("expected manifest to be readable from sidecar storage")
+	}
+	if got, want := loaded.SnapshotToken, "snapshot-42"; got != want {
+		t.Fatalf("unexpected loaded snapshot token: got %q want %q", got, want)
+	}
+
+	contentRaw, err := os.ReadFile(handler.LocalPath(ctx, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "content.txt"))))
+	if err != nil {
+		t.Fatalf("failed to read content sidecar: %v", err)
+	}
+	if got, want := string(contentRaw), "hello from external extractor"; got != want {
+		t.Fatalf("unexpected content sidecar: got %q want %q", got, want)
+	}
+
+	attachmentsRaw, err := os.ReadFile(handler.LocalPath(ctx, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "attachments.json"))))
+	if err != nil {
+		t.Fatalf("failed to read attachments sidecar: %v", err)
+	}
+	var attachments []searcher.SearchAttachmentDocument
+	if err := json.Unmarshal(attachmentsRaw, &attachments); err != nil {
+		t.Fatalf("failed to unmarshal attachments sidecar: %v", err)
+	}
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachments sidecar count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].ParentID, attachmentRootParentID(42); got != want {
+		t.Fatalf("unexpected attachment parent id: got %q want %q", got, want)
+	}
+
+	diagnosticsRaw, err := os.ReadFile(handler.LocalPath(ctx, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "diagnostics.json"))))
+	if err != nil {
+		t.Fatalf("failed to read diagnostics sidecar: %v", err)
+	}
+	var diagnostics externalFTSDiagnostics
+	if err := json.Unmarshal(diagnosticsRaw, &diagnostics); err != nil {
+		t.Fatalf("failed to unmarshal diagnostics sidecar: %v", err)
+	}
+	if got, want := diagnostics.Provider.Name, "vendor-x"; got != want {
+		t.Fatalf("unexpected diagnostics provider: got %q want %q", got, want)
+	}
+	if got, want := diagnostics.SnapshotToken, "snapshot-42"; got != want {
+		t.Fatalf("unexpected diagnostics snapshot token: got %q want %q", got, want)
 	}
 }
 

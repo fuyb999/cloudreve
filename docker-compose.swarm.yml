@@ -9,7 +9,8 @@
 # - PostgreSQL and Redis do NOT use shared storage. Each replica must use its own dedicated data volume.
 # - Do NOT put PGDATA / Redis AOF/RDB on MinIO, NFS, CephFS or any shared filesystem.
 # - MinIO is recommended for Cloudreve file blobs, not for PostgreSQL / Redis runtime data.
-# - CLOUDREVE_SHARED_DATA_PATH is only for Cloudreve master runtime data that must be visible to all master replicas.
+# - The default stack avoids host bind mounts so first deployment does not fail on missing host paths.
+# - If you opt into `docker-compose.swarm.bind.yml`, `CLOUDREVE_SHARED_DATA_PATH` is only for Cloudreve master runtime data.
 # - PostgreSQL / Redis data members are fixed stateful roles. Do NOT expand them with `docker service scale`.
 # - TIKA_IMAGE must already exist on every node or be pushed to a registry. Swarm will not build it.
 
@@ -31,9 +32,7 @@ services:
       CR_CONF_Redis.Password: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:?set CLOUDREVE_SITE_URL}
     volumes:
-      - type: bind
-        source: ${CLOUDREVE_SHARED_DATA_PATH:?set CLOUDREVE_SHARED_DATA_PATH}
-        target: /cloudreve/data
+      - cloudreve_master_runtime:/cloudreve/data
     networks:
       - cloudreve_backend
     healthcheck:
@@ -553,10 +552,7 @@ services:
         protocol: tcp
         mode: ingress
     volumes:
-      - type: bind
-        source: ${TIKA_CUSTOM_FONTS_HOST_PATH:-/srv/cloudreve/tika-fonts}
-        target: /tika-fonts/custom
-        read_only: true
+      - tika_custom_fonts:/tika-fonts/custom:ro
     networks:
       - cloudreve_backend
     deploy:
@@ -588,6 +584,7 @@ networks:
     attachable: true
 
 volumes:
+  cloudreve_master_runtime:
   cloudreve_slave_runtime:
   minio_data:
   elasticsearch_data:
@@ -597,6 +594,7 @@ volumes:
   redis_1_data:
   redis_2_data:
   redis_3_data:
+  tika_custom_fonts:
 
 configs:
   redis_proxy_bootstrap:

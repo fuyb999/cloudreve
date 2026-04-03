@@ -24,6 +24,7 @@ func (Task) Fields() []ent.Field {
 		field.Text("private_state").Optional(),
 		field.UUID("correlation_id", uuid.Must(uuid.NewV4())).
 			Optional().
+			Nillable().
 			Immutable(),
 		field.Int("user_tasks").Optional(),
 	}

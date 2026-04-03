@@ -80,7 +80,7 @@ func newExplicitEntityRecycleTask(ctx context.Context, entities []int) (*Explici
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.ExplicitEntityRecycleTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState: &types.TaskPublicState{
 					ResumeTime: time.Now().Unix() - 1,
@@ -148,7 +148,7 @@ func NewEntityRecycleRoutineTask(ctx context.Context) (queue.Task, error) {
 		DBTask: &queue.DBTask{
 			Task: &ent.Task{
 				Type:          queue.EntityRecycleRoutineTaskType,
-				CorrelationID: logging.CorrelationID(ctx),
+				CorrelationID: logging.NillableCorrelationID(ctx),
 				PrivateState:  string(stateBytes),
 				PublicState: &types.TaskPublicState{
 					ResumeTime: time.Now().Unix() - 1,
