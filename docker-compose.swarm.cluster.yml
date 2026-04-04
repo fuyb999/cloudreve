@@ -1,0 +1,583 @@
+# MinIO / Elasticsearch / Kafka 多节点集群覆盖文件。
+# 用法：
+# - 在 `.env.swarm` 中设置 `SWARM_WITH_CLUSTER=yes`
+# - 再执行 `docker/swarm/deploy-stack.sh`
+#
+# 说明：
+# - 这个覆盖文件依赖 `docker/swarm/deploy-stack.sh --with-cluster`
+#   或 `.env.swarm` 中的 `SWARM_WITH_CLUSTER=yes`
+# - 部署脚本会先从基础模板里剔除单节点 `minio` / `elasticsearch`
+# - 再由这里提供：
+#   - 同名 `minio` 入口：4 节点 MinIO 分布式集群 + 1 个代理入口
+#   - 同名 `elasticsearch` 入口：3 节点 Elasticsearch 集群 + 1 个代理入口
+#   - 同名 `kafka` 入口：3 节点 Kafka KRaft 集群 + 1 个内部 bootstrap 代理
+#   - `kafka-ui`：专门访问 Kafka 集群的管理界面
+# - 建议在真实环境中给这些节点单独打 label，并把数据目录改成真实物理路径
+
+services:
+  minio:
+    image: ${MINIO_PROXY_IMAGE:-haproxy:3.0-alpine}
+    configs:
+      - source: minio_cluster_proxy_cfg_v1
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
+    ports:
+      - target: 9000
+        published: ${MINIO_API_PORT:-9000}
+        protocol: tcp
+        mode: ingress
+      - target: 9001
+        published: ${MINIO_CONSOLE_PORT:-9001}
+        protocol: tcp
+        mode: ingress
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${MINIO_PROXY_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${MINIO_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${MINIO_PROXY_CPU_RESERVATION:-0.25}"
+          memory: ${MINIO_PROXY_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${MINIO_PROXY_CPU_LIMIT:-1.0}"
+          memory: ${MINIO_PROXY_MEM_LIMIT:-512M}
+
+  minio-1:
+    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+    volumes:
+      - type: ${MINIO_1_DATA_MOUNT_TYPE:-volume}
+        source: ${MINIO_1_DATA_MOUNT_SOURCE:-minio_1_data}
+        target: /bitnami/minio/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_NODE_1_CONSTRAINT:-node.labels.cloudreve.minio1==true}
+      resources:
+        reservations:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  minio-2:
+    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+    volumes:
+      - type: ${MINIO_2_DATA_MOUNT_TYPE:-volume}
+        source: ${MINIO_2_DATA_MOUNT_SOURCE:-minio_2_data}
+        target: /bitnami/minio/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_NODE_2_CONSTRAINT:-node.labels.cloudreve.minio2==true}
+      resources:
+        reservations:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  minio-3:
+    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+    volumes:
+      - type: ${MINIO_3_DATA_MOUNT_TYPE:-volume}
+        source: ${MINIO_3_DATA_MOUNT_SOURCE:-minio_3_data}
+        target: /bitnami/minio/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_NODE_3_CONSTRAINT:-node.labels.cloudreve.minio3==true}
+      resources:
+        reservations:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  minio-4:
+    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+    volumes:
+      - type: ${MINIO_4_DATA_MOUNT_TYPE:-volume}
+        source: ${MINIO_4_DATA_MOUNT_SOURCE:-minio_4_data}
+        target: /bitnami/minio/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_NODE_4_CONSTRAINT:-node.labels.cloudreve.minio4==true}
+      resources:
+        reservations:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  elasticsearch:
+    image: ${ELASTICSEARCH_PROXY_IMAGE:-haproxy:3.0-alpine}
+    configs:
+      - source: elasticsearch_cluster_proxy_cfg_v1
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
+    ports:
+      - target: 9200
+        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
+        protocol: tcp
+        mode: ingress
+      - target: 9300
+        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
+        protocol: tcp
+        mode: ingress
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${ELASTICSEARCH_PROXY_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${ELASTICSEARCH_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_PROXY_CPU_RESERVATION:-0.25}"
+          memory: ${ELASTICSEARCH_PROXY_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${ELASTICSEARCH_PROXY_CPU_LIMIT:-1.0}"
+          memory: ${ELASTICSEARCH_PROXY_MEM_LIMIT:-512M}
+
+  elasticsearch-1:
+    image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    environment:
+      cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS:--Xms4g -Xmx4g}"
+      ELASTICSEARCH_NODE_NAME: elasticsearch-1
+      ELASTICSEARCH_DISCOVERY_SEED_HOSTS: ${ELASTICSEARCH_DISCOVERY_SEED_HOSTS:-tasks.elasticsearch-1,tasks.elasticsearch-2,tasks.elasticsearch-3}
+      ELASTICSEARCH_CLUSTER_INITIAL_MASTER_NODES: ${ELASTICSEARCH_CLUSTER_INITIAL_MASTER_NODES:-elasticsearch-1,elasticsearch-2,elasticsearch-3}
+    command: ["/usr/local/bin/elasticsearch-swarm-entrypoint.sh"]
+    configs:
+      - source: elasticsearch_swarm_entrypoint_v1
+        target: /usr/local/bin/elasticsearch-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200 >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${ELASTICSEARCH_1_DATA_MOUNT_TYPE:-volume}
+        source: ${ELASTICSEARCH_1_DATA_MOUNT_SOURCE:-elasticsearch_1_data}
+        target: /usr/share/elasticsearch/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${ELASTICSEARCH_NODE_1_CONSTRAINT:-node.labels.cloudreve.es1==true}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_RESERVATION:-2.0}"
+          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}
+        limits:
+          cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_LIMIT:-4.0}"
+          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}
+
+  elasticsearch-2:
+    image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    environment:
+      cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS:--Xms4g -Xmx4g}"
+      ELASTICSEARCH_NODE_NAME: elasticsearch-2
+      ELASTICSEARCH_DISCOVERY_SEED_HOSTS: ${ELASTICSEARCH_DISCOVERY_SEED_HOSTS:-tasks.elasticsearch-1,tasks.elasticsearch-2,tasks.elasticsearch-3}
+      ELASTICSEARCH_CLUSTER_INITIAL_MASTER_NODES: ${ELASTICSEARCH_CLUSTER_INITIAL_MASTER_NODES:-elasticsearch-1,elasticsearch-2,elasticsearch-3}
+    command: ["/usr/local/bin/elasticsearch-swarm-entrypoint.sh"]
+    configs:
+      - source: elasticsearch_swarm_entrypoint_v1
+        target: /usr/local/bin/elasticsearch-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200 >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${ELASTICSEARCH_2_DATA_MOUNT_TYPE:-volume}
+        source: ${ELASTICSEARCH_2_DATA_MOUNT_SOURCE:-elasticsearch_2_data}
+        target: /usr/share/elasticsearch/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${ELASTICSEARCH_NODE_2_CONSTRAINT:-node.labels.cloudreve.es2==true}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_RESERVATION:-2.0}"
+          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}
+        limits:
+          cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_LIMIT:-4.0}"
+          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}
+
+  elasticsearch-3:
+    image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    environment:
+      cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS:--Xms4g -Xmx4g}"
+      ELASTICSEARCH_NODE_NAME: elasticsearch-3
+      ELASTICSEARCH_DISCOVERY_SEED_HOSTS: ${ELASTICSEARCH_DISCOVERY_SEED_HOSTS:-tasks.elasticsearch-1,tasks.elasticsearch-2,tasks.elasticsearch-3}
+      ELASTICSEARCH_CLUSTER_INITIAL_MASTER_NODES: ${ELASTICSEARCH_CLUSTER_INITIAL_MASTER_NODES:-elasticsearch-1,elasticsearch-2,elasticsearch-3}
+    command: ["/usr/local/bin/elasticsearch-swarm-entrypoint.sh"]
+    configs:
+      - source: elasticsearch_swarm_entrypoint_v1
+        target: /usr/local/bin/elasticsearch-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200 >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${ELASTICSEARCH_3_DATA_MOUNT_TYPE:-volume}
+        source: ${ELASTICSEARCH_3_DATA_MOUNT_SOURCE:-elasticsearch_3_data}
+        target: /usr/share/elasticsearch/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${ELASTICSEARCH_NODE_3_CONSTRAINT:-node.labels.cloudreve.es3==true}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_RESERVATION:-2.0}"
+          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}
+        limits:
+          cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_LIMIT:-4.0}"
+          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}
+
+  kafka:
+    image: ${KAFKA_PROXY_IMAGE:-haproxy:3.0-alpine}
+    configs:
+      - source: kafka_cluster_proxy_cfg_v1
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${KAFKA_PROXY_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${KAFKA_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${KAFKA_PROXY_CPU_RESERVATION:-0.25}"
+          memory: ${KAFKA_PROXY_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${KAFKA_PROXY_CPU_LIMIT:-1.0}"
+          memory: ${KAFKA_PROXY_MEM_LIMIT:-512M}
+
+  kafka-1:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_CONTROLLER_QUORUM_VOTERS:-1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093}
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "${KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS:--Xms1g -Xmx1g}"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}"
+      KAFKA_NUM_PARTITIONS: "${KAFKA_NUM_PARTITIONS:-3}"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "${KAFKA_DEFAULT_REPLICATION_FACTOR:-3}"
+      KAFKA_MIN_INSYNC_REPLICAS: "${KAFKA_MIN_INSYNC_REPLICAS:-2}"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:-3}"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "${KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-3}"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-2}"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${KAFKA_1_DATA_MOUNT_TYPE:-volume}
+        source: ${KAFKA_1_DATA_MOUNT_SOURCE:-kafka_1_data}
+        target: /var/lib/kafka/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${KAFKA_NODE_1_CONSTRAINT:-node.labels.cloudreve.kafka1==true}
+      resources:
+        reservations:
+          cpus: "${KAFKA_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${KAFKA_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  kafka-2:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: "2"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_CONTROLLER_QUORUM_VOTERS:-1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093}
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "${KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS:--Xms1g -Xmx1g}"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}"
+      KAFKA_NUM_PARTITIONS: "${KAFKA_NUM_PARTITIONS:-3}"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "${KAFKA_DEFAULT_REPLICATION_FACTOR:-3}"
+      KAFKA_MIN_INSYNC_REPLICAS: "${KAFKA_MIN_INSYNC_REPLICAS:-2}"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:-3}"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "${KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-3}"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-2}"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${KAFKA_2_DATA_MOUNT_TYPE:-volume}
+        source: ${KAFKA_2_DATA_MOUNT_SOURCE:-kafka_2_data}
+        target: /var/lib/kafka/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${KAFKA_NODE_2_CONSTRAINT:-node.labels.cloudreve.kafka2==true}
+      resources:
+        reservations:
+          cpus: "${KAFKA_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${KAFKA_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  kafka-3:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: "3"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_CONTROLLER_QUORUM_VOTERS:-1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093}
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "${KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS:--Xms1g -Xmx1g}"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}"
+      KAFKA_NUM_PARTITIONS: "${KAFKA_NUM_PARTITIONS:-3}"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "${KAFKA_DEFAULT_REPLICATION_FACTOR:-3}"
+      KAFKA_MIN_INSYNC_REPLICAS: "${KAFKA_MIN_INSYNC_REPLICAS:-2}"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:-3}"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "${KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-3}"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-2}"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${KAFKA_3_DATA_MOUNT_TYPE:-volume}
+        source: ${KAFKA_3_DATA_MOUNT_SOURCE:-kafka_3_data}
+        target: /var/lib/kafka/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${KAFKA_NODE_3_CONSTRAINT:-node.labels.cloudreve.kafka3==true}
+      resources:
+        reservations:
+          cpus: "${KAFKA_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
+          memory: ${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${KAFKA_CLUSTER_NODE_CPU_LIMIT:-2.0}"
+          memory: ${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}
+
+  kafka-ui:
+    image: ${KAFKA_UI_IMAGE:-provectuslabs/kafka-ui:v0.7.2}
+    environment:
+      SERVER_PORT: "8080"
+      DYNAMIC_CONFIG_ENABLED: "${KAFKA_UI_DYNAMIC_CONFIG_ENABLED:-false}"
+      KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTER_NAME:-cloudreve-kafka}
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_UI_BOOTSTRAP_SERVERS:-kafka:9092}
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-PLAINTEXT}
+    ports:
+      - target: 8080
+        published: ${KAFKA_UI_HTTP_PORT:-18089}
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/actuator/health >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${KAFKA_UI_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${KAFKA_UI_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${KAFKA_UI_CPU_RESERVATION:-0.25}"
+          memory: ${KAFKA_UI_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${KAFKA_UI_CPU_LIMIT:-1.0}"
+          memory: ${KAFKA_UI_MEM_LIMIT:-1G}
+
+configs:
+  minio_cluster_proxy_cfg_v1:
+    file: ./docker/swarm/haproxy/minio-cluster.cfg
+  elasticsearch_cluster_proxy_cfg_v1:
+    file: ./docker/swarm/haproxy/elasticsearch-cluster.cfg
+  kafka_cluster_proxy_cfg_v1:
+    file: ./docker/swarm/haproxy/kafka-cluster.cfg
+  elasticsearch_swarm_entrypoint_v1:
+    file: ./docker/swarm/elasticsearch-swarm-entrypoint.sh
+
+volumes:
+  minio_1_data:
+  minio_2_data:
+  minio_3_data:
+  minio_4_data:
+  elasticsearch_1_data:
+  elasticsearch_2_data:
+  elasticsearch_3_data:
+  kafka_1_data:
+  kafka_2_data:
+  kafka_3_data:

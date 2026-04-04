@@ -1,10 +1,7 @@
+# 仅用于兼容旧方式：给 Tika 叠加宿主机字体目录。
+# 现在更推荐直接在 `.env.swarm` / `.env.swarm.example` 里使用
+# `TIKA_CUSTOM_FONTS_MOUNT_TYPE` 和 `TIKA_CUSTOM_FONTS_MOUNT_SOURCE` 控制。
 services:
-  cloudreve-master:
-    volumes:
-      - type: bind
-        source: ${CLOUDREVE_SHARED_DATA_PATH:?set CLOUDREVE_SHARED_DATA_PATH}
-        target: /cloudreve/data
-
   tika:
     volumes:
       - type: bind

@@ -1,4 +1,4 @@
-FROM alpine:latest
+FROM alpine:3.23.3
 
 WORKDIR /cloudreve
 
@@ -27,4 +27,3 @@ EXPOSE 5212 443 6888 6888/udp
 VOLUME ["/cloudreve/data"]
 
 ENTRYPOINT ["sh", "./entrypoint.sh"]
-

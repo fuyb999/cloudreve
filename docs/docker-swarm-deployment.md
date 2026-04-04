@@ -3,65 +3,413 @@
 本文档对应仓库中的以下文件：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.cluster.yml`
+- `docker-compose.swarm.bind.yml`
 - `.env.swarm.example`
-- `docker/swarm/nginx/cloudreve-proxy.conf.template`
-
-目标环境为 Docker Engine `25.0.4`。
+- `docker/swarm/deploy-stack.sh`
 
 如果你现在更需要一份最短执行路径，先看：
 
 - `docs/docker-swarm-quickstart.md`
 
-## 1. 架构说明
+如果你现在关注的是多 manager / 多机器下 `.env.swarm` 的生效范围，再看：
+
+- `docs/docker-swarm-env-sync.md`
+
+## 1. 当前默认架构
 
 当前 Swarm 栈采用如下拓扑：
 
-- `cloudreve-master`：Cloudreve 主站服务，支持横向扩容
-- `cloudreve-master-proxy`：主站统一入口的 Nginx 反向代理
-- `cloudreve-slave`：Cloudreve 从节点服务，支持横向扩容
-- `cloudreve-slave-proxy`：从节点统一入口的 Nginx 反向代理
+- `cloudreve-master`：Cloudreve 主站
+- `cloudreve-master-proxy`：主站入口 Nginx
+- `cloudreve-slave`：Cloudreve 从节点
+- `cloudreve-slave-proxy`：从节点入口 Nginx
 - `postgresql-1/2/3 + pgpool`：PostgreSQL 高可用
 - `redis-1/2/3 + redis-sentinel + redis-proxy`：Redis 高可用
-- `minio`：推荐作为 Cloudreve 文件 Blob 的对象存储
-- `tika`：Apache Tika 服务，支持横向扩容
+- `minio`：默认 S3 兼容对象存储入口
+- `elasticsearch`：全文检索入口
+- `kafka`：Kafka 内部 bootstrap 入口
+- `kafka-ui`：Kafka 集群管理界面
+- `tika`：文档解析
 
-## 建议结论
+默认设计目标：
 
-如果你当前最关心的是 `PG / Redis` 的“共享存储怎么做”，结论可以直接定下来：
+- PostgreSQL / Redis 固定到带标签的节点上
+- PostgreSQL / Redis 使用宿主机物理目录
+- Cloudreve 运行目录、MinIO、Elasticsearch、Tika 字体目录同时兼容命名卷和宿主机绝对路径
+- Cloudreve 用户文件默认走 S3 兼容对象存储
+- Cloudreve 不再默认把用户文件写到宿主机目录
 
-- PostgreSQL：不要共享数据目录，使用本地 SSD / 本地卷 + 主从复制 + 故障切换
-- Redis：不要共享数据目录，使用本地 SSD / 本地卷 + 主从复制 + Sentinel
-- 备份与归档：可以进入 MinIO，但 MinIO 只承载备份对象，不承载 PG / Redis 运行时数据
-- Cloudreve 文件：推荐放到独立 MinIO / S3 兼容对象存储
-- `cloudreve-master`：只有在 `CLOUDREVE_SHARED_DATA_PATH` 已经是可靠共享 POSIX 文件系统时，才建议扩到 `2` 个及以上副本
+## 2. 核心结论
 
-换句话说，`PG / Redis` 的最佳方案不是“共享卷”，而是“每个副本独立本地卷 + 复制 + 故障切换 + 备份”。
+先把结论定下来：
 
-## 2. 这套设计依据的官方约束
+- PostgreSQL：不要共享运行数据目录
+- Redis：不要共享运行数据目录
+- PostgreSQL / Redis：每个副本一个独立宿主机目录
+- Cloudreve 文件：默认就是 S3 兼容对象存储
+- 栈内默认 S3 实现是单副本 `minio`
+- `cloudreve-master`：默认还是建议 `1` 副本
+- `SWARM_WITH_CLUSTER=yes` 时，会把单节点 `minio` / `elasticsearch` 切换成多节点集群，并额外启用 3 节点 Kafka 集群
 
-这份 Swarm 方案是根据 Cloudreve 官方文档里的约束落地出来的：
+这套模板不是“让数据库共享卷跑起来”，而是：
 
-- Cloudreve 建议部署在反向代理之后
-- 从节点必须和主站使用相同版本的 Cloudreve
-- 主站 `Site URL` 必须能被从节点访问到
-- 如果从节点被用作存储节点，则从节点地址也必须能被最终用户访问到
-- 从节点本地存储默认使用 `data/uploads`
-- 浏览器直传到从节点时，需要放开对应的 CORS
+- 本地磁盘
+- 复制
+- 故障切换
+- 对象存储
 
-这份方案也遵循 Docker 官方对 Swarm 的要求：
+同时要注意：
 
-- `docker stack deploy` 必须在 Swarm manager 节点执行
-- 多节点 Swarm 需要所有节点都能拉取镜像
-- 有状态服务应通过 placement constraints 固定到指定节点
-- 副本扩容通过 `docker service scale` 管理
+- `PG / Redis` 仍然强制使用宿主机物理路径
+- `cloudreve-master` / `cloudreve-slave` / `minio` / `elasticsearch` / `tika` 字体目录默认使用命名卷
+- 上面这些服务如果你要切换到宿主机绝对路径，可以通过 `*_MOUNT_TYPE=bind` 和 `*_MOUNT_SOURCE=/absolute/path` 切换
 
-另外，这份方案有一条非常重要的工程约束：
+## 3. 关于镜像默认值
 
-- PostgreSQL 和 Redis 不做“共享数据目录”
-- PostgreSQL 和 Redis 依赖复制和故障切换，不依赖共享文件系统
-- MinIO 只用于 Cloudreve 文件数据或备份，不用于 PG / Redis 运行时数据
+模板里当前默认使用：
 
-## 3. 准备 Swarm 集群
+- `bitnami/postgresql-repmgr:17.6.0-debian-12-r2`
+- `bitnami/pgpool:4.6.3-debian-12-r0`
+
+原因很直接：
+
+- 如果公开仓库不可拉取，你需要先在节点本地把可用镜像 retag 为 `bitnami/*`
+- 或者把同名镜像推到你自己的私有镜像仓库
+
+如果你自己已经有可验证的镜像仓库，也可以在 `.env.swarm` 中覆盖：
+
+- `POSTGRESQL_REPMGR_IMAGE`
+- `PGPOOL_IMAGE`
+
+## 4. 宿主机目录要求
+
+`docker-compose.swarm.yml` 默认强制以下目录为宿主机物理路径：
+
+- `PG_1_DATA_PATH`
+- `PG_2_DATA_PATH`
+- `PG_3_DATA_PATH`
+- `REDIS_1_DATA_PATH`
+- `REDIS_2_DATA_PATH`
+- `REDIS_3_DATA_PATH`
+
+这几个目录必须满足：
+
+- 在对应节点真实存在
+- 属于本机本地磁盘或你可控的块存储
+- 不能是多个数据库实例共享的同一路径
+
+建议目录：
+
+```bash
+mkdir -p /srv/cloudreve/postgresql/1
+mkdir -p /srv/cloudreve/postgresql/2
+mkdir -p /srv/cloudreve/postgresql/3
+mkdir -p /srv/cloudreve/redis/1
+mkdir -p /srv/cloudreve/redis/2
+mkdir -p /srv/cloudreve/redis/3
+```
+
+也可以直接在目标节点执行仓库内脚本，让它按 `.env.swarm` 自动建目录并修正常见权限：
+
+```bash
+sudo docker/swarm/prepare-bind-paths.sh --check
+sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
+```
+
+另外，下列服务默认不是强制宿主机路径，而是默认使用命名卷：
+
+- `cloudreve-master` 运行目录
+- `cloudreve-slave` 运行目录
+- `minio` 数据目录
+- `elasticsearch` 数据目录
+- `tika` 自定义字体目录
+
+如果你要把它们改成宿主机绝对路径，可在 `.env.swarm` 中设置：
+
+```bash
+CLOUDREVE_MASTER_RUNTIME_MOUNT_TYPE=bind
+CLOUDREVE_MASTER_RUNTIME_MOUNT_SOURCE=/srv/cloudreve/master-runtime
+
+CLOUDREVE_SLAVE_RUNTIME_MOUNT_TYPE=bind
+CLOUDREVE_SLAVE_RUNTIME_MOUNT_SOURCE=/srv/cloudreve/slave-runtime
+
+MINIO_DATA_MOUNT_TYPE=bind
+MINIO_DATA_MOUNT_SOURCE=/srv/cloudreve/minio
+
+ELASTICSEARCH_DATA_MOUNT_TYPE=bind
+ELASTICSEARCH_DATA_MOUNT_SOURCE=/srv/cloudreve/elasticsearch
+
+TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
+TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/tika-fonts
+```
+
+如果这些服务已经切到了 `bind`，也可以在对应节点执行：
+
+```bash
+sudo docker/swarm/prepare-bind-paths.sh --services cloudreve,minio,elasticsearch,tika
+```
+
+如果是多机 Swarm，建议同时把这些服务固定到带标签的节点，避免任务被调度到没有该绝对路径的机器。
+
+如果你启用了 `SWARM_WITH_CLUSTER=yes`，MinIO / Elasticsearch / Kafka 要改的是各自节点路径，而不是单节点路径：
+
+```bash
+MINIO_1_DATA_MOUNT_TYPE=bind
+MINIO_1_DATA_MOUNT_SOURCE=/srv/cloudreve/minio/1
+MINIO_2_DATA_MOUNT_TYPE=bind
+MINIO_2_DATA_MOUNT_SOURCE=/srv/cloudreve/minio/2
+MINIO_3_DATA_MOUNT_TYPE=bind
+MINIO_3_DATA_MOUNT_SOURCE=/srv/cloudreve/minio/3
+MINIO_4_DATA_MOUNT_TYPE=bind
+MINIO_4_DATA_MOUNT_SOURCE=/srv/cloudreve/minio/4
+
+ELASTICSEARCH_1_DATA_MOUNT_TYPE=bind
+ELASTICSEARCH_1_DATA_MOUNT_SOURCE=/srv/cloudreve/elasticsearch/1
+ELASTICSEARCH_2_DATA_MOUNT_TYPE=bind
+ELASTICSEARCH_2_DATA_MOUNT_SOURCE=/srv/cloudreve/elasticsearch/2
+ELASTICSEARCH_3_DATA_MOUNT_TYPE=bind
+ELASTICSEARCH_3_DATA_MOUNT_SOURCE=/srv/cloudreve/elasticsearch/3
+
+KAFKA_1_DATA_MOUNT_TYPE=bind
+KAFKA_1_DATA_MOUNT_SOURCE=/srv/cloudreve/kafka/1
+KAFKA_2_DATA_MOUNT_TYPE=bind
+KAFKA_2_DATA_MOUNT_SOURCE=/srv/cloudreve/kafka/2
+KAFKA_3_DATA_MOUNT_TYPE=bind
+KAFKA_3_DATA_MOUNT_SOURCE=/srv/cloudreve/kafka/3
+```
+
+然后在对应节点执行：
+
+```bash
+sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
+```
+
+## 5. Colima 说明
+
+如果你是在 macOS + Colima 下联调或部署：
+
+- `PG_*_DATA_PATH` / `REDIS_*_DATA_PATH` 必须是 macOS 宿主机上的真实目录
+- 这些目录必须已经共享进 Colima 虚拟机
+- 不要把目录写成容器内部路径
+- 不要指望 `network_mode: host`
+
+实操上至少要保证：
+
+- 目录位于 Colima 已共享的宿主机路径下
+- 或者你通过 Colima 的 mount 配置显式挂进去
+- 如果不满足这两个条件，就优先使用默认命名卷模式，不要强行切 `bind`
+
+## 6. 默认端口
+
+当前默认对外端口如下：
+
+- `cloudreve-master-proxy`: `80`
+- `cloudreve-slave-proxy`: `5213`
+- `pgpool`: `15432`
+- `redis-proxy`: `16379`
+- `minio api`: `9000`
+- `minio console`: `9001`
+- `elasticsearch`: `9200/9300`
+- `kafka` 内部入口：`9092`
+- `kafka-ui`: `18089`
+- `tika`: `9998`
+
+其中这两个就是为了避免直接占用默认数据库端口而改掉的：
+
+- `PGPOOL_PUBLIC_PORT=15432`
+- `REDIS_PROXY_PUBLIC_PORT=16379`
+
+## 7. 默认 S3 初始化逻辑
+
+当前模板已经不是“第一次启动后手动去后台把默认存储切成 MinIO”。
+
+现在的行为是：
+
+1. `cloudreve-master` 首次初始化数据库时检查是否存在 `storage_policy ID=1`
+2. 如果不存在，则读取 `CR_INIT_DEFAULT_STORAGE`
+3. 当值为 `s3` 时，直接创建 `S3` 类型的默认存储策略
+
+默认 `.env.swarm.example` 给出的值是：
+
+- `CR_INIT_DEFAULT_STORAGE=s3`
+- `CR_INIT_S3_ENDPOINT=http://minio:9000`
+- `CR_INIT_S3_BUCKET=cloudreve`
+- `CR_INIT_S3_ACCESS_KEY=minio`
+- `CR_INIT_S3_SECRET_KEY=<same secret model as MinIO>`
+- `CR_INIT_S3_FORCE_PATH_STYLE=true`
+- `CR_INIT_S3_RELAY=true`
+- `CR_INIT_S3_INTERNAL_PROXY=true`
+
+这样做的目的：
+
+- 上传不要求浏览器直连内部 `minio`
+- 下载不要求客户端直接访问内部对象存储地址
+- 默认链路在内网和反向代理场景下更稳
+
+注意：
+
+- 这只在第一次数据库初始化时生效
+- 如果数据库已经初始化过，`ID=1` 默认策略不会被自动重建
+- 如果你要切换到外部 S3，请在第一次部署前修改 `CR_INIT_S3_*`
+
+如果启用了 `SWARM_WITH_CLUSTER=yes`，这里仍然保持 `http://minio:9000` 不变。
+
+原因是：
+
+- 集群模式下，`minio` 这个服务名会变成代理入口
+- 后端实际数据节点是 `minio-1` 到 `minio-4`
+- 所以 Cloudreve 初始化参数不需要改成 `minio-proxy`
+
+## 8. MinIO 默认行为
+
+模板里的 `minio` 服务默认开启：
+
+- `MINIO_DEFAULT_BUCKETS=cloudreve`
+
+这意味着首次部署时会自动创建默认 bucket，避免“策略有了但 bucket 不存在”。
+
+要清楚一点：
+
+- 栈内 `minio` 只是单副本默认对象存储
+- 它适合真实环境联调或中小规模生产起步
+- 如果你要最终高可用对象存储，还是应该切到独立 MinIO 集群或外部 S3
+
+如果你要直接在 Swarm 里启用集群版 MinIO / Elasticsearch / Kafka，打开：
+
+```bash
+SWARM_WITH_CLUSTER=yes
+```
+
+然后使用：
+
+```bash
+docker/swarm/deploy-stack.sh --with-cluster
+```
+
+集群模式下的服务拓扑是：
+
+- `minio`：对内对外统一入口代理
+- `minio-1` / `minio-2` / `minio-3` / `minio-4`：MinIO 分布式数据节点
+- `elasticsearch`：对内对外统一入口代理
+- `elasticsearch-1` / `elasticsearch-2` / `elasticsearch-3`：Elasticsearch 集群节点
+- `kafka`：Swarm 内部 bootstrap 入口
+- `kafka-1` / `kafka-2` / `kafka-3`：Kafka KRaft 集群节点
+- `kafka-ui`：Kafka Web 管理界面
+
+这时：
+
+- Cloudreve 默认 S3 初始化地址仍是 `http://minio:9000`
+- Cloudreve 后台里的 FTS Elasticsearch 地址应填写 `http://elasticsearch:9200`
+- 如果 Cloudreve 要直接使用栈内 Kafka，全局 Kafka brokers 填 `kafka:9092`
+- Elasticsearch 所在宿主机必须先执行 `sysctl -w vm.max_map_count=262144`
+- Kafka UI 默认访问地址是 `http://<node-or-lb>:18089`
+
+Kafka 这里默认只提供 Swarm 内部入口，不直接给 Swarm 外部客户端暴露 broker 地址。
+
+原因：
+
+- Kafka 客户端会基于 broker metadata 继续直连各节点
+- 只做一个对外 TCP 代理并不能完整替代外部 advertised listeners
+- 所以当前模板先保证 Swarm 内部服务稳定可用
+
+如果你的第三方抽取器也在 Swarm 内部网络里，直接用：
+
+```bash
+kafka:9092
+```
+
+Kafka UI 本身也走这个内部 bootstrap 地址，所以它会自动看到 `kafka-1/2/3` 这组 broker。
+
+建议在每台 Elasticsearch 节点持久化：
+
+```bash
+echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-cloudreve-elasticsearch.conf
+sudo sysctl --system
+```
+
+## 9. 资源默认值
+
+当前模板按 `1000w` 级别元数据规模给出基础默认值：
+
+- `cloudreve-master`: reservation `1C / 2G`, limit `2C / 4G`
+- `cloudreve-slave`: reservation `0.5C / 1G`, limit `1.5C / 2G`
+- `postgresql-*`: reservation `2C / 4G`, limit `4C / 8G`
+- `pgpool`: reservation `0.5C / 512M`, limit `2C / 2G`
+- `redis-*`: reservation `1C / 2G`, limit `2C / 4G`
+- `redis-sentinel`: reservation `0.25C / 256M`, limit `1C / 512M`
+- `redis-proxy`: reservation `0.25C / 256M`, limit `1C / 512M`
+- `minio`: reservation `1C / 2G`, limit `2C / 4G`
+- `elasticsearch`: reservation `2C / 4G`, limit `4C / 8G`
+- `tika`: reservation `0.5C / 1G`, limit `2C / 2G`
+
+如果启用了集群模式，建议起步值改成：
+
+- `minio` 代理：reservation `0.25C / 256M`, limit `1C / 512M`
+- `minio-1..4`：每节点 reservation `1C / 2G`, limit `2C / 4G`
+- `elasticsearch` 代理：reservation `0.25C / 256M`, limit `1C / 512M`
+- `elasticsearch-1..3`：每节点 reservation `2C / 6G`, limit `4C / 8G`
+- `ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS=-Xms4g -Xmx4g`
+- `kafka` 代理：reservation `0.25C / 256M`, limit `1C / 512M`
+- `kafka-1..3`：每节点 reservation `1C / 2G`, limit `2C / 4G`
+- `KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS=-Xms1g -Xmx1g`
+- `kafka-ui`：reservation `0.25C / 256M`, limit `1C / 1G`
+
+另外：
+
+- Redis 默认启用 `AOF`
+- Elasticsearch 默认 `ES_JAVA_OPTS=-Xms4g -Xmx4g`
+
+这些值是默认起点，不是容量上限。你仍然需要根据：
+
+- 并发用户数
+- 文件上传吞吐
+- 全文索引规模
+- 预览和转码压力
+- 对象存储 RTT
+
+继续调优。
+
+## 10. 准备 Swarm 集群
+
+建议先把各台机器的主机名定好，再让它们加入 Swarm。
+
+原因：
+
+- `docker node ls` 里显示的是节点主机名
+- `docker service ps` / `docker stack ps` 的 `NODE` 列也直接显示这个名字
+- 名字提前规划好，后续排查“服务具体跑在哪台机器”会非常直观
+
+推荐命名方式：
+
+- `cr-prod-mgr-1`
+- `cr-prod-wkr-1`
+- `cr-prod-wkr-2`
+- `cr-prod-wkr-3`
+
+如果你更喜欢主机名里直接体现角色，也可以：
+
+- `cr-prod-pg-1`
+- `cr-prod-cache-1`
+- `cr-prod-search-1`
+
+但更推荐的原则是：
+
+- 主机名表达物理节点身份
+- Swarm label 表达调度角色
+
+也就是：
+
+- 主机名看机器
+- label 看业务角色
+
+在 Linux 上，建议在节点加入 Swarm 之前先设置：
+
+```bash
+sudo hostnamectl set-hostname cr-prod-wkr-1
+```
+
+然后再执行 `docker swarm init` 或 `docker swarm join`。
 
 选择一台机器作为初始 manager：
 
@@ -75,19 +423,13 @@ docker swarm init --advertise-addr <MANAGER_IP>
 docker swarm join-token worker
 ```
 
-如果你希望 Swarm 控制面也高可用，可以再获取 manager 加入命令：
-
-```bash
-docker swarm join-token manager
-```
-
-把其它机器按输出命令加入集群后，检查集群状态：
+检查集群状态：
 
 ```bash
 docker node ls
 ```
 
-## 4. 给有状态服务节点打标签
+## 11. 给状态服务打标签
 
 在 manager 节点执行：
 
@@ -101,416 +443,200 @@ docker node update --label-add cloudreve.redis2=true <node-redis-2>
 docker node update --label-add cloudreve.redis3=true <node-redis-3>
 ```
 
-如果 PostgreSQL 和 Redis 某些角色落在同一批机器上也可以，只要资源足够。
-
-## 5. 共享存储怎么划分
-
-这里要把“应用运行目录”和“数据库运行目录”分开看。
-
-### 5.1 PostgreSQL / Redis
-
-PostgreSQL 和 Redis 都不应该使用共享存储。
-
-正确做法是：
-
-- PostgreSQL：每个副本一个独立数据卷
-- Redis：每个副本一个独立数据卷
-- 通过主从复制、Sentinel、pgpool 完成高可用
-- 通过节点标签把卷固定到指定节点
-- PostgreSQL 备份、WAL 归档可以进入 MinIO 或其它对象存储
-- Redis RDB / AOF 备份可以定时导出到 MinIO 或备份系统
-
-不要这样做：
-
-- 多个 PostgreSQL 实例共享同一个数据目录
-- 多个 Redis 实例共享同一个数据目录
-- 把 PGDATA / Redis AOF / RDB 放到 MinIO
-- 把 PGDATA / Redis 数据目录放到共享文件系统上让多个副本同时读写
-
-也就是说，你真正要设计的是：
-
-- 副本复制
-- 故障切换
-- 备份归档
-
-而不是让多个数据库实例共享同一个运行目录。
-
-### 5.2 Cloudreve 主站
-
-Cloudreve 主站多副本时，仍然需要一个共享运行目录：
-
-- `CLOUDREVE_SHARED_DATA_PATH`
-
-这个目录主要用于主站运行时数据同步，不应该作为用户文件 Blob 的长期存储方案。
-为了避免首次部署因为宿主机目录不存在而直接失败，默认 `docker-compose.swarm.yml` 改为使用命名卷。
-只有当你已经准备好共享 POSIX 文件系统时，再叠加 `docker-compose.swarm.bind.yml`。
-
-### 5.3 Cloudreve 文件数据
-
-Cloudreve 文件数据推荐放到 MinIO。
-
-也就是说，推荐架构是：
-
-- Cloudreve 元数据：PostgreSQL
-- Cloudreve 会话 / 缓存：Redis
-- Cloudreve 用户文件：MinIO
-
-### 5.4 Tika
-
-Tika 只需要字体目录：
-
-- `TIKA_CUSTOM_FONTS_HOST_PATH`
-
-默认栈会挂一个空的命名卷到 `/tika-fonts/custom`，这样不依赖宿主机目录也能启动。
-如果你确实要加载宿主机上的自定义字体，再准备目录并启用 bind override。
-
-建议目录：
+如果你把可选 bind 服务也固定到某些节点，还可以继续打这些标签：
 
 ```bash
-mkdir -p /srv/cloudreve/master-data
-mkdir -p /srv/cloudreve/tika-fonts
+docker node update --label-add cloudreve.master=true <node-master-runtime>
+docker node update --label-add cloudreve.slave=true <node-slave-runtime>
+docker node update --label-add cloudreve.minio=true <node-minio>
+docker node update --label-add cloudreve.elasticsearch=true <node-elasticsearch>
+docker node update --label-add cloudreve.tika=true <node-tika>
 ```
 
-## 6. 先准备 Tika 镜像
-
-`docker stack deploy` 不会自动构建镜像，所以必须先把 Tika 镜像构建并推送到所有 Swarm 节点都能访问的镜像仓库。
-
-示例：
+如果启用了 MinIO / Elasticsearch 集群，再补这些标签：
 
 ```bash
-docker build -f docker/tika-unrar/Dockerfile -t registry.example.com/cloudreve/tika:3.2.3.0-full-unrar-charset .
-docker push registry.example.com/cloudreve/tika:3.2.3.0-full-unrar-charset
+docker node update --label-add cloudreve.minio1=true <node-minio-1>
+docker node update --label-add cloudreve.minio2=true <node-minio-2>
+docker node update --label-add cloudreve.minio3=true <node-minio-3>
+docker node update --label-add cloudreve.minio4=true <node-minio-4>
+
+docker node update --label-add cloudreve.es1=true <node-es-1>
+docker node update --label-add cloudreve.es2=true <node-es-2>
+docker node update --label-add cloudreve.es3=true <node-es-3>
+
+docker node update --label-add cloudreve.kafka1=true <node-kafka-1>
+docker node update --label-add cloudreve.kafka2=true <node-kafka-2>
+docker node update --label-add cloudreve.kafka3=true <node-kafka-3>
+docker node update --label-add cloudreve.kafka-ui=true <node-kafka-ui>
 ```
 
-如果你暂时没有独立镜像仓库，Docker 官方也给过一个临时 registry 的用法：
+在你现在的 `1 manager + 3 worker` 拓扑里，比较实用的映射是：
 
-```bash
-docker service create --name registry --publish published=5000,target=5000 registry:2
-```
+- `minio1` 放 manager
+- `minio2/3/4` 放 3 台 worker
+- `es1/2/3` 放 3 台 worker
+- `kafka1/2/3` 放 3 台 worker
+- `kafka-ui` 放 manager 或任意可直接访问的入口节点
 
-之后把 `TIKA_IMAGE` 改成你自己的 Swarm 可访问地址即可。
+## 12. 准备环境变量
 
-## 7. 准备环境变量文件
-
-先复制模板：
+复制模板：
 
 ```bash
 cp .env.swarm.example .env.swarm
 ```
 
-然后编辑 `.env.swarm`，至少设置这些值：
+至少填好这些值：
 
 - `CLOUDREVE_SITE_URL`
 - `CLOUDREVE_SESSION_SECRET`
-- `MINIO_ROOT_USER`
-- `MINIO_ROOT_PASSWORD`
 - `POSTGRESQL_PASSWORD`
 - `POSTGRESQL_POSTGRES_PASSWORD`
 - `REPMGR_PASSWORD`
 - `PGPOOL_ADMIN_PASSWORD`
 - `REDIS_PASSWORD`
+- `MINIO_ROOT_PASSWORD`
+- `CR_INIT_S3_SECRET_KEY`
 - `TIKA_IMAGE`
 
-首次部署建议保持：
+如果你要用外部对象存储，再改：
 
-- `CLOUDREVE_MASTER_REPLICAS=1`
-- `CLOUDREVE_SLAVE_SECRET` 保持占位值，等主站起来后再回填正式值
+- `CR_INIT_S3_ENDPOINT`
+- `CR_INIT_S3_BUCKET`
+- `CR_INIT_S3_ACCESS_KEY`
+- `CR_INIT_S3_SECRET_KEY`
+- `CR_INIT_S3_REGION`
 
-如果你还没有为 `CLOUDREVE_SHARED_DATA_PATH` 准备稳定的共享 POSIX 文件系统，那么先不要把 master 扩到 `2`。
-如果你已经准备好了共享 POSIX 文件系统或宿主机字体目录，再额外设置：
+如果你要启用栈内 MinIO / Elasticsearch / Kafka 集群，再确认这些变量：
 
-- `CLOUDREVE_SHARED_DATA_PATH`
-- `TIKA_CUSTOM_FONTS_HOST_PATH`
+- `SWARM_WITH_CLUSTER=yes`
+- `MINIO_1_DATA_MOUNT_TYPE` 到 `MINIO_4_DATA_MOUNT_TYPE`
+- `MINIO_1_DATA_MOUNT_SOURCE` 到 `MINIO_4_DATA_MOUNT_SOURCE`
+- `ELASTICSEARCH_1_DATA_MOUNT_TYPE` 到 `ELASTICSEARCH_3_DATA_MOUNT_TYPE`
+- `ELASTICSEARCH_1_DATA_MOUNT_SOURCE` 到 `ELASTICSEARCH_3_DATA_MOUNT_SOURCE`
+- `MINIO_NODE_1_CONSTRAINT` 到 `MINIO_NODE_4_CONSTRAINT`
+- `ELASTICSEARCH_NODE_1_CONSTRAINT` 到 `ELASTICSEARCH_NODE_3_CONSTRAINT`
+- `KAFKA_1_DATA_MOUNT_TYPE` 到 `KAFKA_3_DATA_MOUNT_TYPE`
+- `KAFKA_1_DATA_MOUNT_SOURCE` 到 `KAFKA_3_DATA_MOUNT_SOURCE`
+- `KAFKA_NODE_1_CONSTRAINT` 到 `KAFKA_NODE_3_CONSTRAINT`
+- `CLOUDREVE_GLOBAL_KAFKA_ENABLED`
+- `CLOUDREVE_GLOBAL_KAFKA_BROKERS`
+- `KAFKA_UI_HTTP_PORT`
+- `KAFKA_UI_NODE_CONSTRAINT`
 
-并在部署时叠加 `docker-compose.swarm.bind.yml`。
-
-## 8. 首次部署
+## 13. 首次部署
 
 在 manager 节点执行：
 
 ```bash
-set -a
-source ./.env.swarm
-set +a
-
-docker stack deploy -c docker-compose.swarm.yml cloudreve
+docker/swarm/deploy-stack.sh
 ```
 
-如果你已经准备好所有宿主机目录并确认每个候选节点都能访问，再执行：
+如果要直接启用集群版 MinIO / Elasticsearch：
 
 ```bash
-docker stack deploy -c docker-compose.swarm.yml -c docker-compose.swarm.bind.yml cloudreve
+docker/swarm/deploy-stack.sh --with-cluster
 ```
 
-查看服务状态：
+只有在你需要 Tika 自定义字体时，才叠加：
+
+```bash
+WITH_BIND=yes docker/swarm/deploy-stack.sh
+```
+
+两者也可以同时使用：
+
+```bash
+WITH_BIND=yes docker/swarm/deploy-stack.sh --with-cluster
+```
+
+说明：
+
+- `WITH_BIND=yes` 是兼容旧方式，只给 Tika 额外挂一个宿主机字体目录
+- 现在更推荐直接用 `.env.swarm` 里的 `*_MOUNT_TYPE` / `*_MOUNT_SOURCE` 控制命名卷或宿主机路径
+
+检查服务状态：
 
 ```bash
 docker stack services cloudreve
 docker stack ps cloudreve
-```
-
-查看日志：
-
-```bash
 docker service logs -f cloudreve_cloudreve-master
-docker service logs -f cloudreve_cloudreve-master-proxy
 ```
 
-## 9. 完成主站基础配置
+## 14. 主站初始化
 
 主站首次启动后：
 
 1. 打开 `http(s)://<master-host-or-lb>/admin`
-2. 登录主站后台
-3. 进入 `设置 -> 基本设置`
-4. 确认 `Site URL` 与 `CLOUDREVE_SITE_URL` 完全一致
+2. 登录后台
+3. 在 `设置 -> 基本设置` 中确认“站点 URL（Site URL）”与 `CLOUDREVE_SITE_URL` 完全一致
+4. 在 `管理面板 -> 存储策略` 中确认默认策略是 `S3`
 
-这一步很关键，因为 Cloudreve 官方要求从节点通过主站 `Site URL` 回调和通信。
+如果这里看到的还是本地策略，一般只有两种情况：
 
-## 10. 注册从节点
+- 数据库不是首次初始化
+- `CR_INIT_DEFAULT_STORAGE` / `CR_INIT_S3_*` 没有在第一次初始化前生效
+
+## 15. 注册从节点
 
 在主站后台执行：
 
 1. 进入 `管理面板 -> 节点 -> 新建节点`
 2. 新建一个 slave node
-3. 复制后台生成的 `Slave Key`
-4. 节点地址填写从节点代理入口，例如：
-
-```text
-http://<slave-host-or-lb>:<CLOUDREVE_SLAVE_HTTP_PORT>
-```
-
-然后把 `.env.swarm` 中的：
+3. 复制后台生成的从节点密钥（`Slave Key`）
+4. 把 `.env.swarm` 中的 `CLOUDREVE_SLAVE_SECRET` 替换成真实值
+5. 重新发布：
 
 ```bash
-CLOUDREVE_SLAVE_SECRET=<the-generated-slave-key>
+docker/swarm/deploy-stack.sh
 ```
 
-替换成真实值，再重新发布：
+如果你要使用非默认栈名，例如联调用的 `cloudreve-debug`：
 
 ```bash
-set -a
-source ./.env.swarm
-set +a
-
-docker stack deploy -c docker-compose.swarm.yml cloudreve
+STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh
 ```
 
-发布完成后，再到主站后台测试该节点连通性。
+## 16. 扩容原则
 
-## 11. 把 Cloudreve 文件存储切到 MinIO
+可以直接横向扩的服务：
 
-Cloudreve 首次启动后，默认会创建一个本地存储策略。
+- `cloudreve-master-proxy`
+- `cloudreve-slave`
+- `cloudreve-slave-proxy`
+- `tika`
+- `pgpool`
+- `redis-sentinel`
+- `redis-proxy`
 
-这里有个很容易误解的点：
+不要直接扩容的服务：
 
-- `.env.swarm.example` 里的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 只是用于启动栈内的 `minio` 服务
-- 它不会自动把 Cloudreve 的默认存储策略改成 MinIO
-- Cloudreve 仍然需要你在后台新建存储策略并切换用户组默认策略
+- `postgresql-1`
+- `postgresql-2`
+- `postgresql-3`
+- `redis-1`
+- `redis-2`
+- `redis-3`
 
-如果你追求文件层面的生产高可用，优先推荐：
+当前模板里 `cloudreve-master` 默认仍然建议保持 `1` 副本。
 
-- 独立 MinIO 集群
-- 已有对象存储平台
-- 云厂商 S3 兼容对象存储
+原因不是文件默认还在本地，而是：
 
-当前栈内的 `minio` 更适合“先跑通链路”的自建方案，不建议把单副本 `minio` 当成最终高可用形态。
+- 运行目录仍然是本地命名卷
+- 你没有显式共享运行时目录前，多 master 不适合直接打开
 
-如果你希望 Cloudreve 文件不要依赖本地共享目录，而是走对象存储，那么上线后应尽快在后台把文件存储切到 MinIO。
+## 17. 运维建议
 
-推荐步骤：
+- PostgreSQL：做常规备份和 WAL 归档
+- Redis：定期导出 RDB / AOF 备份
+- MinIO / 外部 S3：做 bucket 生命周期和版本治理
+- Elasticsearch：单独监控 heap、segment、磁盘水位
+- Tika：按文档解析峰值调副本
 
-1. 先在 MinIO 创建 bucket
-2. 登录 Cloudreve 后台
-3. 进入 `管理面板 -> 存储策略`
-4. 新建 `S3 兼容` 或 `MinIO` 存储策略
-5. 填写 MinIO 的：
-   - Endpoint
-   - Bucket
-   - Access Key
-   - Secret Key
-6. 如果你的 MinIO 走 path-style，打开对应选项
-7. 把用户组的首选存储策略切到这个 MinIO 策略
-8. 后续新上传文件就会进入 MinIO，而不是主站本地目录
+不要做的事：
 
-如果你已经在用 MinIO，那么当前 Swarm 模板里的：
-
-- `CLOUDREVE_SHARED_DATA_PATH`
-
-只需要承载主站运行目录，不再承担用户文件数据。
-
-## 12. 从节点怎么理解
-
-当前模板里的 slave 节点更适合用来承载：
-
-- 远程节点能力
-- 内容处理能力
-- 任务扩展能力
-
-它不假设“多个 slave 副本共同组成一个共享本地文件存储集群”。
-
-如果某个从节点要被用作本地存储策略，需要确认：
-
-- 从节点代理地址对浏览器可达
-- 从节点 CORS 保持开启
-- 该从节点应该设计成“单实例 + 独占本地盘”，而不是多个副本共享目录
-
-如果你的主目标是高可用和简化存储，优先推荐直接使用 MinIO，而不是让 slave 承担本地文件存储。
-
-## 13. 扩容服务
-
-等首次部署稳定后，再扩主站和从节点副本。
-
-例如：
-
-```bash
-docker service scale cloudreve_cloudreve-master=2
-docker service scale cloudreve_cloudreve-master-proxy=2
-docker service scale cloudreve_cloudreve-slave=2
-docker service scale cloudreve_cloudreve-slave-proxy=2
-docker service scale cloudreve_tika=4
-```
-
-后续继续扩容：
-
-```bash
-docker service scale cloudreve_cloudreve-master=3 cloudreve_cloudreve-slave=3 cloudreve_tika=6
-```
-
-这里要区分两类扩容：
-
-- `cloudreve-master-proxy`、`cloudreve-slave`、`cloudreve-slave-proxy`、`tika`、`pgpool`、`redis-sentinel`、`redis-proxy` 可以按 Swarm 常规方式扩容
-- `postgresql-1/2/3` 和 `redis-1/2/3` 是固定成员的有状态角色，不能直接靠 `docker service scale` 随手加副本
-
-如果你未来真要扩 PostgreSQL / Redis 数据节点，正确方式是：
-
-- 新增独立服务定义
-- 新增独立数据卷
-- 新增节点标签约束
-- 按数据库 / 缓存集群自己的成员加入流程做扩容
-
-另外，只有当 `CLOUDREVE_SHARED_DATA_PATH` 已经是可靠共享 POSIX 文件系统时，才建议把 `cloudreve-master` 从 `1` 扩到 `2` 及以上。
-否则应保持 `master=1`，把横向扩容重点放在 `proxy`、`slave` 和 `tika`。
-
-查看任务分布：
-
-```bash
-docker service ps cloudreve_cloudreve-master
-docker service ps cloudreve_cloudreve-slave
-docker service ps cloudreve_tika
-```
-
-## 14. 滚动发布
-
-后续只要你修改了：
-
-- `.env.swarm`
-- `docker-compose.swarm.yml`
-- 镜像 tag
-
-都可以通过重新部署触发滚动更新：
-
-```bash
-set -a
-source ./.env.swarm
-set +a
-
-docker stack deploy -c docker-compose.swarm.yml cloudreve
-```
-
-当前栈文件已经给主要副本服务配了滚动更新策略。
-
-## 15. 回滚
-
-单个服务回滚：
-
-```bash
-docker service rollback cloudreve_cloudreve-master
-docker service rollback cloudreve_cloudreve-master-proxy
-docker service rollback cloudreve_cloudreve-slave
-docker service rollback cloudreve_tika
-```
-
-## 16. 常见问题排查
-
-### 1. 从节点测试失败，提示签名或认证错误
-
-检查：
-
-- `CLOUDREVE_SLAVE_SECRET` 是否与主站后台生成的 `Slave Key` 完全一致
-- 主站和从节点机器时间是否同步
-
-### 2. 从节点无法访问主站
-
-检查：
-
-- `CLOUDREVE_SITE_URL` 是否正确
-- 从节点所在机器是否能访问主站代理地址
-- 防火墙、WAF、网关策略是否拦截了请求
-
-### 3. 上传报 `413 Request Entity Too Large`
-
-增大：
-
-- `CLOUDREVE_MASTER_CLIENT_MAX_BODY_SIZE`
-- `CLOUDREVE_SLAVE_CLIENT_MAX_BODY_SIZE`
-
-### 4. 从节点任务堆积
-
-检查：
-
-- 从节点日志
-- CPU、内存、磁盘 IO 是否饱和
-- 是否需要增加 slave 副本
-- 是否需要在 Cloudreve 后台调整节点权重
-
-### 5. PG / Redis 想用共享存储
-
-不建议这样做。
-
-正确方向是：
-
-- PG 用主从复制 + 故障切换
-- Redis 用主从复制 + Sentinel
-- 备份归档可以进 MinIO
-- 运行时数据不能放 MinIO
-
-## 17. 常用命令
-
-查看栈服务：
-
-```bash
-docker stack services cloudreve
-```
-
-查看栈任务：
-
-```bash
-docker stack ps cloudreve
-```
-
-查看日志：
-
-```bash
-docker service logs -f cloudreve_cloudreve-master
-docker service logs -f cloudreve_cloudreve-slave
-docker service logs -f cloudreve_pgpool
-docker service logs -f cloudreve_redis-proxy
-```
-
-删除整套栈：
-
-```bash
-docker stack rm cloudreve
-```
-
-## 18. 参考文档
-
-- Cloudreve Reverse Proxy: <https://docs.cloudreve.org/en/overview/deploy/configure>
-- Cloudreve MinIO Storage: <https://docs.cloudreve.org/en/usage/storage/minio>
-- Cloudreve Slave Node: <https://docs.cloudreve.org/en/usage/slave-node>
-- Cloudreve Slave Storage: <https://docs.cloudreve.org/en/usage/storage/remote>
-- Docker Swarm Stack Deploy: <https://docs.docker.com/engine/swarm/stack-deploy/>
-- Docker Swarm Join Nodes: <https://docs.docker.com/engine/swarm/join-nodes/>
-- Docker Swarm Services: <https://docs.docker.com/engine/swarm/services/>
-- Docker Service Scale: <https://docs.docker.com/reference/cli/docker/service/scale/>
+- 不要把 PGDATA 放到对象存储
+- 不要把 Redis 运行目录放到对象存储
+- 不要让多个 PG / Redis 实例共享同一目录
+- 不要在未验证共享运行目录前把 `cloudreve-master` 扩到多个副本

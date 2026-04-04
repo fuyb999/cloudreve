@@ -1,22 +1,24 @@
-# Docker Swarm stack for Cloudreve production deployment.
-# Official Cloudreve guidance reflected here:
-# 1. Put Cloudreve behind a reverse proxy.
-# 2. Slave nodes should run the same version as the master.
-# 3. Master Site URL must be reachable by slave nodes.
-# 4. If a slave node is used for storage policies, its endpoint must also be reachable by end users.
+# Cloudreve 的 Docker Swarm 生产部署模板。
+# 这里遵循 Cloudreve 官方建议：
+# 1. Cloudreve 必须放在反向代理后面。
+# 2. 从节点必须和主节点使用相同版本。
+# 3. 主站 Site URL 必须能被从节点访问到。
+# 4. 如果某个从节点参与存储策略，它的访问地址也必须能被终端用户访问到。
 #
-# Important:
-# - PostgreSQL and Redis do NOT use shared storage. Each replica must use its own dedicated data volume.
-# - Do NOT put PGDATA / Redis AOF/RDB on MinIO, NFS, CephFS or any shared filesystem.
-# - MinIO is recommended for Cloudreve file blobs, not for PostgreSQL / Redis runtime data.
-# - The default stack avoids host bind mounts so first deployment does not fail on missing host paths.
-# - If you opt into `docker-compose.swarm.bind.yml`, `CLOUDREVE_SHARED_DATA_PATH` is only for Cloudreve master runtime data.
-# - PostgreSQL / Redis data members are fixed stateful roles. Do NOT expand them with `docker service scale`.
-# - TIKA_IMAGE must already exist on every node or be pushed to a registry. Swarm will not build it.
+# 重要说明：
+# - PostgreSQL 和 Redis 不能使用共享存储。每个副本都必须有自己独立的数据目录。
+# - 不要把 PGDATA / Redis AOF / RDB 放在 MinIO、NFS、CephFS 或任何共享文件系统上。
+# - MinIO 用来放 Cloudreve 用户文件，对 PostgreSQL / Redis 运行数据并不合适。
+# - PostgreSQL / Redis 默认使用宿主机 bind mount，部署前要先在固定节点创建好目录。
+# - Cloudreve 运行目录默认还是命名卷，用户文件默认应落到 S3 兼容对象存储。
+# - `cloudreve-master` 可以通过 `CR_INIT_*` 在首次初始化时直接创建默认 S3 存储策略。
+# - `docker-compose.swarm.bind.yml` 现在只用于可选的 Tika 自定义字体挂载。
+# - PostgreSQL / Redis 这几个实例是固定有状态角色，不要用 `docker service scale` 直接扩容。
+# - `TIKA_IMAGE` 必须提前存在于各节点，或者提前推到镜像仓库，Swarm 不会帮你 build。
 
 services:
   cloudreve-master:
-    image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:latest}
+    image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     environment:
       CR_CONF_System.Mode: master
       CR_CONF_System.Listen: ":5212"
@@ -30,9 +32,27 @@ services:
       CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
       CR_CONF_Redis.Server: redis-proxy:6379
       CR_CONF_Redis.Password: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+      CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
+      CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
+      CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
+      CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
       CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:?set CLOUDREVE_SITE_URL}
+      CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
+      CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-http://minio:9000}
+      CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
+      CR_INIT_S3_ACCESS_KEY: ${CR_INIT_S3_ACCESS_KEY:-minio}
+      CR_INIT_S3_SECRET_KEY: ${CR_INIT_S3_SECRET_KEY:?set CR_INIT_S3_SECRET_KEY}
+      CR_INIT_S3_REGION: ${CR_INIT_S3_REGION:-us-east-1}
+      CR_INIT_S3_FORCE_PATH_STYLE: ${CR_INIT_S3_FORCE_PATH_STYLE:-true}
+      CR_INIT_S3_RELAY: ${CR_INIT_S3_RELAY:-true}
+      CR_INIT_S3_INTERNAL_PROXY: ${CR_INIT_S3_INTERNAL_PROXY:-true}
+      CR_INIT_S3_IS_PRIVATE: ${CR_INIT_S3_IS_PRIVATE:-true}
+      CR_INIT_S3_CHUNK_SIZE: ${CR_INIT_S3_CHUNK_SIZE:-26214400}
     volumes:
-      - cloudreve_master_runtime:/cloudreve/data
+      - type: ${CLOUDREVE_MASTER_RUNTIME_MOUNT_TYPE:-volume}
+        source: ${CLOUDREVE_MASTER_RUNTIME_MOUNT_SOURCE:-cloudreve_master_runtime}
+        target: /cloudreve/data
     networks:
       - cloudreve_backend
     healthcheck:
@@ -42,10 +62,10 @@ services:
       retries: 6
       start_period: 30s
     deploy:
-      replicas: ${CLOUDREVE_MASTER_REPLICAS:-2}
+      replicas: ${CLOUDREVE_MASTER_REPLICAS:-1}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
         delay: 10s
       rollback_config:
@@ -54,15 +74,18 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${CLOUDREVE_MASTER_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
-          memory: ${CLOUDREVE_MASTER_MEM_RESERVATION:-512M}
+          cpus: "${CLOUDREVE_MASTER_CPU_RESERVATION:-1.0}"
+          memory: ${CLOUDREVE_MASTER_MEM_RESERVATION:-2G}
         limits:
-          memory: ${CLOUDREVE_MASTER_MEM_LIMIT:-2G}
+          cpus: "${CLOUDREVE_MASTER_CPU_LIMIT:-2.0}"
+          memory: ${CLOUDREVE_MASTER_MEM_LIMIT:-4G}
 
   cloudreve-master-proxy:
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
@@ -93,7 +116,7 @@ services:
       replicas: ${CLOUDREVE_MASTER_PROXY_REPLICAS:-2}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
       rollback_config:
         parallelism: 1
@@ -101,27 +124,40 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         max_replicas_per_node: 1
+      resources:
+        reservations:
+          cpus: "${CLOUDREVE_MASTER_PROXY_CPU_RESERVATION:-0.25}"
+          memory: ${CLOUDREVE_MASTER_PROXY_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${CLOUDREVE_MASTER_PROXY_CPU_LIMIT:-1.0}"
+          memory: ${CLOUDREVE_MASTER_PROXY_MEM_LIMIT:-512M}
 
   cloudreve-slave:
-    image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:latest}
+    image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     environment:
       CR_CONF_System.Mode: slave
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
-      CR_CONF_Slave.Secret: ${CLOUDREVE_SLAVE_SECRET:-replace-with-cloudreve-admin-generated-slave-key}
+      CR_CONF_Slave.Secret: ${CLOUDREVE_SLAVE_SECRET:?set CLOUDREVE_SLAVE_SECRET}
       CR_CONF_CORS.AllowOrigins: "*"
       CR_CONF_CORS.AllowMethods: OPTIONS,GET,POST
       CR_CONF_CORS.AllowHeaders: "*"
+      CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
+      CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
+      CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
+      CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
     volumes:
-      - cloudreve_slave_runtime:/cloudreve/data
+      - type: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_TYPE:-volume}
+        source: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_SOURCE:-cloudreve_slave_runtime}
+        target: /cloudreve/data
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:5212/api/v4/site/ping >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - --post-data='{}' http://127.0.0.1:5212/api/v4/slave/ping >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -130,7 +166,7 @@ services:
       replicas: ${CLOUDREVE_SLAVE_REPLICAS:-2}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
         delay: 10s
       rollback_config:
@@ -139,15 +175,18 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${CLOUDREVE_SLAVE_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
-          memory: ${CLOUDREVE_SLAVE_MEM_RESERVATION:-256M}
+          cpus: "${CLOUDREVE_SLAVE_CPU_RESERVATION:-0.5}"
+          memory: ${CLOUDREVE_SLAVE_MEM_RESERVATION:-1G}
         limits:
-          memory: ${CLOUDREVE_SLAVE_MEM_LIMIT:-1G}
+          cpus: "${CLOUDREVE_SLAVE_CPU_LIMIT:-1.5}"
+          memory: ${CLOUDREVE_SLAVE_MEM_LIMIT:-2G}
 
   cloudreve-slave-proxy:
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
@@ -169,7 +208,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/api/v4/site/ping >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -S -O - http://127.0.0.1/api/v4/site/ping >/dev/null 2>&1 && exit 0; wget -S -O - http://127.0.0.1/api/v4/site/ping 2>&1 | grep -q 'HTTP/1.1 404' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -178,7 +217,7 @@ services:
       replicas: ${CLOUDREVE_SLAVE_PROXY_REPLICAS:-2}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
       rollback_config:
         parallelism: 1
@@ -186,13 +225,19 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         max_replicas_per_node: 1
+      resources:
+        reservations:
+          cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_RESERVATION:-0.25}"
+          memory: ${CLOUDREVE_SLAVE_PROXY_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_LIMIT:-1.0}"
+          memory: ${CLOUDREVE_SLAVE_PROXY_MEM_LIMIT:-512M}
 
   postgresql-1:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17.6.0-debian-12-r2}
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -200,14 +245,21 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
       REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
-      REPMGR_PRIMARY_HOST: postgresql-1
-      REPMGR_PARTNER_NODES: postgresql-1,postgresql-2,postgresql-3
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
+      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
       REPMGR_NODE_NAME: postgresql-1
       REPMGR_NODE_NETWORK_NAME: postgresql-1
+      REPMGR_ADVERTISE_HOST: postgresql-1
       REPMGR_NODE_ID: "1"
       REPMGR_LOG_LEVEL: NOTICE
+    configs:
+      - source: postgresql_repmgr_run_v4
+        target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
+        mode: 0555
     volumes:
-      - pg_1_data:/bitnami/postgresql
+      - type: bind
+        source: ${PG_1_DATA_PATH:?set PG_1_DATA_PATH}
+        target: /bitnami/postgresql
     networks:
       - cloudreve_backend
     healthcheck:
@@ -215,7 +267,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
-      start_period: 30s
+      start_period: 2m
     deploy:
       replicas: 1
       update_config:
@@ -223,14 +275,20 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         constraints:
           - ${PG_NODE_1_CONSTRAINT:-node.labels.cloudreve.pg1==true}
+      resources:
+        reservations:
+          cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
+          memory: ${POSTGRESQL_MEM_RESERVATION:-4G}
+        limits:
+          cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
+          memory: ${POSTGRESQL_MEM_LIMIT:-8G}
 
   postgresql-2:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17.6.0-debian-12-r2}
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -238,14 +296,21 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
       REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
-      REPMGR_PRIMARY_HOST: postgresql-1
-      REPMGR_PARTNER_NODES: postgresql-1,postgresql-2,postgresql-3
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
+      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
       REPMGR_NODE_NAME: postgresql-2
       REPMGR_NODE_NETWORK_NAME: postgresql-2
+      REPMGR_ADVERTISE_HOST: postgresql-2
       REPMGR_NODE_ID: "2"
       REPMGR_LOG_LEVEL: NOTICE
+    configs:
+      - source: postgresql_repmgr_run_v4
+        target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
+        mode: 0555
     volumes:
-      - pg_2_data:/bitnami/postgresql
+      - type: bind
+        source: ${PG_2_DATA_PATH:?set PG_2_DATA_PATH}
+        target: /bitnami/postgresql
     networks:
       - cloudreve_backend
     healthcheck:
@@ -253,7 +318,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
-      start_period: 30s
+      start_period: 2m
     deploy:
       replicas: 1
       update_config:
@@ -261,14 +326,20 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         constraints:
           - ${PG_NODE_2_CONSTRAINT:-node.labels.cloudreve.pg2==true}
+      resources:
+        reservations:
+          cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
+          memory: ${POSTGRESQL_MEM_RESERVATION:-4G}
+        limits:
+          cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
+          memory: ${POSTGRESQL_MEM_LIMIT:-8G}
 
   postgresql-3:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17.6.0-debian-12-r2}
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -276,14 +347,21 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
       REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
-      REPMGR_PRIMARY_HOST: postgresql-1
-      REPMGR_PARTNER_NODES: postgresql-1,postgresql-2,postgresql-3
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
+      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
       REPMGR_NODE_NAME: postgresql-3
       REPMGR_NODE_NETWORK_NAME: postgresql-3
+      REPMGR_ADVERTISE_HOST: postgresql-3
       REPMGR_NODE_ID: "3"
       REPMGR_LOG_LEVEL: NOTICE
+    configs:
+      - source: postgresql_repmgr_run_v4
+        target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
+        mode: 0555
     volumes:
-      - pg_3_data:/bitnami/postgresql
+      - type: bind
+        source: ${PG_3_DATA_PATH:?set PG_3_DATA_PATH}
+        target: /bitnami/postgresql
     networks:
       - cloudreve_backend
     healthcheck:
@@ -291,7 +369,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
-      start_period: 30s
+      start_period: 2m
     deploy:
       replicas: 1
       update_config:
@@ -299,16 +377,22 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         constraints:
           - ${PG_NODE_3_CONSTRAINT:-node.labels.cloudreve.pg3==true}
+      resources:
+        reservations:
+          cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
+          memory: ${POSTGRESQL_MEM_RESERVATION:-4G}
+        limits:
+          cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
+          memory: ${POSTGRESQL_MEM_LIMIT:-8G}
 
   pgpool:
-    image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
+    image: ${PGPOOL_IMAGE:-bitnami/pgpool:4.6.3-debian-12-r0}
     environment:
-      PGPOOL_BACKEND_NODES: 0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432
+      PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
       PGPOOL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -319,6 +403,11 @@ services:
       PGPOOL_ADMIN_PASSWORD: ${PGPOOL_ADMIN_PASSWORD:?set PGPOOL_ADMIN_PASSWORD}
       PGPOOL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       PGPOOL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+    ports:
+      - target: 5432
+        published: ${PGPOOL_PUBLIC_PORT:-15432}
+        protocol: tcp
+        mode: ingress
     networks:
       - cloudreve_backend
     healthcheck:
@@ -326,12 +415,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
-      start_period: 30s
+      start_period: 2m
     deploy:
       replicas: ${PGPOOL_REPLICAS:-2}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
         delay: 10s
       rollback_config:
@@ -340,19 +429,28 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 10
         window: 2m
       placement:
         max_replicas_per_node: 1
+      resources:
+        reservations:
+          cpus: "${PGPOOL_CPU_RESERVATION:-0.5}"
+          memory: ${PGPOOL_MEM_RESERVATION:-512M}
+        limits:
+          cpus: "${PGPOOL_CPU_LIMIT:-2.0}"
+          memory: ${PGPOOL_MEM_LIMIT:-2G}
 
   redis-1:
-    image: ${REDIS_IMAGE:-bitnami/redis:latest}
+    image: ${REDIS_IMAGE:-bitnami/redis:8.6.2}
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
+      REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: master
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
-      - redis_1_data:/bitnami/redis/data
+      - type: bind
+        source: ${REDIS_1_DATA_PATH:?set REDIS_1_DATA_PATH}
+        target: /bitnami/redis/data
     networks:
       - cloudreve_backend
     healthcheck:
@@ -373,18 +471,28 @@ services:
       placement:
         constraints:
           - ${REDIS_NODE_1_CONSTRAINT:-node.labels.cloudreve.redis1==true}
+      resources:
+        reservations:
+          cpus: "${REDIS_CPU_RESERVATION:-1.0}"
+          memory: ${REDIS_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-2.0}"
+          memory: ${REDIS_MEM_LIMIT:-4G}
 
   redis-2:
-    image: ${REDIS_IMAGE:-bitnami/redis:latest}
+    image: ${REDIS_IMAGE:-bitnami/redis:8.6.2}
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
+      REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
       REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
-      - redis_2_data:/bitnami/redis/data
+      - type: bind
+        source: ${REDIS_2_DATA_PATH:?set REDIS_2_DATA_PATH}
+        target: /bitnami/redis/data
     networks:
       - cloudreve_backend
     healthcheck:
@@ -405,18 +513,28 @@ services:
       placement:
         constraints:
           - ${REDIS_NODE_2_CONSTRAINT:-node.labels.cloudreve.redis2==true}
+      resources:
+        reservations:
+          cpus: "${REDIS_CPU_RESERVATION:-1.0}"
+          memory: ${REDIS_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-2.0}"
+          memory: ${REDIS_MEM_LIMIT:-4G}
 
   redis-3:
-    image: ${REDIS_IMAGE:-bitnami/redis:latest}
+    image: ${REDIS_IMAGE:-bitnami/redis:8.6.2}
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
+      REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
       REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
-      - redis_3_data:/bitnami/redis/data
+      - type: bind
+        source: ${REDIS_3_DATA_PATH:?set REDIS_3_DATA_PATH}
+        target: /bitnami/redis/data
     networks:
       - cloudreve_backend
     healthcheck:
@@ -437,9 +555,16 @@ services:
       placement:
         constraints:
           - ${REDIS_NODE_3_CONSTRAINT:-node.labels.cloudreve.redis3==true}
+      resources:
+        reservations:
+          cpus: "${REDIS_CPU_RESERVATION:-1.0}"
+          memory: ${REDIS_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-2.0}"
+          memory: ${REDIS_MEM_LIMIT:-4G}
 
   redis-sentinel:
-    image: ${REDIS_SENTINEL_IMAGE:-bitnami/redis-sentinel:latest}
+    image: ${REDIS_SENTINEL_IMAGE:-bitnami/redis-sentinel:8.6.2}
     environment:
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
@@ -454,7 +579,7 @@ services:
       replicas: ${REDIS_SENTINEL_REPLICAS:-3}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
       restart_policy:
         condition: on-failure
@@ -463,105 +588,38 @@ services:
         window: 2m
       placement:
         max_replicas_per_node: 1
+      resources:
+        reservations:
+          cpus: "${REDIS_SENTINEL_CPU_RESERVATION:-0.25}"
+          memory: ${REDIS_SENTINEL_MEM_RESERVATION:-256M}
+        limits:
+          cpus: "${REDIS_SENTINEL_CPU_LIMIT:-1.0}"
+          memory: ${REDIS_SENTINEL_MEM_LIMIT:-512M}
 
   redis-proxy:
     image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
     environment:
+      REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
+      REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     entrypoint: ["/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
-      - source: redis_proxy_bootstrap
+      - source: redis_proxy_bootstrap_v3
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
+    ports:
+      - target: 6379
+        published: ${REDIS_PROXY_PUBLIC_PORT:-16379}
+        protocol: tcp
+        mode: ingress
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${REDIS_PROXY_REPLICAS:-2}
       update_config:
         parallelism: 1
-        order: start-first
+        order: ${SWARM_ROLLING_ORDER:-start-first}
         failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
-      placement:
-        max_replicas_per_node: 1
-
-  minio:
-    image: bitnami/minio:2024
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
-      MINIO_DISTRIBUTED_MODE_ENABLED: "no"
-      MINIO_SKIP_CLIENT: "yes"
-    ports:
-      - target: 9000
-        published: ${MINIO_API_PORT:-9000}
-        protocol: tcp
-        mode: ingress
-      - target: 9001
-        published: ${MINIO_CONSOLE_PORT:-9001}
-        protocol: tcp
-        mode: ingress
-    volumes:
-      - minio_data:/bitnami/minio/data
-    networks:
-      - cloudreve_backend
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-
-  elasticsearch:
-    image: elasticsearch:8.12.2
-    environment:
-      discovery.type: single-node
-      xpack.security.enabled: "false"
-      ES_JAVA_OPTS: -Xms512m -Xmx512m
-    ports:
-      - target: 9200
-        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
-        protocol: tcp
-        mode: ingress
-      - target: 9300
-        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
-        protocol: tcp
-        mode: ingress
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    networks:
-      - cloudreve_backend
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-
-  tika:
-    image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
-    environment:
-      TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
-      TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
-    ports:
-      - target: 9998
-        published: ${TIKA_HTTP_PORT:-9998}
-        protocol: tcp
-        mode: ingress
-    volumes:
-      - tika_custom_fonts:/tika-fonts/custom:ro
-    networks:
-      - cloudreve_backend
-    deploy:
-      replicas: ${TIKA_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: start-first
-        failure_action: rollback
-        delay: 10s
       rollback_config:
         parallelism: 1
         order: stop-first
@@ -574,8 +632,136 @@ services:
         max_replicas_per_node: 1
       resources:
         reservations:
-          memory: ${TIKA_MEM_RESERVATION:-512M}
+          cpus: "${REDIS_PROXY_CPU_RESERVATION:-0.25}"
+          memory: ${REDIS_PROXY_MEM_RESERVATION:-256M}
         limits:
+          cpus: "${REDIS_PROXY_CPU_LIMIT:-1.0}"
+          memory: ${REDIS_PROXY_MEM_LIMIT:-512M}
+
+  # swarm 集群模式开启时，这段单节点 MinIO 会被部署脚本剔除，
+  # 再由 `docker-compose.swarm.cluster.yml` 提供同名代理入口和多节点后端。
+  # swarm-cluster-strip:minio:begin
+  minio:
+    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "no"
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_SKIP_CLIENT: ${MINIO_SKIP_CLIENT:-no}
+    ports:
+      - target: 9000
+        published: ${MINIO_API_PORT:-9000}
+        protocol: tcp
+        mode: ingress
+      - target: 9001
+        published: ${MINIO_CONSOLE_PORT:-9001}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${MINIO_DATA_MOUNT_TYPE:-volume}
+        source: ${MINIO_DATA_MOUNT_SOURCE:-minio_data}
+        target: /bitnami/minio/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${MINIO_CPU_RESERVATION:-1.0}"
+          memory: ${MINIO_MEM_RESERVATION:-2G}
+        limits:
+          cpus: "${MINIO_CPU_LIMIT:-2.0}"
+          memory: ${MINIO_MEM_LIMIT:-4G}
+  # swarm-cluster-strip:minio:end
+
+  # swarm 集群模式开启时，这段单节点 Elasticsearch 会被部署脚本剔除，
+  # 再由 `docker-compose.swarm.cluster.yml` 提供同名代理入口和多节点后端。
+  # swarm-cluster-strip:elasticsearch:begin
+  elasticsearch:
+    image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_JAVA_OPTS:--Xms4g -Xmx4g}"
+    ports:
+      - target: 9200
+        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
+        protocol: tcp
+        mode: ingress
+      - target: 9300
+        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${ELASTICSEARCH_DATA_MOUNT_TYPE:-volume}
+        source: ${ELASTICSEARCH_DATA_MOUNT_SOURCE:-elasticsearch_data}
+        target: /usr/share/elasticsearch/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${ELASTICSEARCH_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_CPU_RESERVATION:-2.0}"
+          memory: ${ELASTICSEARCH_MEM_RESERVATION:-4G}
+        limits:
+          cpus: "${ELASTICSEARCH_CPU_LIMIT:-4.0}"
+          memory: ${ELASTICSEARCH_MEM_LIMIT:-8G}
+  # swarm-cluster-strip:elasticsearch:end
+
+  tika:
+    image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
+    environment:
+      TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
+      TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
+    ports:
+      - target: 9998
+        published: ${TIKA_HTTP_PORT:-9998}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-volume}
+        source: ${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-tika_custom_fonts}
+        target: /tika-fonts/custom
+        read_only: true
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${TIKA_REPLICAS:-2}
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+        window: 2m
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${TIKA_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${TIKA_CPU_RESERVATION:-0.5}"
+          memory: ${TIKA_MEM_RESERVATION:-1G}
+        limits:
+          cpus: "${TIKA_CPU_LIMIT:-2.0}"
           memory: ${TIKA_MEM_LIMIT:-2G}
 
 networks:
@@ -591,16 +777,12 @@ volumes:
   cloudreve_slave_runtime:
   minio_data:
   elasticsearch_data:
-  pg_1_data:
-  pg_2_data:
-  pg_3_data:
-  redis_1_data:
-  redis_2_data:
-  redis_3_data:
   tika_custom_fonts:
 
 configs:
-  redis_proxy_bootstrap:
+  postgresql_repmgr_run_v4:
+    file: ./docker/swarm/postgresql-repmgr-run.sh
+  redis_proxy_bootstrap_v3:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
   cloudreve_proxy_template:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template

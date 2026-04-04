@@ -1,6 +1,6 @@
 services:
   cloudreve:
-    image: cloudreve/cloudreve:latest
+    image: cloudreve/cloudreve:4.15.0
     container_name: cloudreve-backend
     depends_on:
       - postgresql
@@ -38,7 +38,7 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d
 
   redis:
-    image: redis:latest
+    image: redis:8.6.2
     container_name: redis
     restart: unless-stopped
     ports:
