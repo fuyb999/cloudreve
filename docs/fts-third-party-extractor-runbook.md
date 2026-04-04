@@ -40,6 +40,125 @@
 - ES 已能检索到第三方结果写入的文件内容。
 - 第三方抽取不会对 `local` 存储策略生效，联调账号必须绑定对象存储策略。
 
+## 2.2 真实联调脚本与两种验证模式
+
+仓库内已提供真实联调脚本：
+
+- `tools/fts_external_smoke/main.go`
+- `tools/fts_external_smoke/run.sh`
+
+该脚本不是伪造任务，而是按真实链路执行以下动作：
+
+- 先把测试文件直接写入 MinIO/S3
+- 再通过 `ImportPhysical` 导入 Cloudreve
+- 等待 Cloudreve 创建 `fts_external_jobs`
+- 向 Kafka `result` 主题回写抽取结果
+- 等待附属文件落盘与 ES 完成索引
+
+脚本当前支持两种模式：
+
+- 标准成功模式：第三方正常回写结果，最终输出 `finalization_mode=external_success`
+- 本地回退模式：人为延迟结果回写，先触发超时，再由本地抽取兜底，最终输出 `finalization_mode=local_fallback`
+
+脚本支持的环境变量：
+
+- `REAL_FTS_SMOKE_BATCH_COUNT`
+  - 含义：在同一个进程、同一个依赖实例内顺序跑多少个真实样本
+  - 默认值：`1`
+- `REAL_FTS_SMOKE_CLEANUP_PREFIX`
+  - 含义：按文件名前缀批量清理 smoke 样本
+  - 示例：`fts-real-smoke-`
+- `REAL_FTS_SMOKE_CLEANUP_FILE_IDS`
+  - 含义：按文件 ID 列表清理 smoke 样本
+  - 格式：逗号分隔，例如 `30,31,32`
+- `REAL_FTS_SMOKE_RESULT_DELAY_SECONDS`
+  - 含义：在向 `result` 主题发送成功消息前先等待多少秒
+  - 默认值：`0`
+- `REAL_FTS_SMOKE_SKIP_RESULT`
+  - 含义：是否完全跳过 `result` 消息发送
+  - 可选值：`1/true/yes/on`
+  - 默认值：`false`
+
+强烈建议：
+
+- 本地如果使用 SQLite，不要并起多个 `fts_external_smoke` 进程做并发压测
+- 多进程会在依赖初始化阶段同时写 `settings`、`public_root_file_id` 等记录，触发 `database is locked (SQLITE_BUSY)`
+- 本地多样本联调请使用 `REAL_FTS_SMOKE_BATCH_COUNT`，在单进程内顺序跑
+- 如果要验证真实并发，请切换到 PostgreSQL 环境后再做多进程或多实例压测
+- 清理样本也建议走该工具，不要直接手工删库；工具会复用 Cloudreve 删除链路并等待 ES 文档消失
+
+标准成功验证示例：
+
+```bash
+cd /Users/fuyb/Desktop/20260322/code/cloudreve
+
+./tools/fts_external_smoke/run.sh success 4
+```
+
+输出中应至少看到：
+
+- `job_created ...`
+- `result_published ...`
+- `finalization_mode=external_success`
+- `final_job status=success ...`
+- `file_metadata manifest=... entity=... index=...`
+
+本地回退验证示例：
+
+```bash
+cd /Users/fuyb/Desktop/20260322/code/cloudreve
+
+./tools/fts_external_smoke/run.sh fallback 2 12
+```
+
+输出中应至少看到：
+
+- `job_created ...`
+- `result_publish_delay_seconds=12`
+- `result_published ...`
+- `finalization_mode=local_fallback`
+- `final_job status=error ...`
+- `file_metadata manifest=... entity=... index=...`
+
+说明：
+
+- 回退模式下，`fts_external_jobs.status` 预期会是 `error`
+- 这不是失败，而是“第三方超时后已由本地抽取接管并完成索引”
+- `fts_external_timeout_seconds=1` 并不代表 `result` 延迟 `3` 秒就一定会回退
+- 当前实现是在挂起任务下次恢复检查时判定超时，因此若要稳定强制回退，建议把回写延迟拉长到 `12` 秒以上
+- 判断是否闭环成功，不要只看 `job.status`，还要同时确认：
+  - 已生成附属文件清单路径
+  - 已写入 `sys:fulltext_index`
+  - ES 中对应文件文档存在
+
+回退验证结束后，必须把超时恢复为默认值：
+
+```bash
+sqlite3 /Users/fuyb/Desktop/20260322/code/cloudreve/.tmp/data/cloudreve.db \
+  "update settings set value='300' where name='fts_external_timeout_seconds';"
+
+docker exec redis redis-cli --scan --pattern 'setting_fts_external*' \
+  | while read -r key; do
+      docker exec redis redis-cli del "$key" >/dev/null
+    done
+```
+
+清理 smoke 样本示例：
+
+```bash
+cd /Users/fuyb/Desktop/20260322/code/cloudreve
+
+./tools/fts_external_smoke/run.sh cleanup-prefix fts-real-smoke-
+```
+
+如果只想清理指定文件：
+
+```bash
+cd /Users/fuyb/Desktop/20260322/code/cloudreve
+
+./tools/fts_external_smoke/run.sh cleanup-ids 30,31,32
+```
+
 ## 3. 依赖准备
 
 需要先保证以下依赖可用：
@@ -64,7 +183,7 @@
 
 ## 4. Kafka 启动命令
 
-已实际联调通过的镜像：`apache/kafka:latest`
+已实际联调通过的镜像：`apache/kafka:4.2.0`
 
 启动命令：
 
@@ -86,7 +205,7 @@ docker run -d --name cloudreve-kafka \
   -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
   -e KAFKA_NUM_PARTITIONS=1 \
   -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=true \
-  apache/kafka:latest
+  apache/kafka:4.2.0
 ```
 
 可用性检查：
