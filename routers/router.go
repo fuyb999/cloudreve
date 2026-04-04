@@ -1015,6 +1015,18 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 					// queue.POST("import", controllers.AdminCreateImportTask)
 				}
 
+				ftsExternalJobs := admin.Group("fts-external-jobs")
+				{
+					ftsExternalJobs.POST("",
+						controllers.FromJSON[adminsvc.AdminListService](adminsvc.AdminListServiceParamsCtx{}),
+						controllers.AdminListFTSExternalJobs,
+					)
+					ftsExternalJobs.GET(":id",
+						controllers.FromUri[adminsvc.SingleFTSExternalJobService](adminsvc.SingleFTSExternalJobParamCtx{}),
+						controllers.AdminGetFTSExternalJob,
+					)
+				}
+
 				event := admin.Group("event")
 				{
 					event.POST("",

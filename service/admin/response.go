@@ -27,6 +27,36 @@ type ListTaskResponse struct {
 	Tasks      []GetTaskResponse            `json:"tasks"`
 }
 
+type ListFTSExternalJobResponse struct {
+	Pagination *inventory.PaginationResults `json:"pagination"`
+	Jobs       []GetFTSExternalJobListItem  `json:"jobs"`
+}
+
+type GetFTSExternalJobListItem struct {
+	ID               int        `json:"id,omitempty"`
+	CreatedAt        time.Time  `json:"created_at,omitempty"`
+	UpdatedAt        time.Time  `json:"updated_at,omitempty"`
+	RequestID        string     `json:"request_id,omitempty"`
+	Status           string     `json:"status,omitempty"`
+	FileID           int        `json:"file_id,omitempty"`
+	OwnerID          int        `json:"owner_id,omitempty"`
+	EntityID         int        `json:"entity_id,omitempty"`
+	Mode             string     `json:"mode,omitempty"`
+	TriggerReason    string     `json:"trigger_reason,omitempty"`
+	Attempt          int        `json:"attempt,omitempty"`
+	ManifestPath     string     `json:"manifest_path,omitempty"`
+	RequestedAt      time.Time  `json:"requested_at,omitempty"`
+	DeadlineAt       time.Time  `json:"deadline_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	HasResultPayload bool       `json:"has_result_payload,omitempty"`
+	HasErrorPayload  bool       `json:"has_error_payload,omitempty"`
+	HasQualityReport bool       `json:"has_quality_report,omitempty"`
+}
+
+type GetFTSExternalJobResponse struct {
+	*ent.FTSExternalJob
+}
+
 type ListAuditLogResponse struct {
 	Pagination *inventory.PaginationResults `json:"pagination"`
 	Logs       []GetAuditLogResponse        `json:"logs"`

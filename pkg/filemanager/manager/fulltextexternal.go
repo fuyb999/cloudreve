@@ -556,6 +556,45 @@ func buildFTSExternalSnapshotToken(fileModel *ent.File, primaryEntity *ent.Entit
 	)
 }
 
+func findReusableFTSExternalJob(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+	if dep == nil || dep.DBClient() == nil || fileModel == nil || primaryEntity == nil {
+		return nil, nil
+	}
+
+	snapshotToken := buildFTSExternalSnapshotToken(fileModel, primaryEntity)
+	jobs, err := dep.DBClient().FTSExternalJob.Query().
+		Where(
+			ftsexternaljob.FileIDEQ(fileModel.ID),
+			ftsexternaljob.EntityIDEQ(primaryEntity.ID),
+			ftsexternaljob.SnapshotTokenEQ(snapshotToken),
+		).
+		Order(ent.Desc(ftsexternaljob.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var queued *ent.FTSExternalJob
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+
+		switch job.Status {
+		case ftsExternalJobStatusSuccess:
+			if strings.TrimSpace(job.ResultPayload) != "" {
+				return job, nil
+			}
+		case ftsExternalJobStatusQueued:
+			if queued == nil {
+				queued = job
+			}
+		}
+	}
+
+	return queued, nil
+}
+
 func findPrimaryFTSEntity(fileModel *ent.File) *ent.Entity {
 	if fileModel == nil {
 		return nil

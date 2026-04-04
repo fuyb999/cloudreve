@@ -32,10 +32,14 @@ var (
 	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
 		return m.hasCurrentExternalFTSSidecar(ctx, candidate)
 	}
+	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+		return findReusableFTSExternalJob(ctx, dep, fileModel, primaryEntity)
+	}
 	buildFTSFileDocumentForTask = func(m *manager, ctx context.Context, fileID int, opts FTSBuildOptions) (*searcher.SearchFileDocument, *fs.URI, error) {
 		return m.buildFTSFileDocumentWithOptions(ctx, fileID, opts)
 	}
-	publishFTSExternalRequestForTask = publishFTSExternalRequest
+	finalizeExternalIndexedFileForTask = finalizeExternalIndexedFile
+	publishFTSExternalRequestForTask   = publishFTSExternalRequest
 )
 
 func (m *manager) loadFTSExternalCandidate(ctx context.Context, fileID int) (*ftsExternalCandidate, error) {
@@ -210,13 +214,35 @@ func (t *FullTextIndexTask) queueExternalExtraction(
 		return t.persistAndContinue(state)
 	}
 
+	reusableJob, err := findReusableFTSExternalJobForTask(ctx, fm.dep, candidate.fileModel, candidate.primaryEntity)
+	if err != nil {
+		return enttask.StatusError, err
+	}
+	if reusableJob != nil {
+		switch reusableJob.Status {
+		case ftsExternalJobStatusQueued:
+			return t.suspendForExternalJob(state, reusableJob.RequestID)
+		case ftsExternalJobStatusSuccess:
+			status, err := finalizeExternalIndexedFileForTask(ctx, fm, candidate.fileModel.ID, reusableJob)
+			if err != nil {
+				return status, err
+			}
+			state.CompleteActive()
+			return t.persistAndContinue(state)
+		}
+	}
+
 	job, err := publishFTSExternalRequestForTask(ctx, fm.dep, candidate.fileModel, candidate.primaryEntity, candidate.policy, fm.settings.FTSExternalExtractor(ctx), triggerReason, attempt, qualityReport)
 	if err != nil {
 		return enttask.StatusError, err
 	}
 
+	return t.suspendForExternalJob(state, job.RequestID)
+}
+
+func (t *FullTextIndexTask) suspendForExternalJob(state *FullTextIndexTaskState, requestID string) (enttask.Status, error) {
 	state.Phase = fullTextIndexPhaseAwaitExternal
-	state.ExternalRequestID = job.RequestID
+	state.ExternalRequestID = requestID
 	state.NodeID = 0
 	state.SlaveID = 0
 	t.ResumeAfter(10 * time.Second)

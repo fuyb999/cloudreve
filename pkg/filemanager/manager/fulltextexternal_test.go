@@ -499,6 +499,156 @@ func TestFinalizeExternalIndexedFileDeletesStaleIndexWhenFileMissing(t *testing.
 	}
 }
 
+func TestFindReusableFTSExternalJobPrefersSuccessForSameSnapshot(t *testing.T) {
+	ctx := context.Background()
+	client := newFTSExternalTestClient(t, ctx)
+	defer client.Close()
+
+	reqTime := time.Now().UTC().Round(time.Second)
+	fileModel := &ent.File{ID: 10, Size: 4096, UpdatedAt: reqTime}
+	entity := &ent.Entity{ID: 30, UpdatedAt: reqTime}
+	snapshotToken := buildFTSExternalSnapshotToken(fileModel, entity)
+
+	createFTSExternalJob(t, ctx, client, "req-queued", snapshotToken)
+	successJob := createFTSExternalJob(t, ctx, client, "req-success", snapshotToken)
+	if err := client.FTSExternalJob.UpdateOneID(successJob.ID).
+		SetStatus(ftsExternalJobStatusSuccess).
+		SetResultPayload(`{"version":1,"request_id":"req-success","snapshot_token":"` + snapshotToken + `","status":"success","root":{"content":"ok"}}`).
+		SetCompletedAt(time.Now()).
+		Exec(ctx); err != nil {
+		t.Fatalf("failed to mark success job: %v", err)
+	}
+
+	dep := ftsExternalIntegrationDep{
+		dbClient: client,
+		logger:   logging.NewConsoleLogger(logging.LevelError),
+	}
+
+	job, err := findReusableFTSExternalJob(ctx, dep, fileModel, entity)
+	if err != nil {
+		t.Fatalf("expected reusable job query to succeed, got error: %v", err)
+	}
+	if job == nil {
+		t.Fatal("expected reusable external job")
+	}
+	if got, want := job.RequestID, "req-success"; got != want {
+		t.Fatalf("unexpected reusable job request id: got %q want %q", got, want)
+	}
+}
+
+func TestQueueExternalExtractionReusesQueuedJob(t *testing.T) {
+	originalHasSidecar := hasCurrentExternalFTSSidecarForTask
+	originalFindReusable := findReusableFTSExternalJobForTask
+	originalPublish := publishFTSExternalRequestForTask
+	defer func() {
+		hasCurrentExternalFTSSidecarForTask = originalHasSidecar
+		findReusableFTSExternalJobForTask = originalFindReusable
+		publishFTSExternalRequestForTask = originalPublish
+	}()
+
+	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
+		return false
+	}
+	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+		return &ent.FTSExternalJob{
+			RequestID: "req-reused-queued",
+			Status:    ftsExternalJobStatusQueued,
+		}, nil
+	}
+	publishFTSExternalRequestForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, policy *ent.StoragePolicy, cfg *setting.FTSExternalExtractorSetting, triggerReason string, attempt int, qualityReport string) (*ent.FTSExternalJob, error) {
+		t.Fatalf("expected queued reusable job to prevent new publish")
+		return nil, nil
+	}
+
+	uri := mustURI(t, "cloudreve:///my/report.pdf")
+	state := &FullTextIndexTaskState{}
+	state.Upsert(FullTextIndexTaskItem{FileID: 101, Uri: uri})
+	if !state.ActivateNext() {
+		t.Fatal("expected active file")
+	}
+
+	taskModel := &FullTextIndexTask{DBTask: &queue.DBTask{Task: &ent.Task{PublicState: &inventorytypes.TaskPublicState{}}}}
+	status, err := taskModel.queueExternalExtraction(context.Background(), &manager{
+		l: logging.NewConsoleLogger(logging.LevelError),
+	}, state, &ftsExternalCandidate{
+		fileModel:     &ent.File{ID: 101},
+		primaryEntity: &ent.Entity{ID: 201},
+	}, "primary", 1, "")
+	if err != nil {
+		t.Fatalf("expected queued reusable job to suspend cleanly, got error: %v", err)
+	}
+	if status != enttask.StatusSuspending {
+		t.Fatalf("unexpected status for queued reusable job: got %s want %s", status, enttask.StatusSuspending)
+	}
+	if state.Phase != fullTextIndexPhaseAwaitExternal || state.ExternalRequestID != "req-reused-queued" {
+		t.Fatalf("expected task to await existing external job, got phase=%s request=%q", state.Phase, state.ExternalRequestID)
+	}
+}
+
+func TestQueueExternalExtractionReusesSuccessfulJob(t *testing.T) {
+	originalHasSidecar := hasCurrentExternalFTSSidecarForTask
+	originalFindReusable := findReusableFTSExternalJobForTask
+	originalFinalize := finalizeExternalIndexedFileForTask
+	originalPublish := publishFTSExternalRequestForTask
+	defer func() {
+		hasCurrentExternalFTSSidecarForTask = originalHasSidecar
+		findReusableFTSExternalJobForTask = originalFindReusable
+		finalizeExternalIndexedFileForTask = originalFinalize
+		publishFTSExternalRequestForTask = originalPublish
+	}()
+
+	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
+		return false
+	}
+	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+		return &ent.FTSExternalJob{
+			RequestID:     "req-reused-success",
+			Status:        ftsExternalJobStatusSuccess,
+			ResultPayload: `{"version":1,"request_id":"req-reused-success","status":"success","root":{"content":"ok"}}`,
+		}, nil
+	}
+	publishFTSExternalRequestForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, policy *ent.StoragePolicy, cfg *setting.FTSExternalExtractorSetting, triggerReason string, attempt int, qualityReport string) (*ent.FTSExternalJob, error) {
+		t.Fatalf("expected successful reusable job to prevent new publish")
+		return nil, nil
+	}
+
+	finalizedFileID := 0
+	finalizeExternalIndexedFileForTask = func(ctx context.Context, fm *manager, fileID int, job *ent.FTSExternalJob) (enttask.Status, error) {
+		finalizedFileID = fileID
+		if job == nil || job.RequestID != "req-reused-success" {
+			t.Fatalf("unexpected reusable success job: %+v", job)
+		}
+		return enttask.StatusCompleted, nil
+	}
+
+	uri := mustURI(t, "cloudreve:///my/report.pdf")
+	state := &FullTextIndexTaskState{}
+	state.Upsert(FullTextIndexTaskItem{FileID: 101, Uri: uri})
+	if !state.ActivateNext() {
+		t.Fatal("expected active file")
+	}
+
+	taskModel := &FullTextIndexTask{DBTask: &queue.DBTask{Task: &ent.Task{PublicState: &inventorytypes.TaskPublicState{}}}}
+	status, err := taskModel.queueExternalExtraction(context.Background(), &manager{
+		l: logging.NewConsoleLogger(logging.LevelError),
+	}, state, &ftsExternalCandidate{
+		fileModel:     &ent.File{ID: 101},
+		primaryEntity: &ent.Entity{ID: 201},
+	}, "primary", 1, "")
+	if err != nil {
+		t.Fatalf("expected reusable success job to finalize cleanly, got error: %v", err)
+	}
+	if status != enttask.StatusProcessing {
+		t.Fatalf("unexpected status for reusable success job: got %s want %s", status, enttask.StatusProcessing)
+	}
+	if finalizedFileID != 101 {
+		t.Fatalf("expected reusable success to finalize file 101, got %d", finalizedFileID)
+	}
+	if state.Active != nil || state.Len() != 0 {
+		t.Fatalf("expected reusable success path to complete active item, got state=%+v", state)
+	}
+}
+
 func TestDispatchExternalIfConfiguredFallbackOnErrorQueuesWhenLocalTextEmpty(t *testing.T) {
 	originalLoadCandidate := loadFTSExternalCandidateForTask
 	originalHasSidecar := hasCurrentExternalFTSSidecarForTask

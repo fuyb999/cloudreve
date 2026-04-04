@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -98,7 +99,19 @@ func migrateDefaultStoragePolicy(l logging.Logger, client *ent.Client, ctx conte
 		return nil
 	}
 
-	l.Info("Insert default storage policy...")
+	initType := strings.ToLower(strings.TrimSpace(os.Getenv("CR_INIT_DEFAULT_STORAGE")))
+	switch initType {
+	case "", string(types.PolicyTypeLocal):
+		return migrateDefaultLocalStoragePolicy(l, client, ctx)
+	case string(types.PolicyTypeS3):
+		return migrateDefaultS3StoragePolicy(l, client, ctx)
+	default:
+		return fmt.Errorf("unsupported CR_INIT_DEFAULT_STORAGE %q", initType)
+	}
+}
+
+func migrateDefaultLocalStoragePolicy(l logging.Logger, client *ent.Client, ctx context.Context) error {
+	l.Info("Insert default storage policy type=%s...", types.PolicyTypeLocal)
 	if _, err := client.StoragePolicy.Create().
 		SetName("Default storage policy").
 		SetType(types.PolicyTypeLocal).
@@ -113,6 +126,149 @@ func migrateDefaultStoragePolicy(l logging.Logger, client *ent.Client, ctx conte
 	}
 
 	return nil
+}
+
+type defaultS3StoragePolicyConfig struct {
+	Endpoint       string
+	Bucket         string
+	AccessKey      string
+	SecretKey      string
+	Region         string
+	ForcePathStyle bool
+	Relay          bool
+	InternalProxy  bool
+	IsPrivate      bool
+	ChunkSize      int64
+}
+
+func migrateDefaultS3StoragePolicy(l logging.Logger, client *ent.Client, ctx context.Context) error {
+	cfg, err := loadDefaultS3StoragePolicyConfig()
+	if err != nil {
+		return err
+	}
+
+	l.Info(
+		"Insert default storage policy type=%s endpoint=%q bucket=%q relay=%t internal_proxy=%t...",
+		types.PolicyTypeS3,
+		cfg.Endpoint,
+		cfg.Bucket,
+		cfg.Relay,
+		cfg.InternalProxy,
+	)
+
+	if _, err := client.StoragePolicy.Create().
+		SetName("Default storage policy").
+		SetType(types.PolicyTypeS3).
+		SetServer(cfg.Endpoint).
+		SetBucketName(cfg.Bucket).
+		SetAccessKey(cfg.AccessKey).
+		SetSecretKey(cfg.SecretKey).
+		SetIsPrivate(cfg.IsPrivate).
+		SetDirNameRule("uploads/{uid}/{path}").
+		SetFileNameRule("{uid}_{randomkey8}_{originname}").
+		SetSettings(&types.PolicySetting{
+			Region:           cfg.Region,
+			S3ForcePathStyle: cfg.ForcePathStyle,
+			ChunkSize:        cfg.ChunkSize,
+			Relay:            cfg.Relay,
+			InternalProxy:    cfg.InternalProxy,
+		}).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to create default S3 storage policy: %w", err)
+	}
+
+	return nil
+}
+
+func loadDefaultS3StoragePolicyConfig() (*defaultS3StoragePolicyConfig, error) {
+	endpoint := strings.TrimSpace(os.Getenv("CR_INIT_S3_ENDPOINT"))
+	bucket := strings.TrimSpace(os.Getenv("CR_INIT_S3_BUCKET"))
+	accessKey := strings.TrimSpace(os.Getenv("CR_INIT_S3_ACCESS_KEY"))
+	secretKey := strings.TrimSpace(os.Getenv("CR_INIT_S3_SECRET_KEY"))
+
+	if endpoint == "" {
+		return nil, fmt.Errorf("CR_INIT_S3_ENDPOINT is required when CR_INIT_DEFAULT_STORAGE=s3")
+	}
+	if bucket == "" {
+		return nil, fmt.Errorf("CR_INIT_S3_BUCKET is required when CR_INIT_DEFAULT_STORAGE=s3")
+	}
+	if accessKey == "" {
+		return nil, fmt.Errorf("CR_INIT_S3_ACCESS_KEY is required when CR_INIT_DEFAULT_STORAGE=s3")
+	}
+	if secretKey == "" {
+		return nil, fmt.Errorf("CR_INIT_S3_SECRET_KEY is required when CR_INIT_DEFAULT_STORAGE=s3")
+	}
+
+	forcePathStyle, err := parseBoolEnv("CR_INIT_S3_FORCE_PATH_STYLE", true)
+	if err != nil {
+		return nil, err
+	}
+	relay, err := parseBoolEnv("CR_INIT_S3_RELAY", true)
+	if err != nil {
+		return nil, err
+	}
+	internalProxy, err := parseBoolEnv("CR_INIT_S3_INTERNAL_PROXY", true)
+	if err != nil {
+		return nil, err
+	}
+	isPrivate, err := parseBoolEnv("CR_INIT_S3_IS_PRIVATE", true)
+	if err != nil {
+		return nil, err
+	}
+	chunkSize, err := parseInt64Env("CR_INIT_S3_CHUNK_SIZE", 25<<20)
+	if err != nil {
+		return nil, err
+	}
+
+	return &defaultS3StoragePolicyConfig{
+		Endpoint:       endpoint,
+		Bucket:         bucket,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+		Region:         getEnvOrDefault("CR_INIT_S3_REGION", "us-east-1"),
+		ForcePathStyle: forcePathStyle,
+		Relay:          relay,
+		InternalProxy:  internalProxy,
+		IsPrivate:      isPrivate,
+		ChunkSize:      chunkSize,
+	}, nil
+}
+
+func parseBoolEnv(key string, fallback bool) (bool, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("invalid bool env %s=%q: %w", key, value, err)
+	}
+
+	return parsed, nil
+}
+
+func parseInt64Env(key string, fallback int64) (int64, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid int env %s=%q: %w", key, value, err)
+	}
+
+	return parsed, nil
+}
+
+func getEnvOrDefault(key, fallback string) string {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback
+	}
+
+	return strings.TrimSpace(value)
 }
 
 func migrateSysGroups(l logging.Logger, client *ent.Client, ctx context.Context) error {

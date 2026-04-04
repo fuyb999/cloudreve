@@ -550,8 +550,28 @@ func AdminListTasks(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
+func AdminListFTSExternalJobs(c *gin.Context) {
+	service := ParametersFromContext[*admin.AdminListService](c, admin.AdminListServiceParamsCtx{})
+	res, err := service.FTSExternalJobs(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		return
+	}
+	c.JSON(200, serializer.Response{Data: res})
+}
+
 func AdminGetTask(c *gin.Context) {
 	service := ParametersFromContext[*admin.SingleTaskService](c, admin.SingleTaskParamCtx{})
+	res, err := service.Get(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		return
+	}
+	c.JSON(200, serializer.Response{Data: res})
+}
+
+func AdminGetFTSExternalJob(c *gin.Context) {
+	service := ParametersFromContext[*admin.SingleFTSExternalJobService](c, admin.SingleFTSExternalJobParamCtx{})
 	res, err := service.Get(c)
 	if err != nil {
 		c.JSON(200, serializer.Err(c, err))
