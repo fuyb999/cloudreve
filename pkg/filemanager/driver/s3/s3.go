@@ -187,7 +187,37 @@ func (handler *Driver) List(ctx context.Context, base string, onProgress driver.
 
 // Open 打开文件
 func (handler *Driver) Open(ctx context.Context, path string) (*os.File, error) {
-	return nil, errors.New("not implemented")
+	res, err := handler.svc.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: &handler.policy.BucketName,
+		Key:    aws.String(path),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	tmp, err := os.CreateTemp("", "cloudreve-s3-open-*")
+	if err != nil {
+		return nil, err
+	}
+
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}
+
+	if _, err := io.Copy(tmp, res.Body); err != nil {
+		cleanup()
+		return nil, err
+	}
+
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, err
+	}
+
+	_ = os.Remove(tmp.Name())
+	return tmp, nil
 }
 
 // Put 将文件流保存到指定目录

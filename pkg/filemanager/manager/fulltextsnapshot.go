@@ -428,6 +428,14 @@ func buildFTSExtractionPlan(
 	persistTextSidecarEnabled bool,
 	persistAssetSidecarEnabled bool,
 ) ftsExtractionPlan {
+	if hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.Provider == ftsSidecarProviderExternal &&
+		!opts.ForceTextExtraction && !opts.ForceAttachmentExtraction {
+		return ftsExtractionPlan{
+			ReuseSidecarText:        true,
+			ReuseSidecarAttachments: true,
+		}
+	}
+
 	plan := ftsExtractionPlan{
 		ReuseSidecarText:        reuseTextSidecarEnabled && !opts.ForceTextExtraction,
 		ReuseSidecarAttachments: reuseAssetSidecarEnabled && !opts.ForceAttachmentExtraction,

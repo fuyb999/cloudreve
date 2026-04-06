@@ -26,6 +26,10 @@ type memorySidecarHandler struct {
 	dir string
 }
 
+type openOnlyMemorySidecarHandler struct {
+	*memorySidecarHandler
+}
+
 func (m *memorySidecarHandler) Put(ctx context.Context, file *fs.UploadRequest) error {
 	if file == nil || file.Props == nil {
 		return nil
@@ -102,6 +106,12 @@ func (m *memorySidecarHandler) Capabilities() *driver.Capabilities {
 
 func (m *memorySidecarHandler) MediaMeta(ctx context.Context, path, ext, language string) ([]driver.MediaMeta, error) {
 	return nil, nil
+}
+
+func (m *openOnlyMemorySidecarHandler) Capabilities() *driver.Capabilities {
+	return &driver.Capabilities{
+		StaticFeatures: &boolset.BooleanSet{},
+	}
 }
 
 type testEntity struct {
@@ -444,6 +454,25 @@ func TestPersistExternalFTSSidecarsToHandlerWritesExpectedArtifacts(t *testing.T
 	}
 	if got, want := diagnostics.SnapshotToken, "snapshot-42"; got != want {
 		t.Fatalf("unexpected diagnostics snapshot token: got %q want %q", got, want)
+	}
+}
+
+func TestReadFTSSidecarBytesFallsBackToOpenWithoutInboundCapability(t *testing.T) {
+	tempDir := t.TempDir()
+	base := &memorySidecarHandler{dir: tempDir}
+	handler := &openOnlyMemorySidecarHandler{memorySidecarHandler: base}
+
+	savePath := "cloudreve/fts-sidecar/1/2/3/content.txt"
+	if err := putSidecarBytes(context.Background(), base, savePath, "content.txt", "text/plain; charset=utf-8", []byte("sidecar via open")); err != nil {
+		t.Fatalf("failed to seed sidecar content: %v", err)
+	}
+
+	raw, err := readFTSSidecarBytes(context.Background(), nil, handler, savePath)
+	if err != nil {
+		t.Fatalf("readFTSSidecarBytes returned error: %v", err)
+	}
+	if got, want := string(raw), "sidecar via open"; got != want {
+		t.Fatalf("unexpected sidecar content: got %q want %q", got, want)
 	}
 }
 

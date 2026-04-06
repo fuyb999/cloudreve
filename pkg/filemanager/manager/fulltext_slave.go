@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -12,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
+	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
@@ -25,18 +27,20 @@ type SlaveContentProcessingTaskState struct {
 }
 
 type SlaveFullTextExtractPayload struct {
-	FileID     int                              `json:"file_id"`
-	OwnerID    int                              `json:"owner_id"`
-	FileName   string                           `json:"file_name"`
-	FileSize   int64                            `json:"file_size"`
-	Entity     *ent.Entity                      `json:"entity"`
-	Policy     *ent.StoragePolicy               `json:"policy"`
-	TikaConfig *setting.FTSTikaExtractorSetting `json:"tika_config,omitempty"`
+	FileID         int                                  `json:"file_id"`
+	OwnerID        int                                  `json:"owner_id"`
+	FileName       string                               `json:"file_name"`
+	FileSize       int64                                `json:"file_size"`
+	Entity         *ent.Entity                          `json:"entity"`
+	Policy         *ent.StoragePolicy                   `json:"policy"`
+	TikaConfig     *setting.FTSTikaExtractorSetting     `json:"tika_config,omitempty"`
+	ExternalConfig *setting.FTSExternalExtractorSetting `json:"external_config,omitempty"`
 }
 
 type SlaveFullTextExtractResult struct {
-	EntityID     int    `json:"entity_id"`
-	ManifestPath string `json:"manifest_path,omitempty"`
+	EntityID          int    `json:"entity_id"`
+	ManifestPath      string `json:"manifest_path,omitempty"`
+	ExternalRequestID string `json:"external_request_id,omitempty"`
 }
 
 func (m *manager) buildSlaveFullTextExtractPayload(ctx context.Context, fileID int) (*SlaveFullTextExtractPayload, error) {
@@ -67,13 +71,14 @@ func (m *manager) buildSlaveFullTextExtractPayload(ctx context.Context, fileID i
 	}
 
 	return &SlaveFullTextExtractPayload{
-		FileID:     fileModel.ID,
-		OwnerID:    fileModel.OwnerID,
-		FileName:   fileModel.Name,
-		FileSize:   fileModel.Size,
-		Entity:     decodedEntity,
-		Policy:     policy,
-		TikaConfig: cloneFTSTikaExtractorSetting(m.settings.FTSTikaExtractor(ctx)),
+		FileID:         fileModel.ID,
+		OwnerID:        fileModel.OwnerID,
+		FileName:       fileModel.Name,
+		FileSize:       fileModel.Size,
+		Entity:         decodedEntity,
+		Policy:         policy,
+		TikaConfig:     cloneFTSTikaExtractorSetting(m.settings.FTSTikaExtractor(ctx)),
+		ExternalConfig: cloneFTSExternalExtractorSetting(m.settings.FTSExternalExtractor(ctx)),
 	}, nil
 }
 
@@ -108,6 +113,21 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 		return logFailure("build_tika", err)
 	}
 
+	fileModel := &ent.File{
+		ID:            payload.FileID,
+		OwnerID:       payload.OwnerID,
+		Name:          payload.FileName,
+		Size:          payload.FileSize,
+		PrimaryEntity: payload.Entity.ID,
+		UpdatedAt:     payload.Entity.UpdatedAt,
+	}
+	externalCfg := resolveSlaveFTSExternalConfig(payload.ExternalConfig, dep.SettingProvider().FTSExternalExtractor(ctx))
+	externalMode := normalizeExternalFTSMode(externalCfg.Mode)
+	externalEligible := externalFTSEligible(fileModel, payload.Entity, payload.Policy, externalCfg)
+	if externalEligible && externalMode == setting.FTSExternalModePrimary {
+		return queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, "primary", 1, "")
+	}
+
 	if !ShouldExtractText(tika, payload.FileName, payload.FileSize) {
 		return &SlaveFullTextExtractResult{
 			EntityID: payload.Entity.ID,
@@ -115,6 +135,12 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 	}
 
 	if !cfg.SidecarEnabled || (!cfg.SidecarTextEnabled && !cfg.SidecarAssetsEnabled) {
+		if externalEligible && externalMode != setting.FTSExternalModeDisabled {
+			res, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, "local_build_error", 1, "")
+			if queueErr == nil {
+				return res, nil
+			}
+		}
 		return logFailure("validate_sidecar_setting", fmt.Errorf("slave full text extraction requires text or assets sidecar to be enabled"))
 	}
 
@@ -130,15 +156,38 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 	policy := internal.CastStoragePolicyOnSlave(ctx, payload.Policy)
 	source, err := internal.GetEntitySource(ctx, 0, fs.WithEntity(primaryEntity), fs.WithPolicy(policy))
 	if err != nil {
+		if externalEligible && externalMode != setting.FTSExternalModeDisabled {
+			res, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, "local_build_error", 1, "")
+			if queueErr == nil {
+				return res, nil
+			}
+		}
 		return logFailure("get_entity_source", fmt.Errorf("failed to get entity source: %w", err))
 	}
 	defer source.Close()
 
-	fileModel := &ent.File{
-		ID:      payload.FileID,
-		OwnerID: payload.OwnerID,
-		Name:    payload.FileName,
-		Size:    payload.FileSize,
+	extractedText := ""
+	if cfg.SidecarTextEnabled {
+		if !rewindSidecarSource(internal, source) {
+			if externalEligible && externalMode != setting.FTSExternalModeDisabled {
+				res, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, "local_build_error", 1, "")
+				if queueErr == nil {
+					return res, nil
+				}
+			}
+			return logFailure("rewind_source", fmt.Errorf("failed to rewind source for slave text extraction"))
+		}
+		extractedText, err = tika.ExtractFile(ctx, source, fileModel.Name)
+		if err != nil {
+			if externalEligible && externalMode != setting.FTSExternalModeDisabled {
+				res, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, "local_build_error", 1, "")
+				if queueErr == nil {
+					return res, nil
+				}
+			}
+			return logFailure("extract_text", err)
+		}
+		extractedText = strings.TrimSpace(extractedText)
 	}
 
 	manifest, manifestPath, err := internal.persistFTSSidecarsForSlave(
@@ -149,8 +198,15 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 		primaryEntity,
 		policy,
 		source,
+		extractedText,
 	)
 	if err != nil {
+		if externalEligible && externalMode != setting.FTSExternalModeDisabled {
+			res, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, "local_build_error", 1, "")
+			if queueErr == nil {
+				return res, nil
+			}
+		}
 		return logFailure("persist_sidecars", err)
 	}
 
@@ -159,6 +215,40 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 	}
 	if manifest != nil && manifestPath != "" {
 		result.ManifestPath = manifestPath
+	}
+
+	if externalEligible {
+		doc := &searcher.SearchFileDocument{
+			FileID:   payload.FileID,
+			EntityID: payload.Entity.ID,
+			Content:  extractedText,
+		}
+		triggerReason := ""
+		qualityReport := ""
+		switch externalMode {
+		case setting.FTSExternalModeFallbackOnError:
+			if strings.TrimSpace(buildFTSQualityText(doc)) == "" {
+				triggerReason = "local_text_empty"
+			}
+		case setting.FTSExternalModeFallbackOnErrorOrQuality:
+			report := evaluateFTSExtractionQuality(doc, externalCfg)
+			if report != nil && !report.Accepted {
+				triggerReason = "quality_rejected"
+				qualityReport = marshalExternalQualityReport(report)
+			}
+		}
+		if triggerReason != "" {
+			externalResult, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, triggerReason, 1, qualityReport)
+			if queueErr == nil {
+				return externalResult, nil
+			}
+			dep.Logger().Warning(
+				"Slave external FTS fallback queue failed for file=%d reason=%s, keeping local sidecar: %v",
+				payload.FileID,
+				triggerReason,
+				queueErr,
+			)
+		}
 	}
 
 	return result, nil
@@ -176,11 +266,28 @@ func cloneFTSTikaExtractorSetting(cfg *setting.FTSTikaExtractorSetting) *setting
 	return &clone
 }
 
+func cloneFTSExternalExtractorSetting(cfg *setting.FTSExternalExtractorSetting) *setting.FTSExternalExtractorSetting {
+	if cfg == nil {
+		return nil
+	}
+
+	clone := *cfg
+	clone.Kafka.Brokers = append([]string(nil), cfg.Kafka.Brokers...)
+	return &clone
+}
+
 func resolveSlaveFTSTikaConfig(taskCfg *setting.FTSTikaExtractorSetting, fallback *setting.FTSTikaExtractorSetting) *setting.FTSTikaExtractorSetting {
 	if taskCfg != nil {
 		return cloneFTSTikaExtractorSetting(taskCfg)
 	}
 	return cloneFTSTikaExtractorSetting(fallback)
+}
+
+func resolveSlaveFTSExternalConfig(taskCfg *setting.FTSExternalExtractorSetting, fallback *setting.FTSExternalExtractorSetting) *setting.FTSExternalExtractorSetting {
+	if taskCfg != nil {
+		return cloneFTSExternalExtractorSetting(taskCfg)
+	}
+	return cloneFTSExternalExtractorSetting(fallback)
 }
 
 func buildSlaveTikaExtractor(dep dependency.Dep, cfg *setting.FTSTikaExtractorSetting) (*tikaextractor.TikaExtractor, error) {
@@ -257,6 +364,46 @@ func parseSlaveContentProcessingState(raw string) (*SlaveContentProcessingTaskSt
 		return nil, err
 	}
 	return state, nil
+}
+
+func queueSlaveExternalRequest(
+	ctx context.Context,
+	dep dependency.Dep,
+	fileModel *ent.File,
+	primaryEntity *ent.Entity,
+	policy *ent.StoragePolicy,
+	cfg *setting.FTSExternalExtractorSetting,
+	triggerReason string,
+	attempt int,
+	qualityReport string,
+) (*SlaveFullTextExtractResult, error) {
+	if cfg == nil || normalizeExternalFTSMode(cfg.Mode) == setting.FTSExternalModeDisabled {
+		return nil, fmt.Errorf("slave external fts is disabled")
+	}
+
+	reusable, err := findReusableFTSExternalJob(ctx, dep, fileModel, primaryEntity)
+	if err != nil {
+		return nil, err
+	}
+	if reusable != nil && strings.TrimSpace(reusable.RequestID) != "" {
+		switch reusable.Status {
+		case ftsExternalJobStatusQueued, ftsExternalJobStatusSuccess:
+			return &SlaveFullTextExtractResult{
+				EntityID:          primaryEntity.ID,
+				ExternalRequestID: reusable.RequestID,
+			}, nil
+		}
+	}
+
+	job, err := publishFTSExternalRequest(ctx, dep, fileModel, primaryEntity, policy, cfg, triggerReason, attempt, qualityReport)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SlaveFullTextExtractResult{
+		EntityID:          primaryEntity.ID,
+		ExternalRequestID: job.RequestID,
+	}, nil
 }
 
 func (m *manager) applySlaveFTSSidecarResult(ctx context.Context, fileID int, uri *fs.URI, result *SlaveFullTextExtractResult) error {

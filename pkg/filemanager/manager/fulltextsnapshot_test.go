@@ -346,3 +346,37 @@ func TestBuildFTSExtractionPlanExtractsAttachmentsWithoutSidecarPersistence(t *t
 		t.Fatal("expected no sidecar persistence when sidecar switches are disabled")
 	}
 }
+
+func TestBuildFTSExtractionPlanReusesExternalSidecarWithoutLocalFallback(t *testing.T) {
+	plan := buildFTSExtractionPlan(
+		FTSBuildOptions{},
+		testTextExtractor{exts: []string{".txt"}, maxFileSize: 20 << 20},
+		&ent.File{Name: "probe.txt", Size: 40},
+		"",
+		nil,
+		true,
+		&FTSSidecarManifest{
+			Provider: ftsSidecarProviderExternal,
+		},
+		true,
+		true,
+		true,
+		true,
+	)
+
+	if !plan.ReuseSidecarText {
+		t.Fatal("expected external sidecar text to be reused")
+	}
+	if !plan.ReuseSidecarAttachments {
+		t.Fatal("expected external sidecar attachments to be reused")
+	}
+	if plan.NeedTextExtraction {
+		t.Fatal("expected no local text extraction when external sidecar already exists")
+	}
+	if plan.NeedAttachmentExtraction {
+		t.Fatal("expected no local attachment extraction when external sidecar already exists")
+	}
+	if plan.ShouldPersistSidecar {
+		t.Fatal("expected no sidecar persistence refresh for external sidecar reuse")
+	}
+}

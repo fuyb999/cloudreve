@@ -778,6 +778,11 @@ func normalizeTextLikeContentType(contentType string) string {
 		delete(params, "charset")
 	}
 
+	switch strings.ToLower(mediaType) {
+	case "application/x-java-archive":
+		mediaType = "application/java-archive"
+	}
+
 	normalized := mime.FormatMediaType(mediaType, params)
 	if normalized == "" {
 		return mediaType

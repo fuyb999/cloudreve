@@ -689,10 +689,6 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 }
 
 func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *manager, state *FullTextIndexTaskState, item FullTextIndexTaskItem) (task.Status, error) {
-	if next, handled, err := t.dispatchExternalIfConfigured(ctx, fm, state, item); handled || err != nil {
-		return next, err
-	}
-
 	node, err := allocateContentProcessingNode(ctx, fm.dep, state.NodeID)
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to allocate content processing node: %w", err)
@@ -702,48 +698,42 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 	t.Lock()
 	t.progress = nil
 	t.Unlock()
-	if node.IsMaster() || !fm.shouldOffloadFullTextToSlave(ctx) {
-		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+
+	if !node.IsMaster() && fm.shouldOffloadFullTextToSlave(ctx) {
+		payload, err := fm.buildSlaveFullTextExtractPayload(ctx, item.FileID)
+		if err == nil && payload != nil && payload.Policy != nil {
+			stateRaw, err := marshalSlaveContentProcessingState(slaveContentProcessingKindFullTextExtract, payload)
+			if err != nil {
+				return task.StatusError, fmt.Errorf("failed to marshal slave full text payload: %w", err)
+			}
+
+			taskID, err := node.CreateTask(ctx, queue.SlaveContentProcessingTaskType, stateRaw)
+			if err != nil {
+				return task.StatusError, fmt.Errorf("failed to create slave content processing task: %w", err)
+			}
+
+			state.Phase = fullTextIndexPhaseAwaitSlave
+			state.SlaveID = taskID
+			t.ResumeAfter(10 * time.Second)
+			return task.StatusSuspending, nil
+		}
+
 		if err != nil {
-			return status, err
+			fm.l.Warning("Failed to build slave full text payload for file %d, falling back to local orchestration: %s", item.FileID, err)
 		}
-
-		state.CompleteActive()
-		return t.persistAndContinue(state)
 	}
 
-	payload, err := fm.buildSlaveFullTextExtractPayload(ctx, item.FileID)
+	if next, handled, err := t.dispatchExternalIfConfigured(ctx, fm, state, item); handled || err != nil {
+		return next, err
+	}
+
+	status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
 	if err != nil {
-		status, localErr := fullTextPerformIndexing(ctx, fm, item.FileID)
-		if localErr != nil {
-			return status, fmt.Errorf("failed to build slave full text payload for file %d: %v; local fallback failed: %w", item.FileID, err, localErr)
-		}
-		state.CompleteActive()
-		return t.persistAndContinue(state)
-	}
-	if payload.Policy == nil {
-		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
-		if err != nil {
-			return status, err
-		}
-		state.CompleteActive()
-		return t.persistAndContinue(state)
+		return status, err
 	}
 
-	stateRaw, err := marshalSlaveContentProcessingState(slaveContentProcessingKindFullTextExtract, payload)
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to marshal slave full text payload: %w", err)
-	}
-
-	taskID, err := node.CreateTask(ctx, queue.SlaveContentProcessingTaskType, stateRaw)
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to create slave content processing task: %w", err)
-	}
-
-	state.Phase = fullTextIndexPhaseAwaitSlave
-	state.SlaveID = taskID
-	t.ResumeAfter(10 * time.Second)
-	return task.StatusSuspending, nil
+	state.CompleteActive()
+	return t.persistAndContinue(state)
 }
 
 func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manager, state *FullTextIndexTaskState) (task.Status, error) {
@@ -776,6 +766,9 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 			if err := json.Unmarshal(wrapper.Result, result); err != nil {
 				return task.StatusError, fmt.Errorf("failed to unmarshal slave full text result: %w", err)
 			}
+		}
+		if strings.TrimSpace(result.ExternalRequestID) != "" {
+			return t.suspendForExternalJob(state, result.ExternalRequestID)
 		}
 
 		item, ok := state.Current()

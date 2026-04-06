@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -234,6 +235,7 @@ func (m *manager) persistFTSSidecarsForSlave(
 	primaryEntity fs.Entity,
 	policy *ent.StoragePolicy,
 	source sidecarSource,
+	text string,
 ) (*FTSSidecarManifest, string, error) {
 	if m == nil || primaryEntity == nil || fileModel == nil {
 		return nil, "", nil
@@ -247,7 +249,7 @@ func (m *manager) persistFTSSidecarsForSlave(
 		return nil, "", fmt.Errorf("failed to resolve storage driver for slave Tika sidecar: %w", err)
 	}
 
-	return m.persistFTSSidecarsToHandler(ctx, extractor, cfg, fileModel, "", primaryEntity, handler, source, "")
+	return m.persistFTSSidecarsToHandler(ctx, extractor, cfg, fileModel, "", primaryEntity, handler, source, text)
 }
 
 func (m *manager) persistFTSSidecarsToHandler(
@@ -585,12 +587,7 @@ func (m *manager) GetFTSSidecarContent(ctx context.Context, uri *fs.URI, name st
 		return nil, serializer.NewError(serializer.CodeNotFound, "Full text sidecar object not found", nil)
 	}
 
-	if handler.Capabilities().StaticFeatures.Enabled(int(driver.HandlerCapabilityInboundGet)) {
-		content, err := handler.Open(ctx, artifact.Path)
-		if err != nil {
-			return nil, serializer.NewError(serializer.CodeIOFailed, "Failed to open full text sidecar object", err)
-		}
-
+	if content, ok := tryOpenSidecarFile(ctx, handler, artifact.Path); ok {
 		return &FTSSidecarContent{
 			Artifact: artifact,
 			Content:  content,
@@ -607,6 +604,19 @@ func (m *manager) GetFTSSidecarContent(ctx context.Context, uri *fs.URI, name st
 		RedirectURL: redirectURL,
 		Expires:     resolvedExpire,
 	}, nil
+}
+
+func tryOpenSidecarFile(ctx context.Context, handler driver.Handler, savePath string) (*os.File, bool) {
+	if handler == nil {
+		return nil, false
+	}
+
+	reader, err := handler.Open(ctx, savePath)
+	if err != nil || reader == nil {
+		return nil, false
+	}
+
+	return reader, true
 }
 
 func cleanupFTSSidecarsForEntity(ctx context.Context, handler driver.Handler, entity fs.Entity) error {
@@ -776,6 +786,11 @@ func readFTSSidecarBytes(ctx context.Context, client request.Client, handler dri
 		}
 		defer reader.Close()
 
+		return io.ReadAll(reader)
+	}
+
+	if reader, ok := tryOpenSidecarFile(ctx, handler, savePath); ok {
+		defer reader.Close()
 		return io.ReadAll(reader)
 	}
 

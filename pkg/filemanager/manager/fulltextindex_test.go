@@ -1005,6 +1005,16 @@ func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
 			SidecarEnabled:     true,
 			SidecarTextEnabled: true,
 		},
+		externalCfg: &setting.FTSExternalExtractorSetting{
+			Enabled: true,
+			Mode:    setting.FTSExternalModeFallbackOnErrorOrQuality,
+			Kafka: setting.FTSExternalKafkaSetting{
+				Brokers:      []string{"127.0.0.1:9092"},
+				ProcessTopic: "process",
+				ResultTopic:  "result",
+				ErrorTopic:   "error",
+			},
+		},
 	}
 	textExtractor := tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg)
 	policy := &ent.StoragePolicy{
@@ -1092,6 +1102,9 @@ func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
 	}
 	if payload.FileID != 801 || payload.OwnerID != 701 || payload.Entity == nil || payload.Entity.ID != 901 {
 		t.Fatalf("unexpected slave full text payload: %+v", payload)
+	}
+	if payload.ExternalConfig == nil || payload.ExternalConfig.Mode != setting.FTSExternalModeFallbackOnErrorOrQuality {
+		t.Fatalf("expected slave full text payload to carry external config, got %+v", payload.ExternalConfig)
 	}
 }
 
@@ -1304,6 +1317,73 @@ func TestFullTextIndexTaskAwaitSlaveExtractionFallsBackToLocalIndexing(t *testin
 	}
 	if failedState.Phase != fullTextIndexPhasePending || failedState.NodeID != 0 || failedState.SlaveID != 0 {
 		t.Fatalf("expected await state to be reset after fallback, got %+v", failedState)
+	}
+}
+
+func TestFullTextIndexTaskAwaitSlaveExtractionTransitionsToExternal(t *testing.T) {
+	resultRaw, err := json.Marshal(&SlaveFullTextExtractResult{
+		EntityID:          903,
+		ExternalRequestID: "req-slave-external",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal slave result: %v", err)
+	}
+	stateRaw, err := json.Marshal(&SlaveContentProcessingTaskState{
+		Kind:   slaveContentProcessingKindFullTextExtract,
+		Result: resultRaw,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal slave wrapper state: %v", err)
+	}
+
+	node := &testClusterNode{
+		id:       53,
+		isMaster: false,
+		slaveTask: &cluster.SlaveTaskSummary{
+			Status:       task.StatusCompleted,
+			PrivateState: string(stateRaw),
+		},
+	}
+	ftTask := &FullTextIndexTask{
+		DBTask: &queue.DBTask{
+			Task: &ent.Task{
+				Type:        queue.FullTextIndexTaskType,
+				PublicState: &inventorytypes.TaskPublicState{},
+			},
+		},
+	}
+	state := &FullTextIndexTaskState{
+		Phase:   fullTextIndexPhaseAwaitSlave,
+		NodeID:  53,
+		SlaveID: 1003,
+		Active:  &FullTextIndexTaskItem{FileID: 803},
+	}
+	fm := &manager{
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings: testSettingProvider{enabled: true},
+			nodePool: &testNodePool{node: node},
+		},
+	}
+
+	status, err := ftTask.awaitSlaveExtraction(context.Background(), fm, state)
+	if err != nil {
+		t.Fatalf("unexpected await external transition error: %v", err)
+	}
+	if status != task.StatusSuspending {
+		t.Fatalf("unexpected await external transition status: got %s want %s", status, task.StatusSuspending)
+	}
+	if state.Phase != fullTextIndexPhaseAwaitExternal || state.ExternalRequestID != "req-slave-external" {
+		t.Fatalf("expected await external state, got %+v", state)
+	}
+	if state.NodeID != 0 || state.SlaveID != 0 {
+		t.Fatalf("expected slave dispatch fields to be cleared, got %+v", state)
+	}
+	if state.Active == nil || state.Active.FileID != 803 {
+		t.Fatalf("expected active file to be retained for external await, got %+v", state.Active)
+	}
+	if ftTask.ResumeTime() == 0 {
+		t.Fatal("expected resume time to be set while waiting for external result")
 	}
 }
 

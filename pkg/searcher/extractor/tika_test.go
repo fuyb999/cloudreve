@@ -48,6 +48,9 @@ func TestFileAwareHeadersFallsBackForKnownOfficeTypes(t *testing.T) {
 func TestFileAwareHeadersSupportsArchiveTypes(t *testing.T) {
 	cases := map[string]string{
 		"bundle.zip":     "application/zip",
+		"bundle.jar":     "application/java-archive",
+		"bundle.war":     "application/java-archive",
+		"bundle.ear":     "application/java-archive",
 		"bundle.tar":     "application/x-tar",
 		"bundle.tar.gz":  "application/gzip",
 		"bundle.tgz":     "application/gzip",
@@ -520,7 +523,7 @@ func TestPrepareTikaRequestPromotesGenericTextTypeFromContent(t *testing.T) {
 func TestPrepareTikaRequestUsesConfiguredMimeMapping(t *testing.T) {
 	extractor := NewTikaExtractor(
 		nil,
-		testTikaSettingProvider{mimeMapping: `{".custom":"text/plain",".ts":"application/typescript; charset=utf-8"}`},
+		testTikaSettingProvider{mimeMapping: `{".custom":"text/plain",".ts":"application/typescript; charset=utf-8",".jar":"application/x-java-archive"}`},
 		logging.NewConsoleLogger(logging.LevelError),
 		&setting.FTSTikaExtractorSetting{},
 	)
@@ -528,6 +531,7 @@ func TestPrepareTikaRequestUsesConfiguredMimeMapping(t *testing.T) {
 	cases := map[string]string{
 		"snippet.custom": "text/plain",
 		"index.ts":       "application/typescript",
+		"bundle.jar":     "application/java-archive",
 	}
 
 	for fileName, want := range cases {

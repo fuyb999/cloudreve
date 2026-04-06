@@ -76,7 +76,7 @@ func NewClient(ctx context.Context, policy *ent.StoragePolicy, settings setting.
 			config,
 			request.WithEndpoint(serverURL.ResolveReference(base).String()),
 			request.WithCredential(authInstance, int64(settings.SlaveRequestSignTTL(ctx))),
-			request.WithSlaveMeta(policy.Edges.Node.ID),
+			request.WithSlaveMeta(policy.NodeID),
 			request.WithMasterMeta(settings.SiteBasic(ctx).ID, settings.SiteURL(setting.UseFirstSiteUrl(ctx)).String()),
 			request.WithCorrelationID(),
 		),
@@ -91,6 +91,26 @@ type remoteClient struct {
 	httpClient   request.Client
 	settings     setting.Provider
 	l            logging.Logger
+}
+
+func (c *remoteClient) requestOptions(ctx context.Context, opts ...request.Option) []request.Option {
+	res := []request.Option{
+		request.WithContext(ctx),
+		request.WithLogger(c.l),
+	}
+
+	if c.policy != nil && c.policy.NodeID > 0 {
+		res = append(res, request.WithSlaveMeta(c.policy.NodeID))
+	}
+
+	if c.settings != nil {
+		res = append(res, request.WithMasterMeta(
+			c.settings.SiteBasic(ctx).ID,
+			c.settings.SiteURL(setting.UseFirstSiteUrl(ctx)).String(),
+		))
+	}
+
+	return append(res, opts...)
 }
 
 func (c *remoteClient) Upload(ctx context.Context, file *fs.UploadRequest) error {
@@ -137,8 +157,7 @@ func (c *remoteClient) DeleteUploadSession(ctx context.Context, sessionID string
 		"DELETE",
 		"upload/"+sessionID,
 		nil,
-		request.WithContext(ctx),
-		request.WithLogger(logging.FromContext(ctx)),
+		c.requestOptions(ctx, request.WithLogger(logging.FromContext(ctx)))...,
 	).CheckHTTPResponse(200).DecodeResponse()
 	if err != nil {
 		return err
@@ -165,8 +184,7 @@ func (c *remoteClient) DeleteFiles(ctx context.Context, files ...string) ([]stri
 		"DELETE",
 		"file",
 		bytes.NewReader(reqStr),
-		request.WithContext(ctx),
-		request.WithLogger(logging.FromContext(ctx)),
+		c.requestOptions(ctx, request.WithLogger(logging.FromContext(ctx)))...,
 	).CheckHTTPResponse(200).DecodeResponse()
 	if err != nil {
 		return files, err
@@ -189,8 +207,7 @@ func (c *remoteClient) MediaMeta(ctx context.Context, src, ext, language string)
 		http.MethodGet,
 		routes.SlaveMediaMetaRoute(src, ext, language),
 		nil,
-		request.WithContext(ctx),
-		request.WithLogger(c.l),
+		c.requestOptions(ctx)...,
 	).CheckHTTPResponse(200).DecodeResponse()
 	if err != nil {
 		return nil, err
@@ -219,8 +236,7 @@ func (c *remoteClient) CreateUploadSession(ctx context.Context, session *fs.Uplo
 		"PUT",
 		"upload",
 		bodyReader,
-		request.WithContext(ctx),
-		request.WithLogger(c.l),
+		c.requestOptions(ctx)...,
 	).CheckHTTPResponse(200).DecodeResponse()
 	if err != nil {
 		return err
@@ -275,10 +291,12 @@ func (c *remoteClient) uploadChunk(ctx context.Context, sessionID string, index 
 		"POST",
 		fmt.Sprintf("upload/%s?chunk=%d", sessionID, index),
 		chunk,
-		request.WithContext(ctx),
-		request.WithTimeout(time.Duration(0)),
-		request.WithContentLength(size),
-		request.WithHeader(map[string][]string{OverwriteHeader: {fmt.Sprintf("%t", overwrite)}}),
+		c.requestOptions(
+			ctx,
+			request.WithTimeout(time.Duration(0)),
+			request.WithContentLength(size),
+			request.WithHeader(map[string][]string{OverwriteHeader: {fmt.Sprintf("%t", overwrite)}}),
+		)...,
 	).CheckHTTPResponse(200).DecodeResponse()
 	if err != nil {
 		return err
