@@ -7,11 +7,11 @@
 - `docker-compose.swarm.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
-- `docker-compose.swarm.bind.yml`
 - `.env.swarm.example`
 - `.env.swarm.prod-4x128g.example`
 - `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
+- `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
@@ -58,7 +58,7 @@
 
 建议直接从 `.env.swarm.prod-4x128g.example` 开始。
 
-## 2. 这四个 YML 文件分别干什么
+## 2. 这些 YML 文件分别干什么
 
 ### 2.1 `docker-compose.swarm.registry.yml`
 
@@ -121,16 +121,20 @@
 - Kafka KRaft 固定节点不适合走 Swarm VIP
 - 控制面必须尽量直接点到点
 
-### 2.4 `docker-compose.swarm.bind.yml`
+### 2.4 为什么不再保留 `docker-compose.swarm.bind.yml`
 
-这是 bind 挂载叠加文件。
+这个覆盖文件已经废弃，原因很直接：
 
-当前主模板本身已经支持：
+- `docker-compose.swarm.yml` 自己就已经统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
+- PostgreSQL / Redis / Cloudreve 运行目录 / MinIO / Elasticsearch / Tika 字体都不再需要额外叠加 compose
+- 继续保留一个只服务单点场景的小覆盖文件，只会让部署顺序和文档变复杂
 
-- 命名卷模式
-- 宿主机绝对路径模式
+现在如果你要切到宿主机绝对路径，直接改 `.env.swarm` 即可，例如：
 
-所以很多情况下，你直接在 `.env.swarm` 里改 `*_MOUNT_TYPE=bind` 与 `*_MOUNT_SOURCE=/absolute/path` 就够了。
+```env
+TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
+TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/tika-fonts
+```
 
 ## 3. 推荐生产拓扑
 
@@ -275,6 +279,8 @@ docker node inspect cr-prod-wkr-1 --format '{{json .Spec.Labels}}'
 - `cloudreve/cloudreve:4.15.0`
 - `nginx:1.27-alpine`
 - `cloudreve/tika:3.2.3.0-full-unrar-charset`
+- `authverse/authverse-web:2024-local`
+- `authverse/authverse-backend:2024-local`
 - `elasticsearch:8.12.2`
 - `apache/kafka:4.2.0`
 - `provectuslabs/kafka-ui:v0.7.2`
@@ -291,7 +297,7 @@ docker node inspect cr-prod-wkr-1 --format '{{json .Spec.Labels}}'
 - `bitnami/*` 公开可直接 `pull` 的对应固定版本 tag 并不完整
 - 所以当前模板没有用 `latest`
 - 也没有依赖“本地临时 retag 成 `bitnami/*`”
-- `TIKA_IMAGE` 是自定义镜像，必须提前推到私有仓库，再让其它节点远程拉取
+- `TIKA_IMAGE` 与 `AUTHVERSE_*_IMAGE` 都是自定义镜像，必须提前推到私有仓库，再让其它节点远程拉取
 
 上线前建议每台节点都执行：
 
@@ -314,6 +320,12 @@ docker/swarm/deploy-private-registry.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
+如果你要顺手打一份离线镜像包，再执行：
+
+```bash
+docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
+```
+
 关键变量：
 
 - `PRIVATE_REGISTRY_STACK_NAME`
@@ -324,6 +336,10 @@ docker/swarm/publish-private-images.sh --env-file .env.swarm
 - `TIKA_LOCAL_IMAGE`
 - `TIKA_REMOTE_IMAGE`
 - `TIKA_IMAGE`
+- `AUTHVERSE_WEB_LOCAL_IMAGE`
+- `AUTHVERSE_WEB_REMOTE_IMAGE`
+- `AUTHVERSE_BACKEND_LOCAL_IMAGE`
+- `AUTHVERSE_BACKEND_REMOTE_IMAGE`
 
 ## 6. 为什么 bind 挂载在 Swarm 下经常报错
 

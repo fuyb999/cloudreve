@@ -17,6 +17,7 @@
 - [`docker-compose.swarm.auth.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.auth.yml)
 - [`docker/swarm/deploy-private-registry.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-private-registry.sh)
 - [`docker/swarm/deploy-stack.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-stack.sh)
+- [`docker/swarm/export-swarm-images.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/export-swarm-images.sh)
 - [`docker/swarm/build-auth-images.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/build-auth-images.sh)
 - [`docker/swarm/init-authverse-db.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/init-authverse-db.sh)
 - [`docker/swarm/deploy-auth-stack.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-auth-stack.sh)
@@ -31,6 +32,21 @@
 - `cr-prod-wkr-1`
 - `cr-prod-wkr-2`
 - `cr-prod-wkr-3`
+
+## 1.1 最终执行顺序
+
+按真实 4 台生产机上线，顺序固定为：
+
+1. 配主机名、装 Docker、初始化 Swarm、worker 加入集群。
+2. 在 manager 给 4 台机器打好节点标签。
+3. 复制 [`.env.swarm.prod-4x128g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x128g.example) 为 `.env.swarm` 并回填密码、域名、固定 tag。
+4. 在所有节点执行 `prepare-private-registry.sh`，让它们信任固定 manager 上的 `registry:2`。
+5. 在所有目标节点执行 `prepare-bind-paths.sh --check/--apply`，先把 bind 目录建好。
+6. 在 manager 部署私有仓库，再构建并推送 `Tika`、`authverse-web`、`authverse-backend`。
+7. 在 manager 执行 `docker/swarm/deploy-stack.sh --with-cluster --render-only`，确认渲染无误后正式部署 `cloudreve-prod`。
+8. 主栈稳定后执行 `docker/swarm/init-authverse-db.sh`，再部署 `authverse-prod`。
+9. 做外部入口、数据库、Redis、MinIO、Elasticsearch、OIDC discovery、`/app-api` 的整体验收。
+10. 首次进入 Cloudreve 后台生成真实 `Slave Key`，回填 `.env.swarm`，最后再滚动部署一次主栈。
 
 ## 2. 初始化 Swarm
 
@@ -123,8 +139,8 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 - `CLOUDREVE_STACK_NAME` 在这份生产模板里默认就是 `cloudreve-prod`，不要改回 `cloudreve`
 - `PRIVATE_REGISTRY_ADDR` 默认保持 `cr-prod-mgr-1:5000`
 - `TIKA_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/tika:3.2.3.0-full-unrar-charset`
-- `AUTHVERSE_WEB_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-web:4.0.0-next`
-- `AUTHVERSE_BACKEND_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-backend:2025.12-snapshot`
+- `AUTHVERSE_WEB_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-web:2024-local`
+- `AUTHVERSE_BACKEND_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-backend:2024-local`
 - `.env.swarm` 不会自动同步到其它 manager，生产里固定只从一个 manager 部署
 
 ## 5. 宿主机准备
@@ -184,6 +200,17 @@ docker/swarm/deploy-private-registry.sh --env-file .env.swarm --stack-name cloud
 docker/swarm/build-auth-images.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys TIKA,AUTHVERSE_WEB,AUTHVERSE_BACKEND
 ```
+
+如果你要在上线前把这一套镜像固化成离线包，再执行：
+
+```bash
+docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
+```
+
+产物会落在仓库当前目录，形式是：
+
+- `swarm-images-时间戳/`
+- `swarm-images-时间戳.tar.xz`
 
 ## 7. 部署
 

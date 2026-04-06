@@ -5,11 +5,11 @@
 - `docker-compose.swarm.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
-- `docker-compose.swarm.bind.yml`
 - `.env.swarm.example`
 - `.env.swarm.prod-4x128g.example`
 - `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
+- `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
@@ -121,6 +121,12 @@ docker/swarm/deploy-private-registry.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
+如果你要顺手打出一份离线镜像包，直接执行：
+
+```bash
+docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
+```
+
 常见覆盖变量：
 
 - `POSTGRESQL_REPMGR_IMAGE`
@@ -129,6 +135,10 @@ docker/swarm/publish-private-images.sh --env-file .env.swarm
 - `REDIS_IMAGE`
 - `REDIS_SENTINEL_IMAGE`
 - `TIKA_IMAGE`
+- `AUTHVERSE_WEB_LOCAL_IMAGE`
+- `AUTHVERSE_WEB_REMOTE_IMAGE`
+- `AUTHVERSE_BACKEND_LOCAL_IMAGE`
+- `AUTHVERSE_BACKEND_REMOTE_IMAGE`
 - `PRIVATE_REGISTRY_ADDR`
 - `TIKA_LOCAL_IMAGE`
 - `TIKA_REMOTE_IMAGE`
@@ -647,22 +657,23 @@ docker/swarm/deploy-stack.sh
 docker/swarm/deploy-stack.sh --with-cluster
 ```
 
-只有在你需要 Tika 自定义字体时，才叠加：
+如果你需要 Tika 自定义字体，直接在 `.env.swarm` 中设置：
 
-```bash
-WITH_BIND=yes docker/swarm/deploy-stack.sh
+```env
+TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
+TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/tika-fonts
 ```
 
-两者也可以同时使用：
+然后正常部署：
 
 ```bash
-WITH_BIND=yes docker/swarm/deploy-stack.sh --with-cluster
+docker/swarm/deploy-stack.sh --with-cluster
 ```
 
 说明：
 
-- `WITH_BIND=yes` 是兼容旧方式，只给 Tika 额外挂一个宿主机字体目录
-- 现在更推荐直接用 `.env.swarm` 里的 `*_MOUNT_TYPE` / `*_MOUNT_SOURCE` 控制命名卷或宿主机路径
+- 现在统一只用 `.env.swarm` 里的 `*_MOUNT_TYPE` / `*_MOUNT_SOURCE` 控制命名卷或宿主机路径
+- `docker-compose.swarm.bind.yml` 已经废弃，不再需要额外叠加 compose 文件
 
 检查服务状态：
 

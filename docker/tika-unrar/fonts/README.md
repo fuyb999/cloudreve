@@ -16,11 +16,14 @@
 默认挂载来源可通过 `docker-compose.yml` 中的环境变量覆盖：
 
 ```bash
-TIKA_CUSTOM_FONTS_HOST_PATH=/data/fonts/chinese
+TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
+TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/data/fonts/chinese
 docker-compose up -d --build tika
 ```
 
 上面的宿主机目录会被挂载到容器内的 `/tika-fonts/custom`。
+
+如果你还在用旧变量 `TIKA_CUSTOM_FONTS_HOST_PATH`，Swarm 准备脚本和部署脚本目前仍然兼容，但新配置建议统一改成 `TIKA_CUSTOM_FONTS_MOUNT_TYPE + TIKA_CUSTOM_FONTS_MOUNT_SOURCE`。
 
 适合放进去的中文字体包括：
 

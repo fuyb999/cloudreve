@@ -6,6 +6,7 @@
 - `docker/swarm/build-auth-images.sh`
 - `docker/swarm/init-authverse-db.sh`
 - `docker/swarm/deploy-auth-stack.sh`
+- `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `.env.swarm.example`
 - `.env.swarm.prod-4x128g.example`
@@ -223,6 +224,15 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 - `AUTHVERSE_WEB_IMAGE`
 - `AUTHVERSE_BACKEND_IMAGE`
 
+如果你直接沿用 4 台生产样例，建议保持：
+
+```env
+AUTHVERSE_WEB_LOCAL_IMAGE=authverse/authverse-web:2024-local
+AUTHVERSE_WEB_REMOTE_IMAGE=${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-web:2024-local
+AUTHVERSE_BACKEND_LOCAL_IMAGE=authverse/authverse-backend:2024-local
+AUTHVERSE_BACKEND_REMOTE_IMAGE=${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-backend:2024-local
+```
+
 ### 5.3 准备 OIDC 密钥目录
 
 如果你使用 bind 模式：
@@ -292,6 +302,12 @@ docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVE
 
 ```bash
 docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys TIKA,AUTHVERSE_WEB,AUTHVERSE_BACKEND
+```
+
+如果你还需要顺手打出一份上线前镜像归档，可以继续执行：
+
+```bash
+docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 ```
 
 ### 5.7 部署统一认证栈

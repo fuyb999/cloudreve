@@ -5,11 +5,11 @@
 - `docker-compose.swarm.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
-- `docker-compose.swarm.bind.yml`
 - `.env.swarm.example`
 - `.env.swarm.prod-4x128g.example`
 - `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
+- `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
@@ -130,6 +130,12 @@ docker/swarm/deploy-private-registry.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
+如果你要顺手打一份离线镜像包：
+
+```bash
+docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
+```
+
 如果你要直接启用栈内 MinIO / Elasticsearch / Kafka 集群，再额外确认：
 
 - `SWARM_WITH_CLUSTER=yes`
@@ -185,10 +191,11 @@ docker/swarm/deploy-stack.sh
 docker/swarm/deploy-stack.sh --with-cluster
 ```
 
-只有在你确实需要自定义字体目录时，才额外叠加：
+如果你确实需要给 Tika 指定宿主机字体目录，直接在 `.env.swarm` 里设置：
 
-```bash
-WITH_BIND=yes docker/swarm/deploy-stack.sh
+```env
+TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
+TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/absolute/path/tika-fonts
 ```
 
 如果你想把某些默认命名卷切换成宿主机绝对路径，在 `.env.swarm` 中这样改：

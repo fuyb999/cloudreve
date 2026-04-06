@@ -14,7 +14,7 @@
 # - 对 PostgreSQL / Redis，默认值仍然是宿主机绝对路径，生产建议不要改回命名卷。
 # - Cloudreve 运行目录默认还是命名卷，用户文件默认应落到 S3 兼容对象存储。
 # - `cloudreve-master` 可以通过 `CR_INIT_*` 在首次初始化时直接创建默认 S3 存储策略。
-# - `docker-compose.swarm.bind.yml` 现在只用于可选的 Tika 自定义字体挂载。
+# - Tika 自定义字体也直接使用 `TIKA_CUSTOM_FONTS_MOUNT_TYPE + TIKA_CUSTOM_FONTS_MOUNT_SOURCE` 控制。
 # - PostgreSQL / Redis 这几个实例是固定有状态角色，不要用 `docker service scale` 直接扩容。
 # - 默认 `TIKA_IMAGE` 现在使用 `cloudreve/tika:3.2.3.0-full-unrar-charset`。
 # - 生产里更推荐把自定义镜像先 push 到单点 `registry:2` 私有仓库，再让其它节点远程拉取。
