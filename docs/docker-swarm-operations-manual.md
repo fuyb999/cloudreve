@@ -16,6 +16,10 @@
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
+- `docker-compose.swarm.auth.yml`
+- `docker/swarm/build-auth-images.sh`
+- `docker/swarm/init-authverse-db.sh`
+- `docker/swarm/deploy-auth-stack.sh`
 
 如果你现在只想先跑起来，再回来看细节：
 
@@ -23,6 +27,7 @@
 - 4 台 Linux 上线清单：`docs/docker-swarm-production-checklist.md`
 - 部署说明：`docs/docker-swarm-deployment.md`
 - 多 manager 下 `.env.swarm` 同步：`docs/docker-swarm-env-sync.md`
+- 统一认证接入：`docs/docker-swarm-auth-deployment.md`
 
 ## 1. 先说结论
 

@@ -14,6 +14,10 @@
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
+- `docker-compose.swarm.auth.yml`
+- `docker/swarm/build-auth-images.sh`
+- `docker/swarm/init-authverse-db.sh`
+- `docker/swarm/deploy-auth-stack.sh`
 
 如果你现在更需要一份最短执行路径，先看：
 
@@ -26,6 +30,10 @@
 如果你现在需要完整的线上部署、巡检、扩缩容、回滚、备份、排障手册，直接看：
 
 - `docs/docker-swarm-operations-manual.md`
+
+如果你还需要把统一认证前后端一起纳入同一套 Swarm / 私有仓库 / overlay 网络，再看：
+
+- `docs/docker-swarm-auth-deployment.md`
 
 如果你现在关注的是多 manager / 多机器下 `.env.swarm` 的生效范围，再看：
 

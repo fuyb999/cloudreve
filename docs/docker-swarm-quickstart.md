@@ -13,13 +13,22 @@
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
+- `docker-compose.swarm.auth.yml`
+- `docker/swarm/build-auth-images.sh`
+- `docker/swarm/init-authverse-db.sh`
+- `docker/swarm/deploy-auth-stack.sh`
 - `docs/docker-swarm-production-checklist.md`
 - `docs/docker-swarm-deployment.md`
 - `docs/docker-swarm-env-sync.md`
+- `docs/docker-swarm-auth-deployment.md`
 
 如果你需要完整中文运维手册，直接看：
 
 - `docs/docker-swarm-operations-manual.md`
+
+如果你这次还要把统一认证前后端一起挂进 Swarm，再看：
+
+- `docs/docker-swarm-auth-deployment.md`
 
 如果你就是按 `1 manager + 3 worker + 128GB/64 线程` 上真实环境，直接看：
 

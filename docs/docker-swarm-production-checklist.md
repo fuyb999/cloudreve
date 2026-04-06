@@ -14,8 +14,12 @@
 - [`docker-compose.swarm.registry.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.registry.yml)
 - [`docker-compose.swarm.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.yml)
 - [`docker-compose.swarm.cluster.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.cluster.yml)
+- [`docker-compose.swarm.auth.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.auth.yml)
 - [`docker/swarm/deploy-private-registry.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-private-registry.sh)
 - [`docker/swarm/deploy-stack.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-stack.sh)
+- [`docker/swarm/build-auth-images.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/build-auth-images.sh)
+- [`docker/swarm/init-authverse-db.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/init-authverse-db.sh)
+- [`docker/swarm/deploy-auth-stack.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-auth-stack.sh)
 - [`docker/swarm/prepare-bind-paths.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/prepare-bind-paths.sh)
 - [`docker/swarm/prepare-bitnami-images.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/prepare-bitnami-images.sh)
 - [`docker/swarm/prepare-private-registry.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/prepare-private-registry.sh)
@@ -54,6 +58,7 @@ docker node update --label-add cloudreve.registry=true cr-prod-mgr-1
 docker node update --label-add cloudreve.minio1=true cr-prod-mgr-1
 docker node update --label-add cloudreve.tika=true cr-prod-mgr-1
 docker node update --label-add cloudreve.kafka-ui=true cr-prod-mgr-1
+docker node update --label-add cloudreve.auth-web=true cr-prod-mgr-1
 
 docker node update --label-add cloudreve.slave=true cr-prod-wkr-1
 docker node update --label-add cloudreve.edge=true cr-prod-wkr-1
@@ -63,6 +68,7 @@ docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-1
 docker node update --label-add cloudreve.es1=true cr-prod-wkr-1
 docker node update --label-add cloudreve.kafka1=true cr-prod-wkr-1
 docker node update --label-add cloudreve.minio2=true cr-prod-wkr-1
+docker node update --label-add cloudreve.auth-backend=true cr-prod-wkr-1
 
 docker node update --label-add cloudreve.slave=true cr-prod-wkr-2
 docker node update --label-add cloudreve.pg2=true cr-prod-wkr-2
@@ -71,6 +77,7 @@ docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-2
 docker node update --label-add cloudreve.es2=true cr-prod-wkr-2
 docker node update --label-add cloudreve.kafka2=true cr-prod-wkr-2
 docker node update --label-add cloudreve.minio3=true cr-prod-wkr-2
+docker node update --label-add cloudreve.auth-backend=true cr-prod-wkr-2
 
 docker node update --label-add cloudreve.slave=true cr-prod-wkr-3
 docker node update --label-add cloudreve.edge=true cr-prod-wkr-3
@@ -81,6 +88,7 @@ docker node update --label-add cloudreve.es3=true cr-prod-wkr-3
 docker node update --label-add cloudreve.kafka3=true cr-prod-wkr-3
 docker node update --label-add cloudreve.minio4=true cr-prod-wkr-3
 docker node update --label-add cloudreve.tika=true cr-prod-wkr-3
+docker node update --label-add cloudreve.auth-web=true cr-prod-wkr-3
 ```
 
 ## 4. 环境文件
@@ -105,14 +113,18 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 - `REDIS_PASSWORD`
 - `MINIO_ROOT_PASSWORD`
 - `CR_INIT_S3_SECRET_KEY`
+- `AUTHVERSE_PUBLIC_BASE_URL`
 
 注意：
 
 - `CR_INIT_S3_ENDPOINT` 保持 `http://minio:9000`
 - `CR_INIT_S3_BUCKET` 保持 `cloudreve`
 - `MINIO_DISTRIBUTED_NODES` 默认保持 `minio-1,minio-2,minio-3,minio-4`
+- `CLOUDREVE_STACK_NAME` 在这份生产模板里默认就是 `cloudreve-prod`，不要改回 `cloudreve`
 - `PRIVATE_REGISTRY_ADDR` 默认保持 `cr-prod-mgr-1:5000`
 - `TIKA_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/tika:3.2.3.0-full-unrar-charset`
+- `AUTHVERSE_WEB_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-web:4.0.0-next`
+- `AUTHVERSE_BACKEND_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-backend:2025.12-snapshot`
 - `.env.swarm` 不会自动同步到其它 manager，生产里固定只从一个 manager 部署
 
 ## 5. 宿主机准备
@@ -138,6 +150,12 @@ sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --apply
 sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services registry
 ```
 
+如果统一认证的 OIDC RSA 密钥也走宿主机绝对路径，再补一次：
+
+```bash
+sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services authverse
+```
+
 ## 6. 镜像准备
 
 先让所有节点信任固定私有仓库：
@@ -159,11 +177,12 @@ docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --check
 docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
 ```
 
-然后在 manager 上部署私有仓库，并把 Tika 推进去：
+然后在 manager 上部署私有仓库，并把 Tika 与统一认证镜像推进去：
 
 ```bash
 docker/swarm/deploy-private-registry.sh --env-file .env.swarm --stack-name cloudreve-registry
-docker/swarm/publish-private-images.sh --env-file .env.swarm
+docker/swarm/build-auth-images.sh --env-file .env.swarm
+docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys TIKA,AUTHVERSE_WEB,AUTHVERSE_BACKEND
 ```
 
 ## 7. 部署
@@ -178,6 +197,13 @@ docker/swarm/deploy-stack.sh --env-file .env.swarm --stack-name cloudreve-prod -
 
 ```bash
 docker/swarm/deploy-stack.sh --env-file .env.swarm --stack-name cloudreve-prod --with-cluster
+```
+
+Cloudreve 主栈起来后，再初始化统一认证数据库并部署统一认证：
+
+```bash
+docker/swarm/init-authverse-db.sh --env-file .env.swarm
+docker/swarm/deploy-auth-stack.sh --env-file .env.swarm --stack-name authverse-prod
 ```
 
 ## 8. 验收

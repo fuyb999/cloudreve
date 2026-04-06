@@ -24,13 +24,13 @@ usage() {
   --check               只检查，不改动
   --apply               执行创建和修正，默认就是 apply
   --services LIST       只处理指定服务，逗号分隔
-                        可选：all,pg,redis,cloudreve,minio,elasticsearch,kafka,tika,registry
+                        可选：all,pg,redis,cloudreve,minio,elasticsearch,kafka,tika,registry,authverse
   -h, --help            显示帮助
 
 示例：
   sudo docker/swarm/prepare-bind-paths.sh --check
   sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
-  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika,registry
+  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika,registry,authverse
 EOF
 }
 
@@ -234,6 +234,10 @@ collect_entries() {
 
   if service_enabled registry && [[ "${PRIVATE_REGISTRY_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
     add_entry "PRIVATE_REGISTRY_DATA_MOUNT_SOURCE" "${PRIVATE_REGISTRY_DATA_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+  fi
+
+  if service_enabled authverse && [[ "${AUTHVERSE_OIDC_KEYS_MOUNT_TYPE:-volume}" == "bind" ]]; then
+    add_entry "AUTHVERSE_OIDC_KEYS_MOUNT_SOURCE" "${AUTHVERSE_OIDC_KEYS_MOUNT_SOURCE:-}" "" "0755" "readable_recursive"
   fi
 }
 
