@@ -165,6 +165,9 @@ func TestMediaMetaTaskAwaitSlaveExtractionAppliesMetadata(t *testing.T) {
 	if node.getTaskID != 315 || !node.clearCalled {
 		t.Fatalf("unexpected node getTask call: id=%d clear=%v", node.getTaskID, node.clearCalled)
 	}
+	if len(node.getTaskCalls) != 2 || node.getTaskCalls[0] || !node.getTaskCalls[1] {
+		t.Fatalf("expected slave task to be fetched before clear, got %+v", node.getTaskCalls)
+	}
 	if len(metaFS.paths) != 1 || metaFS.paths[0].String() != "cloudreve:///media/video.mp4" {
 		t.Fatalf("unexpected metadata patch target: %+v", metaFS.paths)
 	}

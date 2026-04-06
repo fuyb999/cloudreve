@@ -52,17 +52,18 @@ const (
 )
 
 type smokeCase struct {
-	Name              string
-	Mode              string
-	UseGlobalKafka    bool
-	FileName          string
-	Content           []byte
-	ExpectExternalJob bool
-	ExpectESContent   string
-	ExternalContent   string
-	ExpectReason      string
-	AcceptReasons     []string
-	ExpectQualityHint string
+	Name               string
+	Mode               string
+	UseGlobalKafka     bool
+	FileName           string
+	Content            []byte
+	ExpectExternalJob  bool
+	AssertNoDocInspect bool
+	ExpectESContent    string
+	ExternalContent    string
+	ExpectReason       string
+	AcceptReasons      []string
+	ExpectQualityHint  string
 }
 
 type kafkaTopics struct {
@@ -177,19 +178,14 @@ func buildCases() []smokeCase {
 			ExpectESContent:   "fallback_on_error should keep healthy local content",
 		},
 		{
-			Name:              "fallback_on_error_global_external_success",
-			Mode:              "fallback_on_error",
-			UseGlobalKafka:    true,
-			FileName:          "fallback-empty.txt",
-			Content:           []byte{},
-			ExpectExternalJob: true,
-			ExpectESContent:   "fallback_on_error external result",
-			ExternalContent:   "fallback_on_error external result",
-			ExpectReason:      "local_build_error",
-			AcceptReasons: []string{
-				"local_build_error",
-				"local_text_empty",
-			},
+			Name:               "fallback_on_error_global_empty_index_local_only",
+			Mode:               "fallback_on_error",
+			UseGlobalKafka:     true,
+			FileName:           "fallback-empty.pdf",
+			Content:            []byte{},
+			ExpectExternalJob:  false,
+			AssertNoDocInspect: true,
+			ExpectESContent:    "",
 		},
 		{
 			Name:              "fallback_on_quality_private_local_ok",
@@ -482,6 +478,11 @@ func runSmokeCase(configPath string, tc smokeCase, topics kafkaTopics) error {
 	if err := waitForIndexedContent(fileID, tc.ExpectESContent, waitIndexTimeout); err != nil {
 		return fmt.Errorf("wait local index: %w", err)
 	}
+	if tc.AssertNoDocInspect {
+		if err := assertNoDocumentInspectTask(ctx, dep, fileID, waitProcessTapTTL); err != nil {
+			return err
+		}
+	}
 	if err := assertNoExternalJob(ctx, dep, fileID, waitProcessTapTTL); err != nil {
 		return err
 	}
@@ -707,6 +708,28 @@ func waitForFTSCompletion(ctx context.Context, dep dependency.Dep, fileID int, t
 	}
 
 	return fmt.Errorf("fts task chain for file_id=%d did not complete in time", fileID)
+}
+
+func assertNoDocumentInspectTask(ctx context.Context, dep dependency.Dep, fileID int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pattern := fmt.Sprintf("\"file_id\":%d", fileID)
+	for time.Now().Before(deadline) {
+		tasks, err := dep.DBClient().Task.Query().
+			Where(
+				taskmodel.TypeEQ(queue.DocumentInspectTaskType),
+				taskmodel.PrivateStateContains(pattern),
+			).
+			All(ctx)
+		if err != nil {
+			return err
+		}
+		if len(tasks) == 0 {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	return fmt.Errorf("unexpected document_inspect task exists for file_id=%d", fileID)
 }
 
 func parseSmokeTaskState(raw string) (*smokeFullTextIndexTaskState, error) {

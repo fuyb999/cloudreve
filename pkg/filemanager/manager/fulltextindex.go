@@ -746,13 +746,14 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		return task.StatusError, fmt.Errorf("failed to resolve content processing node: %w", err)
 	}
 
-	summary, err := node.GetTask(ctx, state.SlaveID, true)
+	summary, err := node.GetTask(ctx, state.SlaveID, false)
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to get slave task: %w", err)
 	}
 
 	switch summary.Status {
 	case task.StatusCompleted:
+		slaveTaskID := state.SlaveID
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
@@ -768,7 +769,11 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 			}
 		}
 		if strings.TrimSpace(result.ExternalRequestID) != "" {
-			return t.suspendForExternalJob(state, result.ExternalRequestID)
+			next, err := t.suspendForExternalJob(state, result.ExternalRequestID)
+			if err == nil {
+				clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)
+			}
+			return next, err
 		}
 
 		item, ok := state.Current()
@@ -789,6 +794,7 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 			state.Active,
 		)
 		state.CompleteActive()
+		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)
 		fm.l.Info(
 			"Full text await finalize after complete file=%d len=%d phase=%s active=%+v",
 			item.FileID,
@@ -798,6 +804,7 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		)
 		return t.persistAndContinue(state)
 	case task.StatusError:
+		slaveTaskID := state.SlaveID
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
@@ -813,8 +820,10 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		}
 
 		state.CompleteActive()
+		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)
 		return t.persistAndContinue(state)
 	case task.StatusCanceled:
+		slaveTaskID := state.SlaveID
 		t.Lock()
 		t.progress = summary.Progress
 		t.Unlock()
@@ -830,6 +839,7 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		}
 
 		state.CompleteActive()
+		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)
 		return t.persistAndContinue(state)
 	default:
 		t.Lock()
@@ -1107,6 +1117,10 @@ func shouldIgnoreFTSSyncError(err error) bool {
 // size-based prefiltering and relies on its detector/parser chain to decide
 // whether the content is parseable.
 func ShouldExtractText(extractor searcher.TextExtractor, fileName string, size int64) bool {
+	if extractor == nil || size <= 0 {
+		return false
+	}
+
 	if extractor.MaxFileSize() <= size {
 		return false
 	}

@@ -443,11 +443,12 @@ func buildFTSExtractionPlan(
 
 	textReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.TextReady
 	assetsReady := hasCurrentSidecar && sidecarManifest != nil && sidecarManifest.AssetsReady
+	textExtractable := ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
 	attachmentsSupported := supportsFTSAttachmentExtraction(extractor, fileModel)
 
 	plan.NeedTextExtraction = !opts.SkipTextExtraction &&
 		(!plan.ReuseSidecarText || strings.TrimSpace(currentText) == "") &&
-		ShouldExtractText(extractor, fileModel.Name, fileModel.Size)
+		textExtractable
 
 	plan.NeedAttachmentExtraction = attachmentsSupported &&
 		!opts.SkipAttachmentExtraction &&
@@ -456,6 +457,7 @@ func buildFTSExtractionPlan(
 			(len(currentAttachments) == 0 && !assetsReady))
 
 	plan.ShouldPersistSidecar = (persistTextSidecarEnabled || persistAssetSidecarEnabled) &&
+		(textExtractable || attachmentsSupported) &&
 		!opts.SkipTextExtraction && !opts.SkipAttachmentExtraction &&
 		(!hasCurrentSidecar ||
 			(persistTextSidecarEnabled && (opts.ForceTextExtraction || !textReady)) ||

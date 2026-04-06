@@ -170,6 +170,9 @@ func TestDocumentInspectTaskAwaitSlaveInspectionAppliesMetadata(t *testing.T) {
 	if state.Phase != DocumentInspectTaskPhasePending || state.NodeID != 0 || state.SlaveID != 0 {
 		t.Fatalf("expected state reset after apply, got %+v", state)
 	}
+	if len(node.getTaskCalls) != 2 || node.getTaskCalls[0] || !node.getTaskCalls[1] {
+		t.Fatalf("expected slave task to be fetched before clear, got %+v", node.getTaskCalls)
+	}
 	if len(metaFS.paths) != 1 || metaFS.paths[0].String() != "cloudreve:///inspect/design.pdf" {
 		t.Fatalf("unexpected metadata patch target: %+v", metaFS.paths)
 	}
@@ -223,6 +226,67 @@ func TestExecuteSlaveDocumentInspectSkipsWhenFileTooLarge(t *testing.T) {
 	}
 	if result == nil || result.EntityID != 902 || result.MimeType != "" || result.Parser != "" {
 		t.Fatalf("unexpected document inspect result: %+v", result)
+	}
+}
+
+func TestDocumentInspectForNewEntityClearsMetadataWhenExtractionSkipped(t *testing.T) {
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			Exts:        []string{"pdf"},
+			MaxFileSize: 1024,
+		},
+	}
+	metaFS := &testMetadataFS{}
+	dep := testDep{
+		settings:      settings,
+		textExtractor: tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       metaFS,
+		settings: settings,
+		dep:      dep,
+	}
+
+	entityType := inventorytypes.EntityTypeVersion
+	session := &fs.UploadSession{
+		FileID:   801,
+		EntityID: 901,
+		Props: &fs.UploadProps{
+			Uri:        mustURI(t, "cloudreve:///inspect/empty.pdf"),
+			Size:       0,
+			EntityType: &entityType,
+		},
+	}
+
+	m.documentInspectForNewEntity(context.Background(), session)
+
+	if len(metaFS.paths) != 1 || metaFS.paths[0].String() != "cloudreve:///inspect/empty.pdf" {
+		t.Fatalf("unexpected metadata patch target: %+v", metaFS.paths)
+	}
+
+	patchMap := map[string]fs.MetadataPatch{}
+	for _, patch := range metaFS.patches {
+		patchMap[patch.Key] = patch
+	}
+
+	for _, key := range []string{
+		dbfs.DocInspectMimeKey,
+		dbfs.DocInspectParserKey,
+		dbfs.DocInspectLanguageKey,
+		dbfs.DocInspectTitleKey,
+		dbfs.DocInspectAuthorKey,
+		dbfs.DocInspectEntityIDKey,
+	} {
+		patch, ok := patchMap[key]
+		if !ok {
+			t.Fatalf("expected patch for key %s", key)
+		}
+		if !patch.Remove {
+			t.Fatalf("expected patch for key %s to remove metadata, got %+v", key, patch)
+		}
 	}
 }
 

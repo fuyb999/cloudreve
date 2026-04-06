@@ -319,7 +319,7 @@ func TestUpsertFTSExternalJobPayloadIgnoresDuplicateError(t *testing.T) {
 }
 
 func TestExternalFTSEligible(t *testing.T) {
-	baseFile := &ent.File{ID: 12, Type: int(inventorytypes.FileTypeFile)}
+	baseFile := &ent.File{ID: 12, Type: int(inventorytypes.FileTypeFile), Size: 128}
 	baseEntity := &ent.Entity{ID: 34, Source: "tenant-a/u7/report.pdf"}
 	basePolicy := &ent.StoragePolicy{BucketName: "cloudreve", Type: inventorytypes.PolicyTypeS3}
 	baseCfg := &setting.FTSExternalExtractorSetting{Enabled: true, SkipEncryptedFiles: true}
@@ -334,6 +334,7 @@ func TestExternalFTSEligible(t *testing.T) {
 	}{
 		{name: "allow remote object storage", fileModel: baseFile, primaryEntity: baseEntity, policy: basePolicy, cfg: baseCfg, want: true},
 		{name: "reject disabled config", fileModel: baseFile, primaryEntity: baseEntity, policy: basePolicy, cfg: &setting.FTSExternalExtractorSetting{}, want: false},
+		{name: "reject empty file", fileModel: &ent.File{ID: 12, Size: 0}, primaryEntity: baseEntity, policy: basePolicy, cfg: baseCfg, want: false},
 		{name: "reject folders", fileModel: &ent.File{ID: 12, Type: int(inventorytypes.FileTypeFolder)}, primaryEntity: baseEntity, policy: basePolicy, cfg: baseCfg, want: false},
 		{name: "reject encrypted when skip enabled", fileModel: baseFile, primaryEntity: &ent.Entity{ID: 34, Source: "tenant-a/u7/report.pdf", Props: &inventorytypes.EntityProps{EncryptMetadata: &inventorytypes.EncryptMetadata{}}}, policy: basePolicy, cfg: baseCfg, want: false},
 		{name: "allow encrypted when skip disabled", fileModel: baseFile, primaryEntity: &ent.Entity{ID: 34, Source: "tenant-a/u7/report.pdf", Props: &inventorytypes.EntityProps{EncryptMetadata: &inventorytypes.EncryptMetadata{}}}, policy: basePolicy, cfg: &setting.FTSExternalExtractorSetting{Enabled: true, SkipEncryptedFiles: false}, want: true},

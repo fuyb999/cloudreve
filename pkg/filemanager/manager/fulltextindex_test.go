@@ -229,6 +229,23 @@ func TestShouldExtractTextAllowsTikaToDetectByContent(t *testing.T) {
 	}
 }
 
+func TestShouldExtractTextRejectsEmptyFile(t *testing.T) {
+	extractor := tikaextractor.NewTikaExtractor(
+		nil,
+		nil,
+		logging.NewConsoleLogger(logging.LevelError),
+		&setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			Exts:        []string{"pdf", "docx"},
+			MaxFileSize: 1024,
+		},
+	)
+
+	if ShouldExtractText(extractor, "empty.pdf", 0) {
+		t.Fatal("expected empty file to skip text extraction")
+	}
+}
+
 func TestCollectFTSRecursiveFileIDsDeduplicatesOverlappingTrees(t *testing.T) {
 	rootA := mustURI(t, "cloudreve:///ops/a")
 	rootB := mustURI(t, "cloudreve:///ops/b")
@@ -1217,7 +1234,7 @@ func TestFullTextIndexTaskAwaitSlaveExtractionHandlesRunningAndError(t *testing.
 	if progress["slave"] == nil || progress["slave"].Current != 2 || progress["slave"].Total != 5 {
 		t.Fatalf("unexpected slave progress relay: %+v", progress)
 	}
-	if runningNode.getTaskID != 1001 || !runningNode.clearCalled {
+	if runningNode.getTaskID != 1001 || runningNode.clearCalled {
 		t.Fatalf("unexpected running node getTask call: id=%d clear=%v", runningNode.getTaskID, runningNode.clearCalled)
 	}
 
@@ -1381,6 +1398,9 @@ func TestFullTextIndexTaskAwaitSlaveExtractionTransitionsToExternal(t *testing.T
 	}
 	if state.Active == nil || state.Active.FileID != 803 {
 		t.Fatalf("expected active file to be retained for external await, got %+v", state.Active)
+	}
+	if len(node.getTaskCalls) != 2 || node.getTaskCalls[0] || !node.getTaskCalls[1] {
+		t.Fatalf("expected slave task to be fetched before clear, got %+v", node.getTaskCalls)
 	}
 	if ftTask.ResumeTime() == 0 {
 		t.Fatal("expected resume time to be set while waiting for external result")
@@ -1958,6 +1978,7 @@ type testClusterNode struct {
 	slaveTask       *cluster.SlaveTaskSummary
 	getTaskID       int
 	clearCalled     bool
+	getTaskCalls    []bool
 }
 
 func (n *testClusterNode) ID() int {
@@ -1977,6 +1998,7 @@ func (n *testClusterNode) CreateTask(ctx context.Context, taskType string, state
 func (n *testClusterNode) GetTask(ctx context.Context, id int, clearOnComplete bool) (*cluster.SlaveTaskSummary, error) {
 	n.getTaskID = id
 	n.clearCalled = clearOnComplete
+	n.getTaskCalls = append(n.getTaskCalls, clearOnComplete)
 	if n.slaveTask == nil {
 		return nil, nil
 	}

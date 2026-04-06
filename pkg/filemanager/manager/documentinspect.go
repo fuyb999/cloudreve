@@ -183,13 +183,14 @@ func (t *DocumentInspectTask) awaitSlaveInspection(ctx context.Context, fm *mana
 		return task.StatusError, fmt.Errorf("failed to resolve content processing node: %w", err)
 	}
 
-	summary, err := node.GetTask(ctx, state.SlaveID, true)
+	summary, err := node.GetTask(ctx, state.SlaveID, false)
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to get slave task: %w", err)
 	}
 
 	switch summary.Status {
 	case task.StatusCompleted:
+		slaveTaskID := state.SlaveID
 		wrapper, err := parseSlaveContentProcessingState(summary.PrivateState)
 		if err != nil {
 			return task.StatusError, fmt.Errorf("failed to parse slave document inspect result: %w", err)
@@ -209,6 +210,7 @@ func (t *DocumentInspectTask) awaitSlaveInspection(ctx context.Context, fm *mana
 		state.Phase = DocumentInspectTaskPhasePending
 		state.NodeID = 0
 		state.SlaveID = 0
+		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)
 		return task.StatusCompleted, nil
 	case task.StatusError:
 		return task.StatusError, fmt.Errorf("slave content processing task failed: %s%s (%w)", summary.Error, slaveTaskDiagnostic(summary), queue.CriticalErr)
@@ -225,6 +227,9 @@ func (m *manager) documentInspectForNewEntity(ctx context.Context, session *fs.U
 		return
 	}
 	if !m.shouldInspectDocument(ctx, session.Props.Uri.Name(), session.Props.Size) {
+		if err := m.patchDocumentInspectionMetadata(ctx, session.Props.Uri, nil); err != nil {
+			m.l.Warning("Failed to clear document inspection metadata: %s", err)
+		}
 		return
 	}
 
@@ -269,6 +274,15 @@ func (m *manager) InspectAndSaveDocument(ctx context.Context, uri *fs.URI, entit
 }
 
 func (m *manager) applyDocumentInspection(ctx context.Context, uri *fs.URI, fileID, ownerID, entityID int, result *DocumentInspection) error {
+	if err := m.patchDocumentInspectionMetadata(ctx, uri, result); err != nil {
+		return err
+	}
+
+	m.queueFullTextSync(ctx, uri, fileID, ownerID, entityID)
+	return nil
+}
+
+func (m *manager) patchDocumentInspectionMetadata(ctx context.Context, uri *fs.URI, result *DocumentInspection) error {
 	if uri == nil {
 		return nil
 	}
@@ -306,7 +320,6 @@ func (m *manager) applyDocumentInspection(ctx context.Context, uri *fs.URI, file
 		return fmt.Errorf("failed to save document inspection metadata: %s (%w)", err, queue.CriticalErr)
 	}
 
-	m.queueFullTextSync(ctx, uri, fileID, ownerID, entityID)
 	return nil
 }
 

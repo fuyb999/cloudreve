@@ -380,3 +380,36 @@ func TestBuildFTSExtractionPlanReusesExternalSidecarWithoutLocalFallback(t *test
 		t.Fatal("expected no sidecar persistence refresh for external sidecar reuse")
 	}
 }
+
+func TestBuildFTSExtractionPlanSkipsEmptyFileExtractionAndSidecarPersistence(t *testing.T) {
+	settings := testSettingProvider{
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:    "http://tika:9998",
+			MaxFileSize: 20 << 20,
+		},
+	}
+
+	plan := buildFTSExtractionPlan(
+		FTSBuildOptions{},
+		tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg),
+		&ent.File{Name: "empty.pdf", Size: 0},
+		"",
+		nil,
+		false,
+		nil,
+		true,
+		true,
+		true,
+		true,
+	)
+
+	if plan.NeedTextExtraction {
+		t.Fatal("expected empty file to skip text extraction")
+	}
+	if plan.NeedAttachmentExtraction {
+		t.Fatal("expected empty file to skip attachment extraction")
+	}
+	if plan.ShouldPersistSidecar {
+		t.Fatal("expected empty file to skip sidecar persistence")
+	}
+}

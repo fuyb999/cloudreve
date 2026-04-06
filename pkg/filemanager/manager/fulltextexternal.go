@@ -613,6 +613,9 @@ func externalFTSEligible(fileModel *ent.File, primaryEntity *ent.Entity, policy 
 	if cfg == nil || !cfg.Enabled || fileModel == nil || primaryEntity == nil || policy == nil {
 		return false
 	}
+	if fileModel.Size <= 0 {
+		return false
+	}
 	if fileModel.Type == int(types.FileTypeFolder) {
 		return false
 	}

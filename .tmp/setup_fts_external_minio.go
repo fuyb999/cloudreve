@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
@@ -51,6 +52,11 @@ func main() {
 		Region:           "us-east-1",
 		S3ForcePathStyle: true,
 		ChunkSize:        25 << 20,
+	}
+
+	cmd := exec.Command("docker", "exec", "minio", "sh", "-lc", "mkdir -p /data/cloudreve-external-smoke")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		panic(fmt.Errorf("ensure minio bucket directory: %w output=%s", err, string(output)))
 	}
 
 	policy, err = dep.StoragePolicyClient().Upsert(ctx, policy)

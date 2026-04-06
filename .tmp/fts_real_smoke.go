@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	ententity "github.com/cloudreve/Cloudreve/v4/ent/entity"
 	entnode "github.com/cloudreve/Cloudreve/v4/ent/node"
 	taskmodel "github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
@@ -878,6 +880,9 @@ func drainFTSTasksForFiles(ctx context.Context, dep dependency.Dep, user *ent.Us
 				return fmt.Errorf("find pending tasks for file %d: %w", fileID, err)
 			}
 			for _, model := range matches {
+				if !taskReferencesFileID(model.PrivateState, fileID) {
+					continue
+				}
 				taskMap[model.ID] = model
 			}
 		}
@@ -959,6 +964,9 @@ func waitFTSTasksForFiles(ctx context.Context, dep dependency.Dep, fileIDs ...in
 			}
 
 			for _, model := range matches {
+				if !taskReferencesFileID(model.PrivateState, fileID) {
+					continue
+				}
 				switch model.Status {
 				case taskmodel.StatusQueued, taskmodel.StatusProcessing, taskmodel.StatusSuspending:
 					pendingMap[model.ID] = model
@@ -1051,6 +1059,71 @@ func parseSmokeFullTextIndexTaskState(raw string) (*smokeFullTextIndexTaskState,
 		return nil, err
 	}
 	return state, nil
+}
+
+func taskReferencesFileID(raw string, fileID int) bool {
+	if strings.TrimSpace(raw) == "" || fileID <= 0 {
+		return false
+	}
+
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return false
+	}
+
+	return jsonPayloadReferencesFileID(payload, fileID)
+}
+
+func jsonPayloadReferencesFileID(payload any, fileID int) bool {
+	switch value := payload.(type) {
+	case map[string]any:
+		for key, item := range value {
+			switch {
+			case key == "file_id" || strings.HasSuffix(key, "_file_id"):
+				if jsonNumericEquals(item, fileID) {
+					return true
+				}
+			case key == "file_ids" || strings.HasSuffix(key, "_file_ids"):
+				if items, ok := item.([]any); ok {
+					for _, candidate := range items {
+						if jsonNumericEquals(candidate, fileID) {
+							return true
+						}
+					}
+				}
+			}
+			if jsonPayloadReferencesFileID(item, fileID) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range value {
+			if jsonPayloadReferencesFileID(item, fileID) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func jsonNumericEquals(value any, target int) bool {
+	switch n := value.(type) {
+	case float64:
+		return int(n) == target
+	case int:
+		return n == target
+	case int64:
+		return int(n) == target
+	case json.Number:
+		v, err := n.Int64()
+		return err == nil && int(v) == target
+	case string:
+		v, err := strconv.Atoi(strings.TrimSpace(n))
+		return err == nil && v == target
+	default:
+		return false
+	}
 }
 
 func refreshES() error {
@@ -1421,11 +1494,43 @@ func checkPGSidecarStored(ctx context.Context, dep dependency.Dep, fileID int) (
 	}
 
 	localPath := util.RelativePath(manifestPath)
-	if _, err := os.Stat(localPath); err != nil {
-		return "", "", "", fmt.Errorf("sidecar manifest missing on disk for file %d path=%q err=%v", fileID, localPath, err)
+	if _, err := os.Stat(localPath); err == nil {
+		return manifestPath, entityID, indexKey, nil
 	}
 
-	return manifestPath, entityID, indexKey, nil
+	entityIDInt, err := strconv.Atoi(entityID)
+	if err != nil {
+		return "", "", "", fmt.Errorf("parse sidecar entity id for file %d: %w", fileID, err)
+	}
+
+	entityModel, err := dep.DBClient().Entity.Query().Where(ententity.IDEQ(entityIDInt)).Only(ctx)
+	if err != nil {
+		return "", "", "", fmt.Errorf("load sidecar entity for file %d: %w", fileID, err)
+	}
+
+	policy, err := dep.StoragePolicyClient().GetPolicyByID(ctx, entityModel.StoragePolicyEntities)
+	if err != nil {
+		return "", "", "", fmt.Errorf("load sidecar policy for file %d: %w", fileID, err)
+	}
+
+	if strings.EqualFold(policy.Type, string(types.PolicyTypeS3)) && !policy.IsPrivate {
+		base := strings.TrimRight(policy.Server, "/")
+		escapedPath := strings.TrimLeft((&url.URL{Path: manifestPath}).EscapedPath(), "/")
+		manifestURL := fmt.Sprintf("%s/%s/%s", base, policy.BucketName, escapedPath)
+		resp, reqErr := http.Get(manifestURL)
+		if reqErr != nil {
+			return "", "", "", fmt.Errorf("sidecar manifest missing locally and failed to request remote object for file %d url=%q err=%v", fileID, manifestURL, reqErr)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return "", "", "", fmt.Errorf("sidecar manifest missing locally and remote object unavailable for file %d url=%q status=%s body=%q", fileID, manifestURL, resp.Status, strings.TrimSpace(string(body)))
+		}
+
+		return manifestPath, entityID, indexKey, nil
+	}
+
+	return "", "", "", fmt.Errorf("sidecar manifest missing on disk for file %d path=%q and no public remote policy fallback available", fileID, localPath)
 }
 
 func assertPGNoSidecarStored(ctx context.Context, dep dependency.Dep, fileID int, label string) {
@@ -1482,6 +1587,7 @@ func ensureSmokeFTSSettings(ctx context.Context, dep dependency.Dep) error {
 		"siteURL":                         "http://127.0.0.1:5212",
 		"fts_enabled":                     "1",
 		"fts_index_type":                  "elasticsearch",
+		"fts_elasticsearch_endpoint":      "http://127.0.0.1:9200",
 		"fts_extractor_type":              "tika",
 		"fts_tika_endpoint":               "http://127.0.0.1:9998",
 		"fts_tika_document_enabled":       "1",

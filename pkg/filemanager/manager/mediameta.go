@@ -177,13 +177,14 @@ func (m *MediaMetaTask) awaitSlaveExtraction(ctx context.Context, fm *manager, s
 		return task.StatusError, fmt.Errorf("failed to resolve content processing node: %w", err)
 	}
 
-	summary, err := node.GetTask(ctx, state.SlaveID, true)
+	summary, err := node.GetTask(ctx, state.SlaveID, false)
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to get slave task: %w", err)
 	}
 
 	switch summary.Status {
 	case task.StatusCompleted:
+		slaveTaskID := state.SlaveID
 		wrapper, err := parseSlaveContentProcessingState(summary.PrivateState)
 		if err != nil {
 			return task.StatusError, fmt.Errorf("failed to parse slave media meta result: %w", err)
@@ -203,6 +204,7 @@ func (m *MediaMetaTask) awaitSlaveExtraction(ctx context.Context, fm *manager, s
 		state.Phase = MediaMetaTaskPhasePending
 		state.NodeID = 0
 		state.SlaveID = 0
+		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)
 		return task.StatusCompleted, nil
 	case task.StatusError:
 		return task.StatusError, fmt.Errorf("slave content processing task failed: %s%s (%w)", summary.Error, slaveTaskDiagnostic(summary), queue.CriticalErr)
