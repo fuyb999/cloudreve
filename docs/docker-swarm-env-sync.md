@@ -1,5 +1,9 @@
 # Cloudreve Swarm 的 `.env.swarm` 与多机器部署说明
 
+如果你需要完整线上部署与运维手册，直接看：
+
+- `docs/docker-swarm-operations-manual.md`
+
 ## 1. 先说结论
 
 - `worker` 节点本身不需要 `.env.swarm`
@@ -28,6 +32,14 @@
 
 - 普通 `worker`
 - 只负责运行容器但不负责执行部署命令的节点
+
+补充：
+
+- 如果你要在 worker 上直接执行 `docker/swarm/prepare-bind-paths.sh`
+- 或 `docker/swarm/prepare-bitnami-images.sh`
+- 或 `docker/swarm/prepare-private-registry.sh`
+- 那么这个 worker 也需要临时拿到同一份 `.env.swarm`，或者你用环境变量显式传参
+- 这属于“运维准备阶段需要变量”，不是“容器运行时需要 `.env.swarm`”
 
 ## 3. 节点主机名怎么命名，方便在 Swarm 里看
 
@@ -66,7 +78,12 @@ docker stack ps cloudreve
 docker service ps cloudreve_postgresql-1
 ```
 
-如果你还会批量在各节点执行 `docker/swarm/prepare-bind-paths.sh`，这个脚本也会在输出里带上当前主机名，方便你对照日志。
+如果你还会批量在各节点执行 `docker/swarm/prepare-bind-paths.sh` 或
+`docker/swarm/prepare-bitnami-images.sh`、`docker/swarm/prepare-private-registry.sh`，
+这些脚本都会在输出里带上当前主机名，方便你对照日志。
+
+另外，当前模板里的主要服务容器 `hostname` 也会自动带上 `{{.Node.Hostname}}`，
+所以在容器内部或日志里也能直接看出任务实际落在哪台机器。
 
 ## 4. 多 manager 时怎么做
 
@@ -122,17 +139,22 @@ Swarm 多机环境里更常见的问题其实是：
 所以多机时要同时满足两件事：
 
 1. 执行部署的 manager 有正确的 `.env.swarm`
-2. 任务可能落到的节点，必须满足最终配置里的路径和镜像要求
+2. 任务可能落到的节点，必须满足最终配置里的路径、镜像和私有仓库访问要求
 
 ## 6. 这套模板里如何避免随机调度到错误节点
 
 当前模板已经支持下面这些可选节点约束：
 
 - `CLOUDREVE_MASTER_NODE_CONSTRAINT`
+- `CLOUDREVE_MASTER_PROXY_NODE_CONSTRAINT`
 - `CLOUDREVE_SLAVE_NODE_CONSTRAINT`
+- `CLOUDREVE_SLAVE_PROXY_NODE_CONSTRAINT`
 - `MINIO_NODE_CONSTRAINT`
 - `ELASTICSEARCH_NODE_CONSTRAINT`
 - `TIKA_NODE_CONSTRAINT`
+- `PGPOOL_NODE_CONSTRAINT`
+- `REDIS_SENTINEL_NODE_CONSTRAINT`
+- `REDIS_PROXY_NODE_CONSTRAINT`
 
 如果启用了集群模式，还会再用到：
 
@@ -162,6 +184,11 @@ CLOUDREVE_MASTER_NODE_CONSTRAINT=node.labels.cloudreve.master==true
 MINIO_DATA_MOUNT_TYPE=bind
 MINIO_DATA_MOUNT_SOURCE=/srv/cloudreve/minio
 MINIO_NODE_CONSTRAINT=node.labels.cloudreve.minio==true
+
+CLOUDREVE_MASTER_PROXY_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
+PGPOOL_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
+REDIS_PROXY_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
+REDIS_SENTINEL_NODE_CONSTRAINT=node.labels.cloudreve.redis-sentinel==true
 ```
 
 对应节点先打标签：
@@ -169,6 +196,8 @@ MINIO_NODE_CONSTRAINT=node.labels.cloudreve.minio==true
 ```bash
 docker node update --label-add cloudreve.master=true <node-name>
 docker node update --label-add cloudreve.minio=true <node-name>
+docker node update --label-add cloudreve.edge=true <node-name>
+docker node update --label-add cloudreve.redis-sentinel=true <node-name>
 ```
 
 如果是集群模式，再补：
@@ -187,6 +216,7 @@ docker node update --label-add cloudreve.kafka1=true <node-name>
 docker node update --label-add cloudreve.kafka2=true <node-name>
 docker node update --label-add cloudreve.kafka3=true <node-name>
 docker node update --label-add cloudreve.kafka-ui=true <node-name>
+docker node update --label-add cloudreve.registry=true <node-name>
 ```
 
 ## 7. 最稳的实践建议
@@ -195,20 +225,29 @@ docker node update --label-add cloudreve.kafka-ui=true <node-name>
 
 1. 固定一台 `manager` 作为部署入口
 2. `.env.swarm` 只在这台机器维护，或者通过自动化同步到全部 manager
-3. `PG / Redis` 一律使用宿主机物理路径
-4. 可选 `bind` 服务一旦切成绝对路径，就同时加节点标签和约束
-5. 如果不确定某个路径能否在多机上保持一致，就继续使用默认 `volume` 模式
-6. 如果启用 `SWARM_WITH_CLUSTER=yes`，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
-7. 集群模式下，Cloudreve 默认 S3 地址仍用 `http://minio:9000`，FTS Elasticsearch 地址填 `http://elasticsearch:9200`
-8. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `kafka:9092`
-9. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui` 对外端口；UI 本身仍然走内部 `kafka:9092`
+3. 在每台节点先执行 `docker/swarm/prepare-private-registry.sh`
+4. 在每台节点再执行 `docker/swarm/prepare-bitnami-images.sh`
+5. `PG / Redis` 一律使用宿主机物理路径
+6. 可选 `bind` 服务一旦切成绝对路径，就同时加节点标签和约束
+7. 如果不确定某个路径能否在多机上保持一致，就继续使用默认 `volume` 模式
+8. 如果启用 `SWARM_WITH_CLUSTER=yes`，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
+9. 集群模式下，Cloudreve 默认 S3 地址仍用 `http://minio:9000`，FTS Elasticsearch 地址填 `http://elasticsearch:9200`
+10. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `kafka:9092`
+11. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui` 对外端口；UI 本身仍然走内部 `kafka:9092`
+12. 自定义镜像统一先 push 到固定 manager 上的 `registry:2`，再部署主业务栈，不要逐台 `docker load`
 
 ## 8. 相关文件
 
+- `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.yml`
 - `docker-compose.swarm.cluster.yml`
 - `.env.swarm.example`
+- `.env.swarm.prod-4x128g.example`
+- `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
 - `docker/swarm/prepare-bind-paths.sh`
+- `docker/swarm/prepare-bitnami-images.sh`
+- `docker/swarm/prepare-private-registry.sh`
+- `docker/swarm/publish-private-images.sh`
 - `docs/docker-swarm-deployment.md`
 - `docs/docker-swarm-quickstart.md`

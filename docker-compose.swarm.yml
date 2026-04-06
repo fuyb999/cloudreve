@@ -10,15 +10,20 @@
 # - 不要把 PGDATA / Redis AOF / RDB 放在 MinIO、NFS、CephFS 或任何共享文件系统上。
 # - MinIO 用来放 Cloudreve 用户文件，对 PostgreSQL / Redis 运行数据并不合适。
 # - PostgreSQL / Redis 默认使用宿主机 bind mount，部署前要先在固定节点创建好目录。
+# - 所有数据/运行目录挂载都统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE` 写法。
+# - 对 PostgreSQL / Redis，默认值仍然是宿主机绝对路径，生产建议不要改回命名卷。
 # - Cloudreve 运行目录默认还是命名卷，用户文件默认应落到 S3 兼容对象存储。
 # - `cloudreve-master` 可以通过 `CR_INIT_*` 在首次初始化时直接创建默认 S3 存储策略。
 # - `docker-compose.swarm.bind.yml` 现在只用于可选的 Tika 自定义字体挂载。
 # - PostgreSQL / Redis 这几个实例是固定有状态角色，不要用 `docker service scale` 直接扩容。
-# - `TIKA_IMAGE` 必须提前存在于各节点，或者提前推到镜像仓库，Swarm 不会帮你 build。
+# - 默认 `TIKA_IMAGE` 现在使用 `cloudreve/tika:3.2.3.0-full-unrar-charset`。
+# - 生产里更推荐把自定义镜像先 push 到单点 `registry:2` 私有仓库，再让其它节点远程拉取。
+# - 私有仓库本身建议单独使用 `docker-compose.swarm.registry.yml` 部署，不和主业务栈混在一起。
 
 services:
   cloudreve-master:
     image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:4.15.0}
+    hostname: "{{.Node.Hostname}}-cr-master-{{.Task.Slot}}"
     environment:
       CR_CONF_System.Mode: master
       CR_CONF_System.Listen: ":5212"
@@ -82,13 +87,14 @@ services:
       resources:
         reservations:
           cpus: "${CLOUDREVE_MASTER_CPU_RESERVATION:-1.0}"
-          memory: ${CLOUDREVE_MASTER_MEM_RESERVATION:-2G}
+          memory: "${CLOUDREVE_MASTER_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${CLOUDREVE_MASTER_CPU_LIMIT:-2.0}"
-          memory: ${CLOUDREVE_MASTER_MEM_LIMIT:-4G}
+          memory: "${CLOUDREVE_MASTER_MEM_LIMIT:-4G}"
 
   cloudreve-master-proxy:
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-cr-master-proxy-{{.Task.Slot}}"
     environment:
       SERVER_NAME: ${CLOUDREVE_MASTER_SERVER_NAME:-_}
       UPSTREAM_SERVICE: cloudreve-master:5212
@@ -127,16 +133,19 @@ services:
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${CLOUDREVE_MASTER_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${CLOUDREVE_MASTER_PROXY_CPU_RESERVATION:-0.25}"
-          memory: ${CLOUDREVE_MASTER_PROXY_MEM_RESERVATION:-256M}
+          memory: "${CLOUDREVE_MASTER_PROXY_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${CLOUDREVE_MASTER_PROXY_CPU_LIMIT:-1.0}"
-          memory: ${CLOUDREVE_MASTER_PROXY_MEM_LIMIT:-512M}
+          memory: "${CLOUDREVE_MASTER_PROXY_MEM_LIMIT:-512M}"
 
   cloudreve-slave:
     image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:4.15.0}
+    hostname: "{{.Node.Hostname}}-cr-slave-{{.Task.Slot}}"
     environment:
       CR_CONF_System.Mode: slave
       CR_CONF_System.Listen: ":5212"
@@ -183,13 +192,14 @@ services:
       resources:
         reservations:
           cpus: "${CLOUDREVE_SLAVE_CPU_RESERVATION:-0.5}"
-          memory: ${CLOUDREVE_SLAVE_MEM_RESERVATION:-1G}
+          memory: "${CLOUDREVE_SLAVE_MEM_RESERVATION:-1G}"
         limits:
           cpus: "${CLOUDREVE_SLAVE_CPU_LIMIT:-1.5}"
-          memory: ${CLOUDREVE_SLAVE_MEM_LIMIT:-2G}
+          memory: "${CLOUDREVE_SLAVE_MEM_LIMIT:-2G}"
 
   cloudreve-slave-proxy:
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-cr-slave-proxy-{{.Task.Slot}}"
     environment:
       SERVER_NAME: ${CLOUDREVE_SLAVE_SERVER_NAME:-_}
       UPSTREAM_SERVICE: cloudreve-slave:5212
@@ -228,16 +238,19 @@ services:
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${CLOUDREVE_SLAVE_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_RESERVATION:-0.25}"
-          memory: ${CLOUDREVE_SLAVE_PROXY_MEM_RESERVATION:-256M}
+          memory: "${CLOUDREVE_SLAVE_PROXY_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_LIMIT:-1.0}"
-          memory: ${CLOUDREVE_SLAVE_PROXY_MEM_LIMIT:-512M}
+          memory: "${CLOUDREVE_SLAVE_PROXY_MEM_LIMIT:-512M}"
 
   postgresql-1:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17.6.0-debian-12-r2}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    hostname: "{{.Node.Hostname}}-pg1"
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -257,8 +270,8 @@ services:
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     volumes:
-      - type: bind
-        source: ${PG_1_DATA_PATH:?set PG_1_DATA_PATH}
+      - type: ${PG_1_DATA_MOUNT_TYPE:-bind}
+        source: ${PG_1_DATA_MOUNT_SOURCE:?set PG_1_DATA_MOUNT_SOURCE}
         target: /bitnami/postgresql
     networks:
       - cloudreve_backend
@@ -282,13 +295,14 @@ services:
       resources:
         reservations:
           cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
-          memory: ${POSTGRESQL_MEM_RESERVATION:-4G}
+          memory: "${POSTGRESQL_MEM_RESERVATION:-4G}"
         limits:
           cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
-          memory: ${POSTGRESQL_MEM_LIMIT:-8G}
+          memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
 
   postgresql-2:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17.6.0-debian-12-r2}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    hostname: "{{.Node.Hostname}}-pg2"
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -308,8 +322,8 @@ services:
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     volumes:
-      - type: bind
-        source: ${PG_2_DATA_PATH:?set PG_2_DATA_PATH}
+      - type: ${PG_2_DATA_MOUNT_TYPE:-bind}
+        source: ${PG_2_DATA_MOUNT_SOURCE:?set PG_2_DATA_MOUNT_SOURCE}
         target: /bitnami/postgresql
     networks:
       - cloudreve_backend
@@ -333,13 +347,14 @@ services:
       resources:
         reservations:
           cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
-          memory: ${POSTGRESQL_MEM_RESERVATION:-4G}
+          memory: "${POSTGRESQL_MEM_RESERVATION:-4G}"
         limits:
           cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
-          memory: ${POSTGRESQL_MEM_LIMIT:-8G}
+          memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
 
   postgresql-3:
-    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnami/postgresql-repmgr:17.6.0-debian-12-r2}
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    hostname: "{{.Node.Hostname}}-pg3"
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
@@ -359,8 +374,8 @@ services:
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     volumes:
-      - type: bind
-        source: ${PG_3_DATA_PATH:?set PG_3_DATA_PATH}
+      - type: ${PG_3_DATA_MOUNT_TYPE:-bind}
+        source: ${PG_3_DATA_MOUNT_SOURCE:?set PG_3_DATA_MOUNT_SOURCE}
         target: /bitnami/postgresql
     networks:
       - cloudreve_backend
@@ -384,13 +399,14 @@ services:
       resources:
         reservations:
           cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
-          memory: ${POSTGRESQL_MEM_RESERVATION:-4G}
+          memory: "${POSTGRESQL_MEM_RESERVATION:-4G}"
         limits:
           cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
-          memory: ${POSTGRESQL_MEM_LIMIT:-8G}
+          memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
 
   pgpool:
-    image: ${PGPOOL_IMAGE:-bitnami/pgpool:4.6.3-debian-12-r0}
+    image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-pgpool-{{.Task.Slot}}"
     environment:
       PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
@@ -432,24 +448,27 @@ services:
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${PGPOOL_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${PGPOOL_CPU_RESERVATION:-0.5}"
-          memory: ${PGPOOL_MEM_RESERVATION:-512M}
+          memory: "${PGPOOL_MEM_RESERVATION:-512M}"
         limits:
           cpus: "${PGPOOL_CPU_LIMIT:-2.0}"
-          memory: ${PGPOOL_MEM_LIMIT:-2G}
+          memory: "${PGPOOL_MEM_LIMIT:-2G}"
 
   redis-1:
-    image: ${REDIS_IMAGE:-bitnami/redis:8.6.2}
+    image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-redis1"
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: master
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
-      - type: bind
-        source: ${REDIS_1_DATA_PATH:?set REDIS_1_DATA_PATH}
+      - type: ${REDIS_1_DATA_MOUNT_TYPE:-bind}
+        source: ${REDIS_1_DATA_MOUNT_SOURCE:?set REDIS_1_DATA_MOUNT_SOURCE}
         target: /bitnami/redis/data
     networks:
       - cloudreve_backend
@@ -474,13 +493,14 @@ services:
       resources:
         reservations:
           cpus: "${REDIS_CPU_RESERVATION:-1.0}"
-          memory: ${REDIS_MEM_RESERVATION:-2G}
+          memory: "${REDIS_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${REDIS_CPU_LIMIT:-2.0}"
-          memory: ${REDIS_MEM_LIMIT:-4G}
+          memory: "${REDIS_MEM_LIMIT:-4G}"
 
   redis-2:
-    image: ${REDIS_IMAGE:-bitnami/redis:8.6.2}
+    image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-redis2"
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
@@ -490,8 +510,8 @@ services:
       REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
-      - type: bind
-        source: ${REDIS_2_DATA_PATH:?set REDIS_2_DATA_PATH}
+      - type: ${REDIS_2_DATA_MOUNT_TYPE:-bind}
+        source: ${REDIS_2_DATA_MOUNT_SOURCE:?set REDIS_2_DATA_MOUNT_SOURCE}
         target: /bitnami/redis/data
     networks:
       - cloudreve_backend
@@ -516,13 +536,14 @@ services:
       resources:
         reservations:
           cpus: "${REDIS_CPU_RESERVATION:-1.0}"
-          memory: ${REDIS_MEM_RESERVATION:-2G}
+          memory: "${REDIS_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${REDIS_CPU_LIMIT:-2.0}"
-          memory: ${REDIS_MEM_LIMIT:-4G}
+          memory: "${REDIS_MEM_LIMIT:-4G}"
 
   redis-3:
-    image: ${REDIS_IMAGE:-bitnami/redis:8.6.2}
+    image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-redis3"
     environment:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
@@ -532,8 +553,8 @@ services:
       REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
-      - type: bind
-        source: ${REDIS_3_DATA_PATH:?set REDIS_3_DATA_PATH}
+      - type: ${REDIS_3_DATA_MOUNT_TYPE:-bind}
+        source: ${REDIS_3_DATA_MOUNT_SOURCE:?set REDIS_3_DATA_MOUNT_SOURCE}
         target: /bitnami/redis/data
     networks:
       - cloudreve_backend
@@ -558,13 +579,14 @@ services:
       resources:
         reservations:
           cpus: "${REDIS_CPU_RESERVATION:-1.0}"
-          memory: ${REDIS_MEM_RESERVATION:-2G}
+          memory: "${REDIS_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${REDIS_CPU_LIMIT:-2.0}"
-          memory: ${REDIS_MEM_LIMIT:-4G}
+          memory: "${REDIS_MEM_LIMIT:-4G}"
 
   redis-sentinel:
-    image: ${REDIS_SENTINEL_IMAGE:-bitnami/redis-sentinel:8.6.2}
+    image: ${REDIS_SENTINEL_IMAGE:-bitnamilegacy/redis-sentinel:8.2.1-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-redis-sentinel-{{.Task.Slot}}"
     environment:
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
@@ -588,23 +610,29 @@ services:
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${REDIS_SENTINEL_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${REDIS_SENTINEL_CPU_RESERVATION:-0.25}"
-          memory: ${REDIS_SENTINEL_MEM_RESERVATION:-256M}
+          memory: "${REDIS_SENTINEL_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${REDIS_SENTINEL_CPU_LIMIT:-1.0}"
-          memory: ${REDIS_SENTINEL_MEM_LIMIT:-512M}
+          memory: "${REDIS_SENTINEL_MEM_LIMIT:-512M}"
 
   redis-proxy:
     image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-redis-proxy-{{.Task.Slot}}"
     environment:
       REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
       REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
+      REDIS_SENTINEL_HOST: ${REDIS_SENTINEL_HOST:-redis-sentinel}
+      REDIS_SENTINEL_PORT_NUMBER: ${REDIS_SENTINEL_PORT_NUMBER:-26379}
+      REDIS_MASTER_SET: ${REDIS_SENTINEL_MASTER_SET:-mymaster}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     entrypoint: ["/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
-      - source: redis_proxy_bootstrap_v3
+      - source: redis_proxy_bootstrap_v7
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
     ports:
@@ -630,25 +658,34 @@ services:
         window: 2m
       placement:
         max_replicas_per_node: 1
+        constraints:
+          - ${REDIS_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${REDIS_PROXY_CPU_RESERVATION:-0.25}"
-          memory: ${REDIS_PROXY_MEM_RESERVATION:-256M}
+          memory: "${REDIS_PROXY_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${REDIS_PROXY_CPU_LIMIT:-1.0}"
-          memory: ${REDIS_PROXY_MEM_LIMIT:-512M}
+          memory: "${REDIS_PROXY_MEM_LIMIT:-512M}"
 
   # swarm 集群模式开启时，这段单节点 MinIO 会被部署脚本剔除，
   # 再由 `docker-compose.swarm.cluster.yml` 提供同名代理入口和多节点后端。
   # swarm-cluster-strip:minio:begin
   minio:
-    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-minio"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "no"
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
-      MINIO_SKIP_CLIENT: ${MINIO_SKIP_CLIENT:-no}
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    configs:
+      - source: minio_swarm_entrypoint_v1
+        target: /usr/local/bin/minio-swarm-entrypoint.sh
+        mode: 0555
     ports:
       - target: 9000
         published: ${MINIO_API_PORT:-9000}
@@ -664,6 +701,12 @@ services:
         target: /bitnami/minio/data
     networks:
       - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     deploy:
       replicas: 1
       restart_policy:
@@ -674,17 +717,50 @@ services:
       resources:
         reservations:
           cpus: "${MINIO_CPU_RESERVATION:-1.0}"
-          memory: ${MINIO_MEM_RESERVATION:-2G}
+          memory: "${MINIO_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${MINIO_CPU_LIMIT:-2.0}"
-          memory: ${MINIO_MEM_LIMIT:-4G}
+          memory: "${MINIO_MEM_LIMIT:-4G}"
   # swarm-cluster-strip:minio:end
+
+  minio-init:
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-minio-init-{{.Task.Slot}}"
+    environment:
+      MINIO_ENDPOINT: ${MINIO_INIT_ENDPOINT:-http://minio:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_INIT_INTERVAL_SECONDS: ${MINIO_INIT_INTERVAL_SECONDS:-30}
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-init.sh"]
+    configs:
+      - source: minio_init_v1
+        target: /usr/local/bin/minio-init.sh
+        mode: 0555
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${MINIO_INIT_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${MINIO_INIT_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${MINIO_INIT_CPU_RESERVATION:-0.05}"
+          memory: "${MINIO_INIT_MEM_RESERVATION:-64M}"
+        limits:
+          cpus: "${MINIO_INIT_CPU_LIMIT:-0.25}"
+          memory: "${MINIO_INIT_MEM_LIMIT:-128M}"
 
   # swarm 集群模式开启时，这段单节点 Elasticsearch 会被部署脚本剔除，
   # 再由 `docker-compose.swarm.cluster.yml` 提供同名代理入口和多节点后端。
   # swarm-cluster-strip:elasticsearch:begin
   elasticsearch:
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    hostname: "{{.Node.Hostname}}-elasticsearch"
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
@@ -714,14 +790,15 @@ services:
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_CPU_RESERVATION:-2.0}"
-          memory: ${ELASTICSEARCH_MEM_RESERVATION:-4G}
+          memory: "${ELASTICSEARCH_MEM_RESERVATION:-4G}"
         limits:
           cpus: "${ELASTICSEARCH_CPU_LIMIT:-4.0}"
-          memory: ${ELASTICSEARCH_MEM_LIMIT:-8G}
+          memory: "${ELASTICSEARCH_MEM_LIMIT:-8G}"
   # swarm-cluster-strip:elasticsearch:end
 
   tika:
     image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
+    hostname: "{{.Node.Hostname}}-tika-{{.Task.Slot}}"
     environment:
       TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
       TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
@@ -759,10 +836,10 @@ services:
       resources:
         reservations:
           cpus: "${TIKA_CPU_RESERVATION:-0.5}"
-          memory: ${TIKA_MEM_RESERVATION:-1G}
+          memory: "${TIKA_MEM_RESERVATION:-1G}"
         limits:
           cpus: "${TIKA_CPU_LIMIT:-2.0}"
-          memory: ${TIKA_MEM_LIMIT:-2G}
+          memory: "${TIKA_MEM_LIMIT:-2G}"
 
 networks:
   cloudreve_backend:
@@ -773,6 +850,12 @@ networks:
         - subnet: ${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}
 
 volumes:
+  postgresql_1_data:
+  postgresql_2_data:
+  postgresql_3_data:
+  redis_1_data:
+  redis_2_data:
+  redis_3_data:
   cloudreve_master_runtime:
   cloudreve_slave_runtime:
   minio_data:
@@ -782,7 +865,11 @@ volumes:
 configs:
   postgresql_repmgr_run_v4:
     file: ./docker/swarm/postgresql-repmgr-run.sh
-  redis_proxy_bootstrap_v3:
+  redis_proxy_bootstrap_v7:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
+  minio_swarm_entrypoint_v1:
+    file: ./docker/swarm/minio-swarm-entrypoint.sh
+  minio_init_v1:
+    file: ./docker/swarm/minio-init.sh
   cloudreve_proxy_template:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template

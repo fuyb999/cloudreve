@@ -13,12 +13,15 @@
 #   - 同名 `kafka` 入口：3 节点 Kafka KRaft 集群 + 1 个内部 bootstrap 代理
 #   - `kafka-ui`：专门访问 Kafka 集群的管理界面
 # - 建议在真实环境中给这些节点单独打 label，并把数据目录改成真实物理路径
+# - Kafka 这 3 个固定 KRaft 节点必须使用 `endpoint_mode: dnsrr`
+#   避免 Swarm VIP / 内部负载均衡介入控制面连接
 
 services:
   minio:
     image: ${MINIO_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-minio-proxy-{{.Task.Slot}}"
     configs:
-      - source: minio_cluster_proxy_cfg_v1
+      - source: minio_cluster_proxy_cfg_v2
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
     ports:
@@ -50,20 +53,33 @@ services:
       resources:
         reservations:
           cpus: "${MINIO_PROXY_CPU_RESERVATION:-0.25}"
-          memory: ${MINIO_PROXY_MEM_RESERVATION:-256M}
+          memory: "${MINIO_PROXY_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${MINIO_PROXY_CPU_LIMIT:-1.0}"
-          memory: ${MINIO_PROXY_MEM_LIMIT:-512M}
+          memory: "${MINIO_PROXY_MEM_LIMIT:-512M}"
 
   minio-1:
-    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: minio-1
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
-      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
-      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    configs:
+      - source: minio_swarm_entrypoint_v1
+        target: /usr/local/bin/minio-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
     volumes:
       - type: ${MINIO_1_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_1_DATA_MOUNT_SOURCE:-minio_1_data}
@@ -71,6 +87,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -80,20 +97,33 @@ services:
       resources:
         reservations:
           cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   minio-2:
-    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: minio-2
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
-      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
-      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    configs:
+      - source: minio_swarm_entrypoint_v1
+        target: /usr/local/bin/minio-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
     volumes:
       - type: ${MINIO_2_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_2_DATA_MOUNT_SOURCE:-minio_2_data}
@@ -101,6 +131,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -110,20 +141,33 @@ services:
       resources:
         reservations:
           cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   minio-3:
-    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: minio-3
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
-      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
-      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    configs:
+      - source: minio_swarm_entrypoint_v1
+        target: /usr/local/bin/minio-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
     volumes:
       - type: ${MINIO_3_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_3_DATA_MOUNT_SOURCE:-minio_3_data}
@@ -131,6 +175,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -140,20 +185,33 @@ services:
       resources:
         reservations:
           cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   minio-4:
-    image: ${MINIO_IMAGE:-bitnami/minio:2024}
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: minio-4
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
-      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-tasks.minio-1,tasks.minio-2,tasks.minio-3,tasks.minio-4}
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
-      MINIO_SKIP_CLIENT: ${MINIO_CLUSTER_SKIP_CLIENT:-no}
+      MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    configs:
+      - source: minio_swarm_entrypoint_v1
+        target: /usr/local/bin/minio-swarm-entrypoint.sh
+        mode: 0555
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
     volumes:
       - type: ${MINIO_4_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_4_DATA_MOUNT_SOURCE:-minio_4_data}
@@ -161,6 +219,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -170,13 +229,14 @@ services:
       resources:
         reservations:
           cpus: "${MINIO_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   elasticsearch:
     image: ${ELASTICSEARCH_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-es-proxy-{{.Task.Slot}}"
     configs:
       - source: elasticsearch_cluster_proxy_cfg_v1
         target: /usr/local/etc/haproxy/haproxy.cfg
@@ -210,13 +270,14 @@ services:
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_PROXY_CPU_RESERVATION:-0.25}"
-          memory: ${ELASTICSEARCH_PROXY_MEM_RESERVATION:-256M}
+          memory: "${ELASTICSEARCH_PROXY_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${ELASTICSEARCH_PROXY_CPU_LIMIT:-1.0}"
-          memory: ${ELASTICSEARCH_PROXY_MEM_LIMIT:-512M}
+          memory: "${ELASTICSEARCH_PROXY_MEM_LIMIT:-512M}"
 
   elasticsearch-1:
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    hostname: "{{.Node.Hostname}}-es1"
     environment:
       cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
       xpack.security.enabled: "false"
@@ -251,13 +312,14 @@ services:
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_RESERVATION:-2.0}"
-          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}
+          memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}"
         limits:
           cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_LIMIT:-4.0}"
-          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}
+          memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}"
 
   elasticsearch-2:
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    hostname: "{{.Node.Hostname}}-es2"
     environment:
       cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
       xpack.security.enabled: "false"
@@ -292,13 +354,14 @@ services:
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_RESERVATION:-2.0}"
-          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}
+          memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}"
         limits:
           cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_LIMIT:-4.0}"
-          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}
+          memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}"
 
   elasticsearch-3:
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    hostname: "{{.Node.Hostname}}-es3"
     environment:
       cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
       xpack.security.enabled: "false"
@@ -333,13 +396,14 @@ services:
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_RESERVATION:-2.0}"
-          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}
+          memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_RESERVATION:-6G}"
         limits:
           cpus: "${ELASTICSEARCH_CLUSTER_NODE_CPU_LIMIT:-4.0}"
-          memory: ${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}
+          memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}"
 
   kafka:
     image: ${KAFKA_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-kafka-proxy-{{.Task.Slot}}"
     configs:
       - source: kafka_cluster_proxy_cfg_v1
         target: /usr/local/etc/haproxy/haproxy.cfg
@@ -364,19 +428,20 @@ services:
       resources:
         reservations:
           cpus: "${KAFKA_PROXY_CPU_RESERVATION:-0.25}"
-          memory: ${KAFKA_PROXY_MEM_RESERVATION:-256M}
+          memory: "${KAFKA_PROXY_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${KAFKA_PROXY_CPU_LIMIT:-1.0}"
-          memory: ${KAFKA_PROXY_MEM_LIMIT:-512M}
+          memory: "${KAFKA_PROXY_MEM_LIMIT:-512M}"
 
   kafka-1:
     image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    hostname: "{{.Node.Hostname}}-kafka1"
     environment:
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_1_ADVERTISED_LISTENER:-kafka-1:9092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -404,6 +469,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -413,19 +479,20 @@ services:
       resources:
         reservations:
           cpus: "${KAFKA_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${KAFKA_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   kafka-2:
     image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    hostname: "{{.Node.Hostname}}-kafka2"
     environment:
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
       KAFKA_NODE_ID: "2"
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_2_ADVERTISED_LISTENER:-kafka-2:9092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -453,6 +520,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -462,19 +530,20 @@ services:
       resources:
         reservations:
           cpus: "${KAFKA_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${KAFKA_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   kafka-3:
     image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    hostname: "{{.Node.Hostname}}-kafka3"
     environment:
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
       KAFKA_NODE_ID: "3"
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_3_ADVERTISED_LISTENER:-kafka-3:9092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -502,6 +571,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       restart_policy:
         condition: on-failure
@@ -511,13 +581,14 @@ services:
       resources:
         reservations:
           cpus: "${KAFKA_CLUSTER_NODE_CPU_RESERVATION:-1.0}"
-          memory: ${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}
+          memory: "${KAFKA_CLUSTER_NODE_MEM_RESERVATION:-2G}"
         limits:
           cpus: "${KAFKA_CLUSTER_NODE_CPU_LIMIT:-2.0}"
-          memory: ${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}
+          memory: "${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   kafka-ui:
     image: ${KAFKA_UI_IMAGE:-provectuslabs/kafka-ui:v0.7.2}
+    hostname: "{{.Node.Hostname}}-kafka-ui-{{.Task.Slot}}"
     environment:
       SERVER_PORT: "8080"
       DYNAMIC_CONFIG_ENABLED: "${KAFKA_UI_DYNAMIC_CONFIG_ENABLED:-false}"
@@ -555,13 +626,13 @@ services:
       resources:
         reservations:
           cpus: "${KAFKA_UI_CPU_RESERVATION:-0.25}"
-          memory: ${KAFKA_UI_MEM_RESERVATION:-256M}
+          memory: "${KAFKA_UI_MEM_RESERVATION:-256M}"
         limits:
           cpus: "${KAFKA_UI_CPU_LIMIT:-1.0}"
-          memory: ${KAFKA_UI_MEM_LIMIT:-1G}
+          memory: "${KAFKA_UI_MEM_LIMIT:-1G}"
 
 configs:
-  minio_cluster_proxy_cfg_v1:
+  minio_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/minio-cluster.cfg
   elasticsearch_cluster_proxy_cfg_v1:
     file: ./docker/swarm/haproxy/elasticsearch-cluster.cfg

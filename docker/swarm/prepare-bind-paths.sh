@@ -24,13 +24,13 @@ usage() {
   --check               只检查，不改动
   --apply               执行创建和修正，默认就是 apply
   --services LIST       只处理指定服务，逗号分隔
-                        可选：all,pg,redis,cloudreve,minio,elasticsearch,kafka,tika
+                        可选：all,pg,redis,cloudreve,minio,elasticsearch,kafka,tika,registry
   -h, --help            显示帮助
 
 示例：
   sudo docker/swarm/prepare-bind-paths.sh --check
   sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
-  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika
+  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika,registry
 EOF
 }
 
@@ -79,7 +79,26 @@ set -a
 source "$ENV_FILE"
 set +a
 
+map_legacy_mount_var() {
+  local legacy_var="$1"
+  local type_var="$2"
+  local source_var="$3"
+  local legacy_value="${!legacy_var:-}"
+  local source_value="${!source_var:-}"
+
+  if [[ -n "$legacy_value" && -z "$source_value" ]]; then
+    printf -v "$type_var" '%s' "${!type_var:-bind}"
+    printf -v "$source_var" '%s' "$legacy_value"
+  fi
+}
+
 # 兼容旧变量。
+map_legacy_mount_var "PG_1_DATA_PATH" "PG_1_DATA_MOUNT_TYPE" "PG_1_DATA_MOUNT_SOURCE"
+map_legacy_mount_var "PG_2_DATA_PATH" "PG_2_DATA_MOUNT_TYPE" "PG_2_DATA_MOUNT_SOURCE"
+map_legacy_mount_var "PG_3_DATA_PATH" "PG_3_DATA_MOUNT_TYPE" "PG_3_DATA_MOUNT_SOURCE"
+map_legacy_mount_var "REDIS_1_DATA_PATH" "REDIS_1_DATA_MOUNT_TYPE" "REDIS_1_DATA_MOUNT_SOURCE"
+map_legacy_mount_var "REDIS_2_DATA_PATH" "REDIS_2_DATA_MOUNT_TYPE" "REDIS_2_DATA_MOUNT_SOURCE"
+map_legacy_mount_var "REDIS_3_DATA_PATH" "REDIS_3_DATA_MOUNT_TYPE" "REDIS_3_DATA_MOUNT_SOURCE"
 if [[ -n "${TIKA_CUSTOM_FONTS_HOST_PATH:-}" && -z "${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-}" ]]; then
   TIKA_CUSTOM_FONTS_MOUNT_TYPE="${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-bind}"
   TIKA_CUSTOM_FONTS_MOUNT_SOURCE="$TIKA_CUSTOM_FONTS_HOST_PATH"
@@ -128,15 +147,27 @@ add_entry() {
 
 collect_entries() {
   if service_enabled pg; then
-    add_entry "PG_1_DATA_PATH" "${PG_1_DATA_PATH:-}" "1001:1001" "0755" "chown_recursive"
-    add_entry "PG_2_DATA_PATH" "${PG_2_DATA_PATH:-}" "1001:1001" "0755" "chown_recursive"
-    add_entry "PG_3_DATA_PATH" "${PG_3_DATA_PATH:-}" "1001:1001" "0755" "chown_recursive"
+    if [[ "${PG_1_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "PG_1_DATA_MOUNT_SOURCE" "${PG_1_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
+    fi
+    if [[ "${PG_2_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "PG_2_DATA_MOUNT_SOURCE" "${PG_2_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
+    fi
+    if [[ "${PG_3_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "PG_3_DATA_MOUNT_SOURCE" "${PG_3_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
+    fi
   fi
 
   if service_enabled redis; then
-    add_entry "REDIS_1_DATA_PATH" "${REDIS_1_DATA_PATH:-}" "1001:1001" "0755" "chown_recursive"
-    add_entry "REDIS_2_DATA_PATH" "${REDIS_2_DATA_PATH:-}" "1001:1001" "0755" "chown_recursive"
-    add_entry "REDIS_3_DATA_PATH" "${REDIS_3_DATA_PATH:-}" "1001:1001" "0755" "chown_recursive"
+    if [[ "${REDIS_1_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "REDIS_1_DATA_MOUNT_SOURCE" "${REDIS_1_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
+    fi
+    if [[ "${REDIS_2_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "REDIS_2_DATA_MOUNT_SOURCE" "${REDIS_2_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
+    fi
+    if [[ "${REDIS_3_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "REDIS_3_DATA_MOUNT_SOURCE" "${REDIS_3_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
+    fi
   fi
 
   if service_enabled cloudreve; then
@@ -199,6 +230,10 @@ collect_entries() {
 
   if service_enabled tika && [[ "${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-volume}" == "bind" ]]; then
     add_entry "TIKA_CUSTOM_FONTS_MOUNT_SOURCE" "${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-}" "" "0755" "readable_recursive"
+  fi
+
+  if service_enabled registry && [[ "${PRIVATE_REGISTRY_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
+    add_entry "PRIVATE_REGISTRY_DATA_MOUNT_SOURCE" "${PRIVATE_REGISTRY_DATA_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
   fi
 }
 

@@ -3,14 +3,29 @@
 本文档对应仓库中的以下文件：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
 - `docker-compose.swarm.bind.yml`
 - `.env.swarm.example`
+- `.env.swarm.prod-4x128g.example`
+- `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
+- `docker/swarm/prepare-bind-paths.sh`
+- `docker/swarm/prepare-bitnami-images.sh`
+- `docker/swarm/prepare-private-registry.sh`
+- `docker/swarm/publish-private-images.sh`
 
 如果你现在更需要一份最短执行路径，先看：
 
 - `docs/docker-swarm-quickstart.md`
+
+如果你就是按 `1 manager + 3 worker + 128GB/64 线程` 上真实环境，直接看：
+
+- `docs/docker-swarm-production-checklist.md`
+
+如果你现在需要完整的线上部署、巡检、扩缩容、回滚、备份、排障手册，直接看：
+
+- `docs/docker-swarm-operations-manual.md`
 
 如果你现在关注的是多 manager / 多机器下 `.env.swarm` 的生效范围，再看：
 
@@ -20,6 +35,7 @@
 
 当前 Swarm 栈采用如下拓扑：
 
+- `registry`：单独的自定义镜像私有仓库栈
 - `cloudreve-master`：Cloudreve 主站
 - `cloudreve-master-proxy`：主站入口 Nginx
 - `cloudreve-slave`：Cloudreve 从节点
@@ -34,6 +50,7 @@
 
 默认设计目标：
 
+- 自定义镜像固定放到 1 台 manager 上的 `registry:2`
 - PostgreSQL / Redis 固定到带标签的节点上
 - PostgreSQL / Redis 使用宿主机物理目录
 - Cloudreve 运行目录、MinIO、Elasticsearch、Tika 字体目录同时兼容命名卷和宿主机绝对路径
@@ -69,29 +86,63 @@
 
 模板里当前默认使用：
 
-- `bitnami/postgresql-repmgr:17.6.0-debian-12-r2`
-- `bitnami/pgpool:4.6.3-debian-12-r0`
+- `bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2`
+- `bitnamilegacy/pgpool:4.6.3-debian-12-r0`
+- `bitnamilegacy/minio:2024.10.2-debian-12-r0`
+- `bitnamilegacy/redis:8.2.1-debian-12-r0`
+- `bitnamilegacy/redis-sentinel:8.2.1-debian-12-r0`
+- `cloudreve/tika:3.2.3.0-full-unrar-charset`
 
 原因很直接：
 
-- 如果公开仓库不可拉取，你需要先在节点本地把可用镜像 retag 为 `bitnami/*`
-- 或者把同名镜像推到你自己的私有镜像仓库
+- 这些默认值现在都和 Docker Hub 上实际可直接 `pull` 的仓库名与 tag 保持一致
+- 不再依赖本地 retag 成 `bitnami/*`
+- `TIKA_IMAGE` 是自定义镜像，不在 Docker Hub 公共仓库里，生产里应先推到固定私有仓库，再让其它节点远程拉取
+- 所以生产里建议先在每台节点执行：
 
-如果你自己已经有可验证的镜像仓库，也可以在 `.env.swarm` 中覆盖：
+```bash
+docker/swarm/prepare-bitnami-images.sh --check
+docker/swarm/prepare-bitnami-images.sh
+```
+
+如果你使用仓库内置的 `registry:2` 方案，推荐顺序是：
+
+```bash
+sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker
+docker/swarm/deploy-private-registry.sh --env-file .env.swarm
+docker/swarm/publish-private-images.sh --env-file .env.swarm
+```
+
+常见覆盖变量：
 
 - `POSTGRESQL_REPMGR_IMAGE`
 - `PGPOOL_IMAGE`
+- `MINIO_IMAGE`
+- `REDIS_IMAGE`
+- `REDIS_SENTINEL_IMAGE`
+- `TIKA_IMAGE`
+- `PRIVATE_REGISTRY_ADDR`
+- `TIKA_LOCAL_IMAGE`
+- `TIKA_REMOTE_IMAGE`
 
 ## 4. 宿主机目录要求
 
-`docker-compose.swarm.yml` 默认强制以下目录为宿主机物理路径：
+`docker-compose.swarm.yml` 现在把所有挂载统一成了 `*_MOUNT_TYPE + *_MOUNT_SOURCE`。
 
-- `PG_1_DATA_PATH`
-- `PG_2_DATA_PATH`
-- `PG_3_DATA_PATH`
-- `REDIS_1_DATA_PATH`
-- `REDIS_2_DATA_PATH`
-- `REDIS_3_DATA_PATH`
+其中 PostgreSQL / Redis 默认仍然强制走宿主机物理路径：
+
+- `PG_1_DATA_MOUNT_TYPE=bind`
+- `PG_1_DATA_MOUNT_SOURCE`
+- `PG_2_DATA_MOUNT_TYPE=bind`
+- `PG_2_DATA_MOUNT_SOURCE`
+- `PG_3_DATA_MOUNT_TYPE=bind`
+- `PG_3_DATA_MOUNT_SOURCE`
+- `REDIS_1_DATA_MOUNT_TYPE=bind`
+- `REDIS_1_DATA_MOUNT_SOURCE`
+- `REDIS_2_DATA_MOUNT_TYPE=bind`
+- `REDIS_2_DATA_MOUNT_SOURCE`
+- `REDIS_3_DATA_MOUNT_TYPE=bind`
+- `REDIS_3_DATA_MOUNT_SOURCE`
 
 这几个目录必须满足：
 
@@ -152,6 +203,11 @@ sudo docker/swarm/prepare-bind-paths.sh --services cloudreve,minio,elasticsearch
 
 如果是多机 Swarm，建议同时把这些服务固定到带标签的节点，避免任务被调度到没有该绝对路径的机器。
 
+兼容性说明：
+
+- 旧的 `PG_*_DATA_PATH` / `REDIS_*_DATA_PATH` 变量仍然会被脚本自动映射
+- 但新部署建议统一只使用 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
+
 如果你启用了 `SWARM_WITH_CLUSTER=yes`，MinIO / Elasticsearch / Kafka 要改的是各自节点路径，而不是单节点路径：
 
 ```bash
@@ -189,7 +245,7 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 
 如果你是在 macOS + Colima 下联调或部署：
 
-- `PG_*_DATA_PATH` / `REDIS_*_DATA_PATH` 必须是 macOS 宿主机上的真实目录
+- `PG_*_DATA_MOUNT_SOURCE` / `REDIS_*_DATA_MOUNT_SOURCE` 必须是 macOS 宿主机上的真实目录
 - 这些目录必须已经共享进 Colima 虚拟机
 - 不要把目录写成容器内部路径
 - 不要指望 `network_mode: host`
@@ -263,11 +319,11 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 
 ## 8. MinIO 默认行为
 
-模板里的 `minio` 服务默认开启：
+模板里的 `minio` 相关服务默认开启：
 
 - `MINIO_DEFAULT_BUCKETS=cloudreve`
 
-这意味着首次部署时会自动创建默认 bucket，避免“策略有了但 bucket 不存在”。
+这意味着首次部署后会由 `minio-init` 服务自动创建默认 bucket，避免“策略有了但 bucket 不存在”。
 
 要清楚一点：
 
@@ -291,6 +347,7 @@ docker/swarm/deploy-stack.sh --with-cluster
 
 - `minio`：对内对外统一入口代理
 - `minio-1` / `minio-2` / `minio-3` / `minio-4`：MinIO 分布式数据节点
+- `minio-init`：默认 bucket 持续初始化服务
 - `elasticsearch`：对内对外统一入口代理
 - `elasticsearch-1` / `elasticsearch-2` / `elasticsearch-3`：Elasticsearch 集群节点
 - `kafka`：Swarm 内部 bootstrap 入口
@@ -304,6 +361,12 @@ docker/swarm/deploy-stack.sh --with-cluster
 - 如果 Cloudreve 要直接使用栈内 Kafka，全局 Kafka brokers 填 `kafka:9092`
 - Elasticsearch 所在宿主机必须先执行 `sysctl -w vm.max_map_count=262144`
 - Kafka UI 默认访问地址是 `http://<node-or-lb>:18089`
+
+补充说明：
+
+- `minio-1..4` 的容器 hostname 会固定成 `minio-1..4`
+- 这是为了满足 MinIO 分布式节点自识别
+- 真正落在哪台物理机上，看 `docker service ps <stack>_minio-1` 这类命令，不要只看容器 hostname
 
 Kafka 这里默认只提供 Swarm 内部入口，不直接给 Swarm 外部客户端暴露 broker 地址。
 
@@ -373,6 +436,15 @@ sudo sysctl --system
 ## 10. 准备 Swarm 集群
 
 建议先把各台机器的主机名定好，再让它们加入 Swarm。
+
+现在模板里的主要服务也会自动把容器 `hostname` 带上当前 `Swarm` 节点名，
+格式类似：
+
+- `cr-prod-wkr-1-pg1`
+- `cr-prod-mgr-1-cr-master-1`
+- `cr-prod-wkr-3-kafka3`
+
+这样你在容器内部、日志或故障排查时，也能直接看出任务落在哪台机器。
 
 原因：
 
@@ -448,9 +520,11 @@ docker node update --label-add cloudreve.redis3=true <node-redis-3>
 ```bash
 docker node update --label-add cloudreve.master=true <node-master-runtime>
 docker node update --label-add cloudreve.slave=true <node-slave-runtime>
+docker node update --label-add cloudreve.edge=true <node-edge>
 docker node update --label-add cloudreve.minio=true <node-minio>
 docker node update --label-add cloudreve.elasticsearch=true <node-elasticsearch>
 docker node update --label-add cloudreve.tika=true <node-tika>
+docker node update --label-add cloudreve.redis-sentinel=true <node-redis-sentinel>
 ```
 
 如果启用了 MinIO / Elasticsearch 集群，再补这些标签：
@@ -479,12 +553,33 @@ docker node update --label-add cloudreve.kafka-ui=true <node-kafka-ui>
 - `kafka1/2/3` 放 3 台 worker
 - `kafka-ui` 放 manager 或任意可直接访问的入口节点
 
+如果你的机器规格就是 `4 台 x 128GB 内存 / 64 线程`，并且准备直接使用仓库内的
+`.env.swarm.prod-4x128g.example`，建议按下面打标签：
+
+- `cr-prod-mgr-1`：`cloudreve.master`, `cloudreve.edge`, `cloudreve.registry`, `cloudreve.minio1`, `cloudreve.tika`, `cloudreve.kafka-ui`
+- `cr-prod-wkr-1`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg1`, `cloudreve.redis1`, `cloudreve.redis-sentinel`, `cloudreve.es1`, `cloudreve.kafka1`, `cloudreve.minio2`
+- `cr-prod-wkr-2`：`cloudreve.slave`, `cloudreve.pg2`, `cloudreve.redis2`, `cloudreve.redis-sentinel`, `cloudreve.es2`, `cloudreve.kafka2`, `cloudreve.minio3`
+- `cr-prod-wkr-3`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg3`, `cloudreve.redis3`, `cloudreve.redis-sentinel`, `cloudreve.es3`, `cloudreve.kafka3`, `cloudreve.minio4`, `cloudreve.tika`
+
+这样做的目的不是把机器吃满，而是：
+
+- PostgreSQL / Elasticsearch / Kafka / Redis 固定在可预期节点
+- `edge` 标签承接入口代理、`pgpool`、`redis-proxy`、`minio/elasticsearch/kafka` 代理
+- `tika` 只放 2 台机器，避免无意义铺满 4 台
+- 每台机器都保留大量系统缓存和扩容余量
+
 ## 12. 准备环境变量
 
 复制模板：
 
 ```bash
 cp .env.swarm.example .env.swarm
+```
+
+如果你的环境就是 `1 manager + 3 worker`，并且每台机器都是 `128GB 内存 / 64 线程`，可以直接从这个生产基线开始：
+
+```bash
+cp .env.swarm.prod-4x128g.example .env.swarm
 ```
 
 至少填好这些值：
@@ -498,7 +593,8 @@ cp .env.swarm.example .env.swarm
 - `REDIS_PASSWORD`
 - `MINIO_ROOT_PASSWORD`
 - `CR_INIT_S3_SECRET_KEY`
-- `TIKA_IMAGE`
+- `PRIVATE_REGISTRY_ADDR`
+- `TIKA_REMOTE_IMAGE`
 
 如果你要用外部对象存储，再改：
 
@@ -530,6 +626,10 @@ cp .env.swarm.example .env.swarm
 在 manager 节点执行：
 
 ```bash
+docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker
+docker/swarm/prepare-bitnami-images.sh
+docker/swarm/deploy-private-registry.sh --env-file .env.swarm
+docker/swarm/publish-private-images.sh --env-file .env.swarm
 docker/swarm/deploy-stack.sh
 ```
 

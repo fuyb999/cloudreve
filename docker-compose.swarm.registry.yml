@@ -1,0 +1,54 @@
+# Cloudreve 自定义镜像专用私有仓库栈。
+#
+# 设计目标：
+# - 只在 1 台固定节点上部署一个 `registry:2`
+# - 其它 Swarm 节点通过固定地址远程拉取自定义镜像
+# - 不再要求每台节点手工 `docker load`
+#
+# 使用前提：
+# - 先在每台节点执行 `docker/swarm/prepare-private-registry.sh`
+# - 如果使用 bind 路径，再在 registry 所在节点执行
+#   `docker/swarm/prepare-bind-paths.sh --services registry`
+
+services:
+  registry:
+    image: ${PRIVATE_REGISTRY_IMAGE:-registry:2.8.3}
+    hostname: "{{.Node.Hostname}}-registry"
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_STORAGE_DELETE_ENABLED: ${PRIVATE_REGISTRY_DELETE_ENABLED:-true}
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+    ports:
+      - target: 5000
+        published: ${PRIVATE_REGISTRY_HTTP_PORT:-5000}
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: ${PRIVATE_REGISTRY_DATA_MOUNT_TYPE:-bind}
+        source: ${PRIVATE_REGISTRY_DATA_MOUNT_SOURCE:-/srv/cloudreve/registry}
+        target: /var/lib/registry
+    deploy:
+      replicas: ${PRIVATE_REGISTRY_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${PRIVATE_REGISTRY_NODE_CONSTRAINT:-node.labels.cloudreve.registry==true}
+      resources:
+        reservations:
+          cpus: "${PRIVATE_REGISTRY_CPU_RESERVATION:-0.25}"
+          memory: "${PRIVATE_REGISTRY_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${PRIVATE_REGISTRY_CPU_LIMIT:-1.0}"
+          memory: "${PRIVATE_REGISTRY_MEM_LIMIT:-512M}"
+
+volumes:
+  private_registry_data:
