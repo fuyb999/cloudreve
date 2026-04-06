@@ -16,12 +16,12 @@ usage() {
   docker/swarm/init-authverse-db.sh [--env-file 文件]
 
 说明：
-  这个脚本会在共享 PostgreSQL 集群里创建 `authverse` 数据库（如果还不存在），
-  然后执行统一认证初始化 SQL。
+  这个脚本会直连共享 PostgreSQL 主库，重建专用 `authverse` 数据库，
+  然后执行统一认证初始化 SQL，并修正对象 owner / grant。
 
 注意：
-  1. 脚本默认连接 Cloudreve 主栈里的 `pgpool`
-  2. SQL 是全量建库脚本，会先 drop 再 create 目标数据库内的表
+  1. 脚本默认连接 Cloudreve 主栈里的 `postgresql-1`
+  2. SQL 是全量初始化，脚本会重建目标数据库
   3. 只应对专用的 `authverse` 数据库执行，不要对 Cloudreve 主库执行
 
 参数：
@@ -69,8 +69,8 @@ set +a
 CLOUDREVE_STACK_NAME="${CLOUDREVE_STACK_NAME:-cloudreve}"
 AUTHVERSE_SHARED_NETWORK="${AUTHVERSE_SHARED_NETWORK:-${CLOUDREVE_STACK_NAME}_cloudreve_backend}"
 AUTHVERSE_CLOUDREVE_SERVICE_PREFIX="${AUTHVERSE_CLOUDREVE_SERVICE_PREFIX:-${CLOUDREVE_STACK_NAME}_}"
-AUTHVERSE_POSTGRES_HOST="${AUTHVERSE_POSTGRES_HOST:-${AUTHVERSE_CLOUDREVE_SERVICE_PREFIX}pgpool}"
-AUTHVERSE_POSTGRES_PORT="${AUTHVERSE_POSTGRES_PORT:-5432}"
+AUTHVERSE_DB_INIT_HOST="${AUTHVERSE_DB_INIT_HOST:-${AUTHVERSE_CLOUDREVE_SERVICE_PREFIX}postgresql-1}"
+AUTHVERSE_DB_INIT_PORT="${AUTHVERSE_DB_INIT_PORT:-5432}"
 AUTHVERSE_DB_NAME="${AUTHVERSE_DB_NAME:-authverse}"
 AUTHVERSE_DB_USERNAME="${AUTHVERSE_DB_USERNAME:-${POSTGRESQL_USERNAME:-cloudreve}}"
 AUTHVERSE_DB_ADMIN_USER="${AUTHVERSE_DB_ADMIN_USER:-postgres}"
@@ -90,8 +90,8 @@ fi
 echo "[$HOST_NAME] 准备初始化统一认证数据库：$AUTHVERSE_DB_NAME"
 docker run --rm \
   --network "$AUTHVERSE_SHARED_NETWORK" \
-  -e PGHOST="$AUTHVERSE_POSTGRES_HOST" \
-  -e PGPORT="$AUTHVERSE_POSTGRES_PORT" \
+  -e PGHOST="$AUTHVERSE_DB_INIT_HOST" \
+  -e PGPORT="$AUTHVERSE_DB_INIT_PORT" \
   -e PGADMINUSER="$AUTHVERSE_DB_ADMIN_USER" \
   -e PGPASSWORD_ADMIN="$AUTHVERSE_DB_ADMIN_PASSWORD" \
   -e APP_DB="$AUTHVERSE_DB_NAME" \
@@ -114,17 +114,74 @@ docker run --rm \
       exit 1
     fi
 
-    if ! psql -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -d postgres -tAc \
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -d postgres -tAc \
       "SELECT 1 FROM pg_database WHERE datname = '\''$APP_DB'\''" | grep -q 1; then
-      echo "[authverse-db-init] 创建数据库：$APP_DB"
-      createdb -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -O "$APP_USER" "$APP_DB"
+      echo "[authverse-db-init] 重建数据库：$APP_DB"
+      psql -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -d postgres -v ON_ERROR_STOP=1 -c \
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''$APP_DB'\'' AND pid <> pg_backend_pid();"
+      dropdb -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" "$APP_DB"
     fi
+
+    echo "[authverse-db-init] 创建数据库：$APP_DB"
+    createdb -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -O "$APP_USER" "$APP_DB"
 
     echo "[authverse-db-init] 导入基础 SQL"
     psql -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -d "$APP_DB" -v ON_ERROR_STOP=1 -f /sql/authverse-base.sql
 
     echo "[authverse-db-init] 导入统一接入注册中心 SQL"
     psql -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -d "$APP_DB" -v ON_ERROR_STOP=1 -f /sql/authverse-registry.sql
+
+    echo "[authverse-db-init] 校正数据库对象所有权与授权"
+    psql -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" -d "$APP_DB" -v ON_ERROR_STOP=1 <<SQL
+ALTER DATABASE "$APP_DB" OWNER TO "$APP_USER";
+ALTER SCHEMA public OWNER TO "$APP_USER";
+DO \$authverse\$
+DECLARE
+  stmt text;
+BEGIN
+  FOR stmt IN
+    SELECT CASE c.relkind
+      WHEN '\''S'\'' THEN format('\''ALTER SEQUENCE %I.%I OWNER TO %I'\'', n.nspname, c.relname, '\''$APP_USER'\'')
+      WHEN '\''v'\'' THEN format('\''ALTER VIEW %I.%I OWNER TO %I'\'', n.nspname, c.relname, '\''$APP_USER'\'')
+      WHEN '\''m'\'' THEN format('\''ALTER MATERIALIZED VIEW %I.%I OWNER TO %I'\'', n.nspname, c.relname, '\''$APP_USER'\'')
+      WHEN '\''f'\'' THEN format('\''ALTER FOREIGN TABLE %I.%I OWNER TO %I'\'', n.nspname, c.relname, '\''$APP_USER'\'')
+      ELSE format('\''ALTER TABLE %I.%I OWNER TO %I'\'', n.nspname, c.relname, '\''$APP_USER'\'')
+    END
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = '\''public'\''
+      AND c.relkind IN ('\''r'\'','\''p'\'','\''S'\'','\''v'\'','\''m'\'','\''f'\'')
+      AND pg_get_userbyid(c.relowner) = '\''$PGADMINUSER'\''
+  LOOP
+    EXECUTE stmt;
+  END LOOP;
+
+  FOR stmt IN
+    SELECT format(
+      '\''ALTER FUNCTION %I.%I(%s) OWNER TO %I'\'',
+      n.nspname,
+      p.proname,
+      pg_get_function_identity_arguments(p.oid),
+      '\''$APP_USER'\''
+    )
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = '\''public'\''
+      AND pg_get_userbyid(p.proowner) = '\''$PGADMINUSER'\''
+  LOOP
+    EXECUTE stmt;
+  END LOOP;
+END
+\$authverse\$;
+GRANT ALL PRIVILEGES ON DATABASE "$APP_DB" TO "$APP_USER";
+GRANT USAGE, CREATE ON SCHEMA public TO "$APP_USER";
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "$APP_USER";
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "$APP_USER";
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO "$APP_USER";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO "$APP_USER";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO "$APP_USER";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO "$APP_USER";
+SQL
   '
 
 echo "[$HOST_NAME] 统一认证数据库初始化完成。"

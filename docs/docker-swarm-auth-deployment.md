@@ -64,6 +64,12 @@
    - `cloudreve_redis-proxy`
    - `cloudreve_elasticsearch`
 
+补充说明：
+
+- 运行期业务流量走 `cloudreve_pgpool`
+- 但 `docker/swarm/init-authverse-db.sh` 做的是建库、删库、授权这类 DDL 操作，默认会直连 `cloudreve_postgresql-1`
+- 不建议把这类初始化 DDL 走 `pgpool`
+
 ## 3. 资源建议
 
 如果你的真实环境是：
@@ -242,16 +248,18 @@ docker/swarm/init-authverse-db.sh --env-file .env.swarm
 
 这个脚本会做三件事：
 
-1. 连接共享 `pgpool`
-2. 如果不存在，就创建 `AUTHVERSE_DB_NAME`
+1. 默认直连主库服务 `cloudreve_postgresql-1`
+2. 重建专用 `AUTHVERSE_DB_NAME`
 3. 导入：
    - `authverse-20260329.sql`
    - `authverse-20260329-authz-integration-registry.sql`
+4. 校正 `public` schema 下对象 owner 与 grant，保证应用用户可正常启动
 
 注意：
 
 - 这两份 SQL 是面向统一认证专用库的全量初始化脚本
 - 不要对 Cloudreve 主库执行
+- 脚本会重建 `AUTHVERSE_DB_NAME`，只适合统一认证专用库初始化，不适合带业务数据的复用库
 
 ### 5.5 构建统一认证镜像
 
@@ -307,6 +315,7 @@ docker/swarm/deploy-auth-stack.sh --env-file .env.swarm --render-only
 ```bash
 curl -fsS http://127.0.0.1:${AUTHVERSE_HTTP_PORT}/healthz
 curl -fsS ${AUTHVERSE_PUBLIC_BASE_URL}/.well-known/openid-configuration
+curl -i -sS ${AUTHVERSE_PUBLIC_BASE_URL}/app-api/infra/server/get-info | sed -n '1,20p'
 ```
 
 第二条返回值里重点确认：
@@ -318,6 +327,11 @@ curl -fsS ${AUTHVERSE_PUBLIC_BASE_URL}/.well-known/openid-configuration
 - `end_session_endpoint`
 
 都应该指向 `AUTHVERSE_PUBLIC_BASE_URL`。
+
+第三条如果返回 `401 账号未登录`，说明：
+
+- `authverse-web -> authverse-backend` 反代正常
+- 统一认证后端已经能对外提供业务 API
 
 ### 6.2 统一认证后端烟测
 
@@ -417,6 +431,18 @@ docker stack rm authverse
 docker service logs authverse_authverse-backend
 ```
 
+如果日志里出现：
+
+- `permission denied for table dual`
+
+基本就是初始化 SQL 导入后的对象权限不对。直接重新执行：
+
+```bash
+docker/swarm/init-authverse-db.sh --env-file .env.swarm
+```
+
+新版脚本会重建专用库并修正 owner / grant。
+
 ### 8.3 `/.well-known/openid-configuration` 返回的地址不对
 
 基本就是：
@@ -436,7 +462,23 @@ docker service logs authverse_authverse-backend
 
 如果 auth 域名和 Cloudreve 主域名不同，通常需要显式设置 `AUTHVERSE_CLOUDREVE_HOST_HEADER=cloudreve.example.com`。
 
-### 8.5 bind 模式下后端多副本只有一部分节点正常
+### 8.5 `/.well-known` 或 `/app-api` 间歇性 502，但 backend 明明是健康的
+
+这通常不是 Java 后端挂了，而是 `authverse-web` 的 Nginx 在启动时把 `authverse-backend` 解析成了旧 task IP。
+
+处理：
+
+1. 确认前端镜像已经包含动态 DNS 版本的 `authverse.conf.template`
+2. 重建 `AUTHVERSE_WEB_IMAGE`
+3. 强制滚动更新：
+
+```bash
+docker service update --force authverse_authverse-web
+```
+
+如果你直接在 `authverse-web` 容器里访问 `http://authverse-backend:48080/...` 能通，但公网入口还是 502，优先怀疑就是这个问题。
+
+### 8.6 bind 模式下后端多副本只有一部分节点正常
 
 原因通常是：
 

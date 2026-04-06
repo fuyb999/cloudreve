@@ -102,7 +102,7 @@ services:
       PROXY_READ_TIMEOUT: ${CLOUDREVE_MASTER_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${CLOUDREVE_MASTER_PROXY_SEND_TIMEOUT:-3600s}
     configs:
-      - source: cloudreve_proxy_template
+      - source: cloudreve_proxy_template_v2
         target: /etc/nginx/templates/default.conf.template
         mode: 0444
     ports:
@@ -113,7 +113,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/api/v4/site/ping >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -207,7 +207,7 @@ services:
       PROXY_READ_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_SEND_TIMEOUT:-3600s}
     configs:
-      - source: cloudreve_proxy_template
+      - source: cloudreve_proxy_template_v2
         target: /etc/nginx/templates/default.conf.template
         mode: 0444
     ports:
@@ -218,7 +218,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -S -O - http://127.0.0.1/api/v4/site/ping >/dev/null 2>&1 && exit 0; wget -S -O - http://127.0.0.1/api/v4/site/ping 2>&1 | grep -q 'HTTP/1.1 404' || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -871,5 +871,5 @@ configs:
     file: ./docker/swarm/minio-swarm-entrypoint.sh
   minio_init_v1:
     file: ./docker/swarm/minio-init.sh
-  cloudreve_proxy_template:
+  cloudreve_proxy_template_v2:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template

@@ -7,6 +7,12 @@ server {
   proxy_read_timeout ${PROXY_READ_TIMEOUT};
   proxy_send_timeout ${PROXY_SEND_TIMEOUT};
 
+  location = /healthz {
+    access_log off;
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
   location = /api/v4/file/sync/events {
     proxy_http_version 1.1;
     proxy_set_header Connection "";
