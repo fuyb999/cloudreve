@@ -1151,6 +1151,11 @@ func (m *manager) fullTextIndexForNewEntity(ctx context.Context, session *fs.Upl
 		return
 	}
 
+	if inventory.SkipNativeFTSEnqueueFromContext(ctx) {
+		m.l.Debug("Skipping full text queue for file %d: native FTS enqueue disabled in context.", session.FileID)
+		return
+	}
+
 	if !m.settings.FTSEnabled(ctx) {
 		m.l.Debug("Skipping full text queue for file %d: FTS disabled.", session.FileID)
 		return

@@ -17,6 +17,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	ententity "github.com/cloudreve/Cloudreve/v4/ent/entity"
+	entexternalidentity "github.com/cloudreve/Cloudreve/v4/ent/externalidentity"
 	entfile "github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
@@ -30,19 +31,22 @@ import (
 )
 
 const (
-	defaultMarkerKey = "sys:legacy_mysql_migrator"
+	defaultMarkerKey            = "sys:legacy_mysql_migrator"
+	defaultMySQLSourceBatchSize = 1000
 )
 
 type config struct {
-	Source    sourceConfig    `yaml:"source"`
-	Target    targetConfig    `yaml:"target"`
-	Migration migrationConfig `yaml:"migration"`
+	Source     sourceConfig     `yaml:"source"`
+	Target     targetConfig     `yaml:"target"`
+	Migration  migrationConfig  `yaml:"migration"`
+	SearchSync searchSyncConfig `yaml:"search_sync"`
 }
 
 type sourceConfig struct {
-	Driver string `yaml:"driver"`
-	DSN    string `yaml:"dsn"`
-	Query  string `yaml:"query"`
+	Driver    string `yaml:"driver"`
+	DSN       string `yaml:"dsn"`
+	Query     string `yaml:"query"`
+	BatchSize int    `yaml:"batch_size"`
 }
 
 type targetConfig struct {
@@ -53,46 +57,62 @@ type targetConfig struct {
 }
 
 type migrationConfig struct {
-	DryRun                  bool        `yaml:"dry_run"`
-	ContinueOnError         bool        `yaml:"continue_on_error"`
-	SkipExisting            bool        `yaml:"skip_existing"`
-	SameIDFallback          bool        `yaml:"same_id_fallback"`
-	AllowEmailLookup        bool        `yaml:"allow_email_lookup"`
-	AllowUsernameLookup     bool        `yaml:"allow_username_lookup"`
-	DefaultPersonalPolicyID int         `yaml:"default_personal_policy_id"`
-	DefaultPublicPolicyID   int         `yaml:"default_public_policy_id"`
-	DefaultPublicOwnerID    int         `yaml:"default_public_owner_id"`
-	MarkerKey               string      `yaml:"marker_key"`
-	PrivateMetadataKeys     []string    `yaml:"private_metadata_keys"`
-	UserIDMap               map[int]int `yaml:"user_id_map"`
+	DryRun                   bool            `yaml:"dry_run"`
+	ContinueOnError          bool            `yaml:"continue_on_error"`
+	SkipExisting             bool            `yaml:"skip_existing"`
+	SkipMetadataImport       bool            `yaml:"skip_metadata_import"`
+	DisableNativeFTSEnqueue  bool            `yaml:"disable_native_fts_enqueue"`
+	SameIDFallback           bool            `yaml:"same_id_fallback"`
+	AllowEmailLookup         bool            `yaml:"allow_email_lookup"`
+	AllowUsernameLookup      bool            `yaml:"allow_username_lookup"`
+	ExternalIdentityProvider string          `yaml:"external_identity_provider"`
+	ExternalIdentityIssuer   string          `yaml:"external_identity_issuer"`
+	DefaultPolicyID          int             `yaml:"default_policy_id"`
+	DefaultPersonalPolicyID  int             `yaml:"default_personal_policy_id"`
+	DefaultPublicPolicyID    int             `yaml:"default_public_policy_id"`
+	PolicyRules              []policyRule    `yaml:"policy_rules"`
+	DefaultPublicOwnerID     int             `yaml:"default_public_owner_id"`
+	MarkerKey                string          `yaml:"marker_key"`
+	PrivateMetadataKeys      []string        `yaml:"private_metadata_keys"`
+	UserIDMap                legacyUserIDMap `yaml:"user_id_map"`
+}
+
+type policyRule struct {
+	Bucket     string `yaml:"bucket"`
+	PathPrefix string `yaml:"path_prefix"`
+	PolicyID   int    `yaml:"policy_id"`
 }
 
 type legacyRow struct {
-	LegacyID        string
-	Scope           string
-	TargetPath      string
-	OwnerID         int
-	OwnerEmail      string
-	OwnerUsername   string
-	IsDir           bool
-	ObjectKey       string
-	Size            int64
-	StoragePolicyID int
-	Metadata        map[string]string
-	CreatedAt       *time.Time
-	UpdatedAt       *time.Time
+	LegacyID            string
+	Scope               string
+	TargetPath          string
+	OwnerIDRaw          string
+	OwnerExternalUserID string
+	OwnerEmail          string
+	OwnerUsername       string
+	IsDir               bool
+	Bucket              string
+	ObjectKey           string
+	Size                int64
+	StoragePolicyID     int
+	Metadata            map[string]string
+	CreatedAt           *time.Time
+	UpdatedAt           *time.Time
 }
 
 type migrationMarker struct {
-	LegacyID        string `json:"legacy_id,omitempty"`
-	Scope           string `json:"scope,omitempty"`
-	TargetPath      string `json:"target_path,omitempty"`
-	LegacyOwnerID   int    `json:"legacy_owner_id,omitempty"`
-	ResolvedOwnerID int    `json:"resolved_owner_id,omitempty"`
-	OwnerEmail      string `json:"owner_email,omitempty"`
-	OwnerUsername   string `json:"owner_username,omitempty"`
-	ObjectKey       string `json:"object_key,omitempty"`
-	StoragePolicyID int    `json:"storage_policy_id,omitempty"`
+	LegacyID            string `json:"legacy_id,omitempty"`
+	Scope               string `json:"scope,omitempty"`
+	TargetPath          string `json:"target_path,omitempty"`
+	LegacyOwnerID       string `json:"legacy_owner_id,omitempty"`
+	OwnerExternalUserID string `json:"owner_external_user_id,omitempty"`
+	ResolvedOwnerID     int    `json:"resolved_owner_id,omitempty"`
+	OwnerEmail          string `json:"owner_email,omitempty"`
+	OwnerUsername       string `json:"owner_username,omitempty"`
+	Bucket              string `json:"bucket,omitempty"`
+	ObjectKey           string `json:"object_key,omitempty"`
+	StoragePolicyID     int    `json:"storage_policy_id,omitempty"`
 }
 
 type migrationStats struct {
@@ -105,28 +125,36 @@ type migrationStats struct {
 	DryRunPlanned    int
 	Failed           int
 	RootsAutoCreated int
+	ESSourceDocs     int
+	ESMatchedDocs    int
+	ESWrittenDocs    int
+	ESSkippedDocs    int
+	ESFailedDocs     int
 }
 
 type migrator struct {
-	cfg             config
-	l               logging.Logger
-	sourceDB        *sqlstdlib.DB
-	targetClient    *ent.Client
-	targetDBType    conf.DBType
-	fileClient      inventory.FileClient
-	userClient      inventory.UserClient
-	policyClient    inventory.StoragePolicyClient
-	settingClient   inventory.SettingClient
-	publicService   *publicshare.Service
-	stats           migrationStats
-	userByID        map[int]*ent.User
-	userByEmail     map[string]*ent.User
-	userByUsername  map[string]*ent.User
-	userRootIDByID  map[int]int
-	policyExists    map[int]bool
-	folderIDByKey   map[string]int
-	publicRootID    int
-	privateMetaKeys map[string]bool
+	cfg                    config
+	l                      logging.Logger
+	sourceDB               *sqlstdlib.DB
+	targetClient           *ent.Client
+	targetDBType           conf.DBType
+	hasher                 hashid.Encoder
+	fileClient             inventory.FileClient
+	userClient             inventory.UserClient
+	policyClient           inventory.StoragePolicyClient
+	settingClient          inventory.SettingClient
+	publicService          *publicshare.Service
+	stats                  migrationStats
+	userByID               map[int]*ent.User
+	userByExternalIdentity map[string]*ent.User
+	userByEmail            map[string]*ent.User
+	userByUsername         map[string]*ent.User
+	userRootIDByID         map[int]int
+	policyExists           map[int]bool
+	policyByID             map[int]*ent.StoragePolicy
+	folderIDByKey          map[string]int
+	publicRootID           int
+	privateMetaKeys        map[string]bool
 }
 
 type ownerResolution struct {
@@ -139,6 +167,58 @@ type rowOutcome struct {
 	FolderCache map[string]int
 	StorageDiff inventory.StorageDiff
 	CreatedRoot bool
+}
+
+func (r *legacyRow) ownerIDInt() (int, bool) {
+	if r == nil {
+		return 0, false
+	}
+	raw := strings.TrimSpace(r.OwnerIDRaw)
+	if raw == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, false
+	}
+
+	maxInt := int64(^uint(0) >> 1)
+	if parsed > maxInt {
+		return 0, false
+	}
+
+	return int(parsed), true
+}
+
+type legacyUserIDMap map[string]int
+
+func (m *legacyUserIDMap) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil || value.Kind == 0 {
+		return nil
+	}
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("user_id_map must be a mapping")
+	}
+
+	result := make(legacyUserIDMap, len(value.Content)/2)
+	for i := 0; i < len(value.Content); i += 2 {
+		keyNode := value.Content[i]
+		valueNode := value.Content[i+1]
+
+		key := strings.TrimSpace(keyNode.Value)
+		if key == "" {
+			return fmt.Errorf("user_id_map contains an empty key")
+		}
+
+		var mapped int
+		if err := valueNode.Decode(&mapped); err != nil {
+			return fmt.Errorf("user_id_map[%q]: %w", key, err)
+		}
+		result[key] = mapped
+	}
+
+	*m = result
+	return nil
 }
 
 func main() {
@@ -189,13 +269,37 @@ func loadConfig(configPath string) (config, error) {
 	cfg.Target.Driver = strings.TrimSpace(cfg.Target.Driver)
 	cfg.Target.DSN = strings.TrimSpace(cfg.Target.DSN)
 	cfg.Target.HashIDSalt = strings.TrimSpace(cfg.Target.HashIDSalt)
+	cfg.Migration.ExternalIdentityProvider = strings.TrimSpace(cfg.Migration.ExternalIdentityProvider)
+	cfg.Migration.ExternalIdentityIssuer = strings.TrimSpace(cfg.Migration.ExternalIdentityIssuer)
 	cfg.Migration.MarkerKey = strings.TrimSpace(cfg.Migration.MarkerKey)
+	for i := range cfg.Migration.PolicyRules {
+		cfg.Migration.PolicyRules[i].Bucket = strings.TrimSpace(cfg.Migration.PolicyRules[i].Bucket)
+		cfg.Migration.PolicyRules[i].PathPrefix = normalizeObjectPathPrefix(cfg.Migration.PolicyRules[i].PathPrefix)
+	}
+	cfg.SearchSync.normalize()
 
-	if cfg.Source.Driver == "" || cfg.Source.DSN == "" || cfg.Source.Query == "" {
+	if !cfg.Migration.SkipMetadataImport && (cfg.Source.Driver == "" || cfg.Source.DSN == "" || cfg.Source.Query == "") {
 		return config{}, fmt.Errorf("source.driver/source.dsn/source.query are required")
+	}
+	if cfg.Source.BatchSize < 0 {
+		return config{}, fmt.Errorf("source.batch_size must be >= 0")
+	}
+	if cfg.Migration.DefaultPolicyID < 0 {
+		return config{}, fmt.Errorf("migration.default_policy_id must be >= 0")
 	}
 	if cfg.Target.Driver == "" || cfg.Target.DSN == "" {
 		return config{}, fmt.Errorf("target.driver/target.dsn are required")
+	}
+	if isMySQLDriver(cfg.Source.Driver) && cfg.Source.BatchSize == 0 {
+		cfg.Source.BatchSize = defaultMySQLSourceBatchSize
+	}
+	if cfg.Migration.ExternalIdentityIssuer != "" && cfg.Migration.ExternalIdentityProvider == "" {
+		return config{}, fmt.Errorf("migration.external_identity_provider is required when migration.external_identity_issuer is set")
+	}
+	for i, rule := range cfg.Migration.PolicyRules {
+		if rule.PolicyID <= 0 {
+			return config{}, fmt.Errorf("migration.policy_rules[%d].policy_id must be > 0", i)
+		}
 	}
 
 	if cfg.Target.DBType == "" {
@@ -211,7 +315,10 @@ func loadConfig(configPath string) (config, error) {
 		cfg.Target.HashIDSalt = "legacy-mysql-migrator"
 	}
 	if cfg.Migration.UserIDMap == nil {
-		cfg.Migration.UserIDMap = map[int]int{}
+		cfg.Migration.UserIDMap = legacyUserIDMap{}
+	}
+	if err := cfg.SearchSync.validate(); err != nil {
+		return config{}, err
 	}
 
 	return cfg, nil
@@ -230,53 +337,75 @@ func inferDBType(driver string) conf.DBType {
 	}
 }
 
+func isMySQLDriver(driver string) bool {
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case "mysql", "mariadb":
+		return true
+	default:
+		return false
+	}
+}
+
 func newMigrator(cfg config) (*migrator, error) {
 	logger := logging.NewConsoleLogger(logging.LevelInformational)
 
-	sourceDB, err := sqlstdlib.Open(cfg.Source.Driver, cfg.Source.DSN)
-	if err != nil {
-		return nil, fmt.Errorf("open source db: %w", err)
-	}
-	if err := sourceDB.Ping(); err != nil {
-		_ = sourceDB.Close()
-		return nil, fmt.Errorf("ping source db: %w", err)
+	var sourceDB *sqlstdlib.DB
+	if !cfg.Migration.SkipMetadataImport {
+		var err error
+		sourceDB, err = sqlstdlib.Open(cfg.Source.Driver, cfg.Source.DSN)
+		if err != nil {
+			return nil, fmt.Errorf("open source db: %w", err)
+		}
+		if err := sourceDB.Ping(); err != nil {
+			_ = sourceDB.Close()
+			return nil, fmt.Errorf("ping source db: %w", err)
+		}
 	}
 
 	targetClient, err := ent.Open(cfg.Target.Driver, cfg.Target.DSN)
 	if err != nil {
-		_ = sourceDB.Close()
+		if sourceDB != nil {
+			_ = sourceDB.Close()
+		}
 		return nil, fmt.Errorf("open target db: %w", err)
 	}
 	if _, err := targetClient.User.Query().Limit(1).All(context.Background()); err != nil {
 		_ = targetClient.Close()
-		_ = sourceDB.Close()
+		if sourceDB != nil {
+			_ = sourceDB.Close()
+		}
 		return nil, fmt.Errorf("probe target db: %w", err)
 	}
 
 	hasher, err := hashid.New(cfg.Target.HashIDSalt)
 	if err != nil {
 		_ = targetClient.Close()
-		_ = sourceDB.Close()
+		if sourceDB != nil {
+			_ = sourceDB.Close()
+		}
 		return nil, fmt.Errorf("create hashid encoder: %w", err)
 	}
 
 	m := &migrator{
-		cfg:             cfg,
-		l:               logger,
-		sourceDB:        sourceDB,
-		targetClient:    targetClient,
-		targetDBType:    cfg.Target.DBType,
-		fileClient:      inventory.NewFileClient(targetClient, cfg.Target.DBType, nil),
-		userClient:      inventory.NewUserClient(targetClient),
-		policyClient:    inventory.NewStoragePolicyClient(targetClient, nil),
-		settingClient:   inventory.NewSettingClient(targetClient, nil),
-		userByID:        map[int]*ent.User{},
-		userByEmail:     map[string]*ent.User{},
-		userByUsername:  map[string]*ent.User{},
-		userRootIDByID:  map[int]int{},
-		policyExists:    map[int]bool{},
-		folderIDByKey:   map[string]int{},
-		privateMetaKeys: map[string]bool{},
+		cfg:                    cfg,
+		l:                      logger,
+		sourceDB:               sourceDB,
+		targetClient:           targetClient,
+		targetDBType:           cfg.Target.DBType,
+		hasher:                 hasher,
+		fileClient:             inventory.NewFileClient(targetClient, cfg.Target.DBType, nil),
+		userClient:             inventory.NewUserClient(targetClient),
+		policyClient:           inventory.NewStoragePolicyClient(targetClient, nil),
+		settingClient:          inventory.NewSettingClient(targetClient, nil),
+		userByID:               map[int]*ent.User{},
+		userByExternalIdentity: map[string]*ent.User{},
+		userByEmail:            map[string]*ent.User{},
+		userByUsername:         map[string]*ent.User{},
+		userRootIDByID:         map[int]int{},
+		policyExists:           map[int]bool{},
+		policyByID:             map[int]*ent.StoragePolicy{},
+		folderIDByKey:          map[string]int{},
+		privateMetaKeys:        map[string]bool{},
 	}
 	m.publicService = publicshare.NewService(logger, m.fileClient, m.settingClient, hasher)
 	for _, key := range cfg.Migration.PrivateMetadataKeys {
@@ -300,12 +429,53 @@ func (m *migrator) close() {
 }
 
 func (m *migrator) run(ctx context.Context) error {
-	m.l.Info("Starting legacy MySQL metadata migration. dry_run=%v skip_existing=%v continue_on_error=%v", m.cfg.Migration.DryRun, m.cfg.Migration.SkipExisting, m.cfg.Migration.ContinueOnError)
+	if !m.cfg.Migration.SkipMetadataImport {
+		m.l.Info("Starting legacy MySQL metadata migration. dry_run=%v skip_existing=%v continue_on_error=%v disable_native_fts_enqueue=%v", m.cfg.Migration.DryRun, m.cfg.Migration.SkipExisting, m.cfg.Migration.ContinueOnError, m.cfg.Migration.DisableNativeFTSEnqueue)
 
-	if err := m.validateConfiguredDefaults(ctx); err != nil {
-		return err
+		if err := m.validateConfiguredDefaults(ctx); err != nil {
+			return err
+		}
+
+		if isMySQLDriver(m.cfg.Source.Driver) && m.cfg.Source.BatchSize > 0 {
+			m.l.Info("Using batched MySQL source reads. batch_size=%d", m.cfg.Source.BatchSize)
+			if err := m.runBatched(ctx, m.cfg.Source.BatchSize); err != nil {
+				return err
+			}
+		} else {
+			if err := m.runStreaming(ctx); err != nil {
+				return err
+			}
+		}
+	} else {
+		m.l.Info("Skipping legacy MySQL metadata migration phase. skip_metadata_import=true")
 	}
 
+	if m.cfg.SearchSync.Enabled {
+		if err := m.runSearchSync(ctx); err != nil {
+			return err
+		}
+	}
+
+	m.l.Info("Migration completed. rows=%d files_created=%d folders_created=%d folders_updated=%d files_skipped=%d folders_skipped=%d dry_run_planned=%d failed=%d auto_roots=%d es_source_docs=%d es_matched=%d es_written=%d es_skipped=%d es_failed=%d",
+		m.stats.RowsTotal,
+		m.stats.FilesCreated,
+		m.stats.FoldersCreated,
+		m.stats.FoldersUpdated,
+		m.stats.FilesSkipped,
+		m.stats.FoldersSkipped,
+		m.stats.DryRunPlanned,
+		m.stats.Failed,
+		m.stats.RootsAutoCreated,
+		m.stats.ESSourceDocs,
+		m.stats.ESMatchedDocs,
+		m.stats.ESWrittenDocs,
+		m.stats.ESSkippedDocs,
+		m.stats.ESFailedDocs,
+	)
+	return nil
+}
+
+func (m *migrator) runStreaming(ctx context.Context) error {
 	rows, err := m.sourceDB.QueryContext(ctx, m.cfg.Source.Query)
 	if err != nil {
 		return fmt.Errorf("query source rows: %w", err)
@@ -320,8 +490,6 @@ func (m *migrator) run(ctx context.Context) error {
 	rowNum := 0
 	for rows.Next() {
 		rowNum++
-		m.stats.RowsTotal++
-
 		raw, err := scanRow(rows, columns)
 		if err != nil {
 			if hErr := m.handleRowError(rowNum, fmt.Errorf("scan row: %w", err)); hErr != nil {
@@ -329,42 +497,105 @@ func (m *migrator) run(ctx context.Context) error {
 			}
 			continue
 		}
-
-		legacy, err := parseLegacyRow(raw, rowNum)
-		if err != nil {
-			if hErr := m.handleRowError(rowNum, err); hErr != nil {
-				return hErr
-			}
-			continue
-		}
-
-		if err := m.processRow(ctx, legacy); err != nil {
-			if hErr := m.handleRowError(rowNum, fmt.Errorf("legacy_id=%s path=%s: %w", legacy.LegacyID, legacy.TargetPath, err)); hErr != nil {
-				return hErr
-			}
-			continue
+		if err := m.processRawRow(ctx, rowNum, raw); err != nil {
+			return err
 		}
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate source rows: %w", err)
 	}
-
-	m.l.Info("Migration completed. rows=%d files_created=%d folders_created=%d folders_updated=%d files_skipped=%d folders_skipped=%d dry_run_planned=%d failed=%d auto_roots=%d",
-		m.stats.RowsTotal,
-		m.stats.FilesCreated,
-		m.stats.FoldersCreated,
-		m.stats.FoldersUpdated,
-		m.stats.FilesSkipped,
-		m.stats.FoldersSkipped,
-		m.stats.DryRunPlanned,
-		m.stats.Failed,
-		m.stats.RootsAutoCreated,
-	)
 	return nil
 }
 
+func (m *migrator) runBatched(ctx context.Context, batchSize int) error {
+	offset := 0
+	batchQuery := buildMySQLBatchQuery(m.cfg.Source.Query)
+	for {
+		rawRows, err := m.readSourceBatch(ctx, batchQuery, batchSize, offset)
+		if err != nil {
+			return fmt.Errorf("read source batch offset=%d limit=%d: %w", offset, batchSize, err)
+		}
+		if len(rawRows) == 0 {
+			return nil
+		}
+		m.l.Info("Loaded source batch offset=%d rows=%d", offset, len(rawRows))
+		for index, raw := range rawRows {
+			rowNum := offset + index + 1
+			if err := m.processRawRow(ctx, rowNum, raw); err != nil {
+				return err
+			}
+		}
+		offset += len(rawRows)
+		if len(rawRows) < batchSize {
+			return nil
+		}
+	}
+}
+
+func (m *migrator) readSourceBatch(ctx context.Context, query string, batchSize, offset int) ([]map[string]any, error) {
+	rows, err := m.sourceDB.QueryContext(ctx, query, batchSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("read source columns: %w", err)
+	}
+
+	batch := make([]map[string]any, 0, batchSize)
+	for rows.Next() {
+		raw, err := scanRow(rows, columns)
+		if err != nil {
+			return nil, fmt.Errorf("scan row: %w", err)
+		}
+		batch = append(batch, raw)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate source rows: %w", err)
+	}
+	return batch, nil
+}
+
+func (m *migrator) processRawRow(ctx context.Context, rowNum int, raw map[string]any) error {
+	m.stats.RowsTotal++
+	legacy, err := parseLegacyRow(raw, rowNum)
+	if err != nil {
+		if hErr := m.handleRowError(rowNum, err); hErr != nil {
+			return hErr
+		}
+		return nil
+	}
+
+	if err := m.processRow(ctx, legacy); err != nil {
+		if hErr := m.handleRowError(rowNum, fmt.Errorf("legacy_id=%s path=%s: %w", legacy.LegacyID, legacy.TargetPath, err)); hErr != nil {
+			return hErr
+		}
+		return nil
+	}
+	return nil
+}
+
+func buildMySQLBatchQuery(query string) string {
+	trimmed := strings.TrimSpace(query)
+	trimmed = strings.TrimSuffix(trimmed, ";")
+	return trimmed + " LIMIT ? OFFSET ?"
+}
+
+func normalizeObjectPathPrefix(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.ReplaceAll(trimmed, "\\", "/")
+	return strings.TrimPrefix(trimmed, "/")
+}
+
 func (m *migrator) validateConfiguredDefaults(ctx context.Context) error {
+	if m.cfg.Migration.DefaultPolicyID > 0 {
+		if err := m.ensurePolicyExists(ctx, m.cfg.Migration.DefaultPolicyID); err != nil {
+			return fmt.Errorf("default_policy_id invalid: %w", err)
+		}
+	}
 	if m.cfg.Migration.DefaultPersonalPolicyID > 0 {
 		if err := m.ensurePolicyExists(ctx, m.cfg.Migration.DefaultPersonalPolicyID); err != nil {
 			return fmt.Errorf("default_personal_policy_id invalid: %w", err)
@@ -378,6 +609,11 @@ func (m *migrator) validateConfiguredDefaults(ctx context.Context) error {
 	if m.cfg.Migration.DefaultPublicOwnerID > 0 {
 		if _, err := m.getUserByID(ctx, m.cfg.Migration.DefaultPublicOwnerID); err != nil {
 			return fmt.Errorf("default_public_owner_id invalid: %w", err)
+		}
+	}
+	for i, rule := range m.cfg.Migration.PolicyRules {
+		if err := m.ensurePolicyExists(ctx, rule.PolicyID); err != nil {
+			return fmt.Errorf("policy_rules[%d] invalid: %w", i, err)
 		}
 	}
 	return nil
@@ -450,12 +686,14 @@ func parseLegacyRow(raw map[string]any, rowNum int) (*legacyRow, error) {
 		legacyID = fmt.Sprintf("row-%d", rowNum)
 	}
 
-	ownerID, _ := firstInt(raw, "owner_id", "legacy_owner_id")
+	ownerID, _ := firstString(raw, "owner_id", "legacy_owner_id")
+	ownerExternalUserID, _ := firstString(raw, "owner_external_user_id", "external_user_id")
 	ownerEmail, _ := firstString(raw, "owner_email")
 	ownerUsername, _ := firstString(raw, "owner_username")
-	objectKey, _ := firstString(raw, "object_key", "source")
+	bucket, _ := firstString(raw, "bucket", "bucket_name", "storage_bucket")
+	objectKey, _ := firstString(raw, "object_key", "source", "object_path", "source_path", "storage_path", "s3_key")
 	if !isDir && strings.TrimSpace(objectKey) == "" {
-		return nil, fmt.Errorf("row %d file row missing object_key/source", rowNum)
+		return nil, fmt.Errorf("row %d file row missing object_key/source/object_path", rowNum)
 	}
 
 	size, ok := firstInt64(raw, "size")
@@ -471,19 +709,21 @@ func parseLegacyRow(raw map[string]any, rowNum int) (*legacyRow, error) {
 	}
 
 	return &legacyRow{
-		LegacyID:        legacyID,
-		Scope:           normalizedScope,
-		TargetPath:      normalizedPath,
-		OwnerID:         ownerID,
-		OwnerEmail:      ownerEmail,
-		OwnerUsername:   ownerUsername,
-		IsDir:           isDir,
-		ObjectKey:       strings.TrimSpace(objectKey),
-		Size:            size,
-		StoragePolicyID: policyID,
-		Metadata:        metadata,
-		CreatedAt:       createdAt,
-		UpdatedAt:       updatedAt,
+		LegacyID:            legacyID,
+		Scope:               normalizedScope,
+		TargetPath:          normalizedPath,
+		OwnerIDRaw:          ownerID,
+		OwnerExternalUserID: ownerExternalUserID,
+		OwnerEmail:          ownerEmail,
+		OwnerUsername:       ownerUsername,
+		IsDir:               isDir,
+		Bucket:              bucket,
+		ObjectKey:           strings.TrimSpace(objectKey),
+		Size:                size,
+		StoragePolicyID:     policyID,
+		Metadata:            metadata,
+		CreatedAt:           createdAt,
+		UpdatedAt:           updatedAt,
 	}, nil
 }
 
@@ -598,6 +838,10 @@ func firstInt(raw map[string]any, keys ...string) (int, bool) {
 			return int(typed), true
 		case float64:
 			return int(typed), true
+		case json.Number:
+			if parsed, err := typed.Int64(); err == nil {
+				return int(parsed), true
+			}
 		case string:
 			parsed, err := strconv.Atoi(strings.TrimSpace(typed))
 			if err == nil {
@@ -639,6 +883,10 @@ func firstInt64(raw map[string]any, keys ...string) (int64, bool) {
 			return int64(typed), true
 		case float64:
 			return int64(typed), true
+		case json.Number:
+			if parsed, err := typed.Int64(); err == nil {
+				return parsed, true
+			}
 		case string:
 			parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
 			if err == nil {
@@ -773,18 +1021,29 @@ func (m *migrator) processRow(ctx context.Context, row *legacyRow) error {
 }
 
 func (m *migrator) resolveOwner(ctx context.Context, row *legacyRow) (*ownerResolution, error) {
-	if row.OwnerID > 0 {
-		if mapped, ok := m.cfg.Migration.UserIDMap[row.OwnerID]; ok {
+	if ownerID := strings.TrimSpace(row.OwnerIDRaw); ownerID != "" {
+		if mapped, ok := m.cfg.Migration.UserIDMap[ownerID]; ok {
 			user, err := m.getUserByID(ctx, mapped)
 			if err != nil {
-				return nil, fmt.Errorf("mapped owner_id %d -> %d not found: %w", row.OwnerID, mapped, err)
+				return nil, fmt.Errorf("mapped owner_id %s -> %d not found: %w", ownerID, mapped, err)
 			}
-			return &ownerResolution{User: user, Reason: fmt.Sprintf("user_id_map:%d->%d", row.OwnerID, mapped)}, nil
+			return &ownerResolution{User: user, Reason: fmt.Sprintf("user_id_map:%s->%d", ownerID, mapped)}, nil
 		}
+	}
+	if lookupValue := m.externalIdentityLookupValue(row); lookupValue != "" {
+		user, found, err := m.lookupUserByExternalIdentity(ctx, lookupValue)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return &ownerResolution{User: user, Reason: fmt.Sprintf("external_identity:%s", lookupValue)}, nil
+		}
+	}
+	if sameID, ok := row.ownerIDInt(); ok {
 		if m.cfg.Migration.SameIDFallback {
-			user, err := m.getUserByID(ctx, row.OwnerID)
+			user, err := m.getUserByID(ctx, sameID)
 			if err == nil {
-				return &ownerResolution{User: user, Reason: fmt.Sprintf("same_id:%d", row.OwnerID)}, nil
+				return &ownerResolution{User: user, Reason: fmt.Sprintf("same_id:%d", sameID)}, nil
 			}
 		}
 	}
@@ -808,9 +1067,9 @@ func (m *migrator) resolveOwner(ctx context.Context, row *legacyRow) (*ownerReso
 		return &ownerResolution{User: user, Reason: fmt.Sprintf("default_public_owner_id:%d", user.ID)}, nil
 	}
 	if row.Scope == "personal" {
-		return nil, fmt.Errorf("cannot resolve personal owner: owner_id=%d owner_email=%q owner_username=%q", row.OwnerID, row.OwnerEmail, row.OwnerUsername)
+		return nil, fmt.Errorf("cannot resolve personal owner: owner_id=%q owner_external_user_id=%q owner_email=%q owner_username=%q", row.OwnerIDRaw, row.OwnerExternalUserID, row.OwnerEmail, row.OwnerUsername)
 	}
-	return nil, fmt.Errorf("cannot resolve public owner: owner_id=%d owner_email=%q owner_username=%q", row.OwnerID, row.OwnerEmail, row.OwnerUsername)
+	return nil, fmt.Errorf("cannot resolve public owner: owner_id=%q owner_external_user_id=%q owner_email=%q owner_username=%q", row.OwnerIDRaw, row.OwnerExternalUserID, row.OwnerEmail, row.OwnerUsername)
 }
 
 func (m *migrator) processRowDryRun(ctx context.Context, row *legacyRow, owner *ownerResolution) error {
@@ -839,6 +1098,7 @@ func (m *migrator) processRowLive(ctx context.Context, row *legacyRow, owner *ow
 	}
 	actorCtx := context.WithValue(ctx, inventory.UserCtx{}, owner.User)
 	actorCtx = context.WithValue(actorCtx, inventory.UserIDCtx{}, owner.User.ID)
+	actorCtx = inventory.WithSkipNativeFTSEnqueue(actorCtx, m.cfg.Migration.DisableNativeFTSEnqueue)
 
 	tx, err := m.targetClient.Tx(actorCtx)
 	if err != nil {
@@ -1127,21 +1387,52 @@ func joinPath(base, name string) string {
 }
 
 func (m *migrator) resolvePolicyID(ctx context.Context, row *legacyRow) (int, error) {
-	policyID := row.StoragePolicyID
-	if policyID == 0 {
-		if row.Scope == "public" {
-			policyID = m.cfg.Migration.DefaultPublicPolicyID
-		} else {
-			policyID = m.cfg.Migration.DefaultPersonalPolicyID
-		}
-	}
-	if policyID <= 0 {
-		return 0, fmt.Errorf("no storage policy resolved for legacy_id=%s path=%s", row.LegacyID, row.TargetPath)
+	policyID, ok := m.selectConfiguredPolicyID(row)
+	if !ok || policyID <= 0 {
+		return 0, fmt.Errorf("no storage policy resolved for legacy_id=%s path=%s bucket=%s object_key=%s", row.LegacyID, row.TargetPath, row.Bucket, row.ObjectKey)
 	}
 	if err := m.ensurePolicyExists(ctx, policyID); err != nil {
 		return 0, err
 	}
 	return policyID, nil
+}
+
+func (m *migrator) selectConfiguredPolicyID(row *legacyRow) (int, bool) {
+	if row == nil {
+		return 0, false
+	}
+	if row.StoragePolicyID > 0 {
+		return row.StoragePolicyID, true
+	}
+	for _, rule := range m.cfg.Migration.PolicyRules {
+		if matchPolicyRule(rule, row) {
+			return rule.PolicyID, true
+		}
+	}
+	if m.cfg.Migration.DefaultPolicyID > 0 {
+		return m.cfg.Migration.DefaultPolicyID, true
+	}
+	if row.Scope == "public" && m.cfg.Migration.DefaultPublicPolicyID > 0 {
+		return m.cfg.Migration.DefaultPublicPolicyID, true
+	}
+	if row.Scope != "public" && m.cfg.Migration.DefaultPersonalPolicyID > 0 {
+		return m.cfg.Migration.DefaultPersonalPolicyID, true
+	}
+	return 0, false
+}
+
+func matchPolicyRule(rule policyRule, row *legacyRow) bool {
+	if row == nil {
+		return false
+	}
+	if rule.Bucket != "" && !strings.EqualFold(strings.TrimSpace(row.Bucket), rule.Bucket) {
+		return false
+	}
+	if rule.PathPrefix == "" {
+		return true
+	}
+	objectKey := normalizeObjectPathPrefix(row.ObjectKey)
+	return strings.HasPrefix(objectKey, rule.PathPrefix)
 }
 
 func (m *migrator) ensurePolicyExists(ctx context.Context, policyID int) error {
@@ -1168,6 +1459,64 @@ func (m *migrator) getUserByID(ctx context.Context, id int) (*ent.User, error) {
 	}
 	m.cacheUser(user)
 	return user, nil
+}
+
+func (m *migrator) externalIdentityLookupValue(row *legacyRow) string {
+	if m.cfg.Migration.ExternalIdentityProvider == "" || row == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(row.OwnerExternalUserID); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(row.OwnerIDRaw)
+}
+
+func (m *migrator) lookupUserByExternalIdentity(ctx context.Context, externalUserID string) (*ent.User, bool, error) {
+	cacheKey := externalIdentityCacheKey(m.cfg.Migration.ExternalIdentityProvider, m.cfg.Migration.ExternalIdentityIssuer, externalUserID)
+	if user, ok := m.userByExternalIdentity[cacheKey]; ok {
+		return user, true, nil
+	}
+
+	query := m.targetClient.ExternalIdentity.Query().Where(
+		entexternalidentity.ProviderEQ(m.cfg.Migration.ExternalIdentityProvider),
+		entexternalidentity.ExternalUserIDEQ(externalUserID),
+	)
+	if issuer := m.cfg.Migration.ExternalIdentityIssuer; issuer != "" {
+		query = query.Where(entexternalidentity.IssuerEQ(issuer))
+	}
+
+	identities, err := query.Limit(2).All(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("query external identity provider=%q issuer=%q external_user_id=%q: %w",
+			m.cfg.Migration.ExternalIdentityProvider,
+			m.cfg.Migration.ExternalIdentityIssuer,
+			externalUserID,
+			err,
+		)
+	}
+	if len(identities) == 0 {
+		return nil, false, nil
+	}
+	if len(identities) > 1 {
+		return nil, false, fmt.Errorf("multiple external identities matched provider=%q issuer=%q external_user_id=%q",
+			m.cfg.Migration.ExternalIdentityProvider,
+			m.cfg.Migration.ExternalIdentityIssuer,
+			externalUserID,
+		)
+	}
+
+	user, err := m.getUserByID(ctx, identities[0].UserID)
+	if err != nil {
+		return nil, false, fmt.Errorf("load user for external identity provider=%q issuer=%q external_user_id=%q user_id=%d: %w",
+			m.cfg.Migration.ExternalIdentityProvider,
+			m.cfg.Migration.ExternalIdentityIssuer,
+			externalUserID,
+			identities[0].UserID,
+			err,
+		)
+	}
+	m.userByExternalIdentity[cacheKey] = user
+	return user, true, nil
 }
 
 func (m *migrator) getUserByEmail(ctx context.Context, email string) (*ent.User, error) {
@@ -1207,6 +1556,10 @@ func (m *migrator) cacheUser(user *ent.User) {
 	}
 }
 
+func externalIdentityCacheKey(provider, issuer, externalUserID string) string {
+	return strings.Join([]string{provider, issuer, externalUserID}, "\n")
+}
+
 func (m *migrator) buildMetadata(row *legacyRow, resolvedOwnerID int) (map[string]string, map[string]bool, error) {
 	metadata := make(map[string]string, len(row.Metadata)+1)
 	privateMask := make(map[string]bool, len(row.Metadata)+1)
@@ -1218,15 +1571,17 @@ func (m *migrator) buildMetadata(row *legacyRow, resolvedOwnerID int) (map[strin
 	}
 
 	markerBytes, err := json.Marshal(migrationMarker{
-		LegacyID:        row.LegacyID,
-		Scope:           row.Scope,
-		TargetPath:      row.TargetPath,
-		LegacyOwnerID:   row.OwnerID,
-		ResolvedOwnerID: resolvedOwnerID,
-		OwnerEmail:      row.OwnerEmail,
-		OwnerUsername:   row.OwnerUsername,
-		ObjectKey:       row.ObjectKey,
-		StoragePolicyID: row.StoragePolicyID,
+		LegacyID:            row.LegacyID,
+		Scope:               row.Scope,
+		TargetPath:          row.TargetPath,
+		LegacyOwnerID:       strings.TrimSpace(row.OwnerIDRaw),
+		OwnerExternalUserID: row.OwnerExternalUserID,
+		ResolvedOwnerID:     resolvedOwnerID,
+		OwnerEmail:          row.OwnerEmail,
+		OwnerUsername:       row.OwnerUsername,
+		Bucket:              row.Bucket,
+		ObjectKey:           row.ObjectKey,
+		StoragePolicyID:     row.StoragePolicyID,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal migration marker: %w", err)

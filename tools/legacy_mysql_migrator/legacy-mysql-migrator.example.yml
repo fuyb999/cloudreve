@@ -1,21 +1,21 @@
 source:
   driver: mysql
   dsn: legacy_user:legacy_pass@tcp(127.0.0.1:3306)/legacy_cloud?charset=utf8mb4&parseTime=true&loc=Local
+  batch_size: 500
   query: |
     SELECT
-      CAST(f.id AS CHAR) AS legacy_id,
+      f.id AS legacy_id,
       CASE WHEN f.is_public = 1 THEN 'public' ELSE 'personal' END AS scope,
       f.owner_id AS owner_id,
+      f.bucket AS bucket,
+      f.object_path AS object_path,
       u.email AS owner_email,
       u.username AS owner_username,
       CASE WHEN f.is_dir = 1 THEN 'folder' ELSE 'file' END AS kind,
       f.target_path AS target_path,
-      f.object_key AS object_key,
       f.size AS size,
-      f.storage_policy_id AS storage_policy_id,
       f.created_at AS created_at,
-      f.updated_at AS updated_at,
-      f.metadata_json AS metadata_json
+      f.updated_at AS updated_at
     FROM legacy_files f
     LEFT JOIN legacy_users u ON u.id = f.owner_id
     WHERE f.deleted_at IS NULL
@@ -31,15 +31,23 @@ migration:
   dry_run: true
   continue_on_error: true
   skip_existing: true
+  # disable_native_fts_enqueue: true
+  # skip_metadata_import: true
 
-  # 优先用旧 owner_id 显式映射到新 Cloudreve 用户 ID。
-  # 这是本工具对齐 owner_id 的主路径。
+  # 手工覆盖映射：旧 owner_id -> 新 Cloudreve user.id。
+  # owner_id 会按原始 long 字符串匹配，不需要在 SQL 里 CAST。
+  # 如果你会先同步用户，通常不需要维护这份映射。
   user_id_map:
     1001: 12
     1002: 18
     1003: 25
 
-  # 仅当 user_id_map 没命中时才会考虑下面这些兜底。
+  # 如果同步用户时把旧用户 ID 写入 external_identities.external_user_id，
+  # 迁移器会优先用 owner_external_user_id；没给时自动回退到原始 owner_id。
+  external_identity_provider: legacy-sync
+  # external_identity_issuer: legacy-mysql
+
+  # 仅当上面的映射路径没命中时才会考虑下面这些兜底。
   same_id_fallback: false
   allow_email_lookup: true
   allow_username_lookup: false
@@ -47,11 +55,59 @@ migration:
   # 公共文件如果源数据没有 owner_id / 邮箱 / 用户名，可以兜底挂到一个默认用户下。
   default_public_owner_id: 12
 
-  # 文件没有单独给出 storage_policy_id 时，按 scope 使用默认策略。
-  default_personal_policy_id: 3
-  default_public_policy_id: 4
+  # 文件没有显式给出 storage_policy_id 时，按 bucket/path 匹配 Cloudreve 存储策略。
+  policy_rules:
+    - bucket: legacy-private
+      policy_id: 3
+    - bucket: legacy-public
+      policy_id: 4
+
+  # 没命中规则时的统一默认策略。
+  default_policy_id: 3
 
   # 工具会额外写一个私有元数据，记录旧系统来源，便于后续追溯。
   marker_key: sys:legacy_mysql_migrator
   private_metadata_keys:
     - sys:legacy_mysql_migrator
+
+search_sync:
+  enabled: false
+  batch_size: 500
+  scroll_keep_alive: 2m
+  # continue_on_error: true
+  # ensure_target_index: true
+  # mark_indexed_metadata: true
+
+  source:
+    endpoint: http://127.0.0.1:9200
+    index: legacy_files
+    query:
+      match_all: {}
+
+  target:
+    endpoint: http://127.0.0.1:9200
+    index: cloudreve_files
+
+  # 先用旧 ES 的 file_id 匹配 marker.legacy_id；
+  # 如果旧索引没有 file_id，也可以退回 owner_id + path 的组合。
+  match_rules:
+    - fields:
+        legacy_id: file_id
+    - fields:
+        legacy_owner_id: owner_id
+        target_path: path
+
+  # 下面这些字段直接从旧 ES 搬到新 ES，不走当前 Cloudreve 的重新抽取流程。
+  # file_id / owner_id / entity_id / tree_path 等结构字段始终以新库为准。
+  field_mappings:
+    content: content
+    metadata_text: metadata_text
+    path_text: path_text
+    latest_version.mime_type: latest.mime
+    attachments:
+      from: attachments
+      fields:
+        name: filename
+        path: path
+        content: text
+        mime_type: mime

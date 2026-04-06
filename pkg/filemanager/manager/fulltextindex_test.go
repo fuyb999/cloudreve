@@ -426,6 +426,40 @@ func TestQueueFullTextReconcileLatestOperationWinsForSameFile(t *testing.T) {
 	}
 }
 
+func TestFullTextIndexForNewEntitySkipsWhenContextDisablesNativeFTSEnqueue(t *testing.T) {
+	ctx := inventory.WithSkipNativeFTSEnqueue(context.Background(), true)
+	settings := testSettingProvider{enabled: true}
+	tasks := &testQueue{}
+	dep := testDep{
+		settings:   settings,
+		taskClient: &testTaskClient{},
+		mediaMeta:  tasks,
+		registry:   queue.NewTaskRegistry(),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		settings: settings,
+		dep:      dep,
+	}
+
+	entityType := inventorytypes.EntityTypeVersion
+	session := &fs.UploadSession{
+		FileID:   101,
+		EntityID: 201,
+		Props: &fs.UploadProps{
+			Uri:        mustURI(t, "cloudreve:///skip/native-fts.txt"),
+			EntityType: &entityType,
+		},
+	}
+
+	m.fullTextIndexForNewEntity(ctx, session, 301)
+
+	if len(tasks.tasks) != 0 {
+		t.Fatalf("expected no full text task to be queued, got %d", len(tasks.tasks))
+	}
+}
+
 func TestQueueFullTextReconcileCollapsesDuplicateFileAcrossPendingTasks(t *testing.T) {
 	ctx := context.Background()
 	settings := testSettingProvider{enabled: true}
