@@ -120,7 +120,10 @@ func (m *manager) ListArchiveFiles(ctx context.Context, uri *fs.URI, entity, zip
 	kv := m.kv
 	res, found := kv.Get(cacheKey)
 	if found {
-		return res.([]ArchivedFile), nil
+		if cachedList, ok := res.([]ArchivedFile); ok {
+			return cachedList, nil
+		}
+		m.l.Warning("Ignoring invalid archive list cache entry for key %q: %T", cacheKey, res)
 	}
 
 	es, err := m.GetEntitySource(ctx, 0, fs.WithEntity(targetEntity))

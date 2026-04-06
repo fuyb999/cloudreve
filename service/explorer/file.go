@@ -63,7 +63,10 @@ func (service *ArchiveService) DownloadArchived(c *gin.Context) error {
 	}
 
 	// Switch to user context
-	archiveSession := archiveSessionRaw.(ArchiveDownloadSession)
+	archiveSession, ok := archiveSessionRaw.(ArchiveDownloadSession)
+	if !ok {
+		return serializer.NewError(serializer.CodeNotFound, "Archive session not exist", fmt.Errorf("unexpected archive session type: %T", archiveSessionRaw))
+	}
 	requester, err := dep.UserClient().GetLoginUserByID(c, archiveSession.RequesterID)
 	if err != nil {
 		return serializer.NewError(serializer.CodeNotFound, "Requester not found", err)

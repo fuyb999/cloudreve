@@ -40,16 +40,19 @@ import (
 
 const (
 	adminUserID        = 1
-	minioEndpoint      = "http://127.0.0.1:9000"
-	minioAccessKey     = "minio"
-	minioSecretKey     = "minio123456"
-	minioRegion        = "us-east-1"
-	smokeES            = "http://127.0.0.1:9200"
-	smokeBucket        = "cloudreve-fts-real-smoke"
-	smokePolicyName    = "FTS Real Smoke S3"
 	waitCleanupTimeout = 45 * time.Second
 	waitJobTimeout     = 45 * time.Second
 	waitFinalTimeout   = 70 * time.Second
+)
+
+var (
+	minioEndpoint   = envString("REAL_FTS_SMOKE_MINIO_ENDPOINT", "http://192.168.106.2:19000")
+	minioAccessKey  = envString("REAL_FTS_SMOKE_MINIO_ACCESS_KEY", "minio")
+	minioSecretKey  = envString("REAL_FTS_SMOKE_MINIO_SECRET_KEY", "debug-minio-password")
+	minioRegion     = envString("REAL_FTS_SMOKE_MINIO_REGION", "us-east-1")
+	smokeES         = envString("REAL_FTS_SMOKE_ES_ENDPOINT", "http://127.0.0.1:9200")
+	smokeBucket     = envString("REAL_FTS_SMOKE_BUCKET", "cloudreve-fts-real-smoke")
+	smokePolicyName = envString("REAL_FTS_SMOKE_POLICY_NAME", "FTS Real Smoke S3 Host")
 )
 
 type resultMessage struct {
@@ -451,7 +454,7 @@ func publishResult(job *ent.FTSExternalJob) error {
 	cfg.Producer.Idempotent = true
 	cfg.Net.MaxOpenRequests = 1
 
-	producer, err := sarama.NewSyncProducer([]string{"127.0.0.1:9092"}, cfg)
+	producer, err := sarama.NewSyncProducer(parseCSVStrings(envString("REAL_FTS_SMOKE_KAFKA_BROKERS", "127.0.0.1:9092")), cfg)
 	if err != nil {
 		return fmt.Errorf("create kafka producer: %w", err)
 	}
@@ -607,6 +610,14 @@ func envInt(key string, fallback int) int {
 	return v
 }
 
+func envString(key, fallback string) string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	return raw
+}
+
 func envBool(key string, fallback bool) bool {
 	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
 	if raw == "" {
@@ -639,6 +650,23 @@ func parseCSVInts(raw string) []int {
 			continue
 		}
 		out = append(out, v)
+	}
+	return out
+}
+
+func parseCSVStrings(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
 	}
 	return out
 }

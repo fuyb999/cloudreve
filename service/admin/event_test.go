@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
@@ -47,7 +49,7 @@ func TestParseOptionalPositiveInt(t *testing.T) {
 	}
 }
 
-func TestBuildAuditLogResponseHidesInternalSystemUser(t *testing.T) {
+func TestBuildAuditLogResponseHidesInternalSystemUserEdge(t *testing.T) {
 	t.Parallel()
 
 	hasher, err := hashid.New("test-salt")
@@ -57,10 +59,10 @@ func TestBuildAuditLogResponseHidesInternalSystemUser(t *testing.T) {
 
 	log := &ent.AuditLog{
 		ID:     1,
-		UserID: 42,
+		UserID: constants.PublicSystemOwnerID,
 		Edges: ent.AuditLogEdges{
 			User: &ent.User{
-				ID:       42,
+				ID:       constants.PublicSystemOwnerID,
 				Email:    constants.PublicSystemOwnerEmail,
 				Username: stringPtr(constants.PublicSystemOwnerUsername),
 				Nick:     constants.PublicSystemOwnerNick,
@@ -72,13 +74,10 @@ func TestBuildAuditLogResponseHidesInternalSystemUser(t *testing.T) {
 	if res.UserHashID != "" {
 		t.Fatalf("expected internal system user hash to be hidden, got %q", res.UserHashID)
 	}
-	if res.AuditLog == nil {
-		t.Fatal("expected audit log in response")
+	if res.UserID != constants.PublicSystemOwnerID {
+		t.Fatalf("expected internal system user id to be preserved, got %d", res.UserID)
 	}
-	if res.AuditLog.UserID != 0 {
-		t.Fatalf("expected internal system user id to be hidden, got %d", res.AuditLog.UserID)
-	}
-	if res.AuditLog.Edges.User != nil {
+	if res.Edges.User != nil {
 		t.Fatal("expected internal system user edge to be hidden")
 	}
 }
@@ -108,11 +107,42 @@ func TestBuildAuditLogResponseKeepsNormalUser(t *testing.T) {
 	if res.UserHashID == "" {
 		t.Fatal("expected normal user hash id to be preserved")
 	}
-	if res.AuditLog == nil || res.AuditLog.UserID != 7 {
-		t.Fatalf("expected normal user id to be preserved, got %+v", res.AuditLog)
+	if res.UserID != 7 {
+		t.Fatalf("expected normal user id to be preserved, got %+v", res)
 	}
-	if res.AuditLog.Edges.User == nil || res.AuditLog.Edges.User.ID != 7 {
+	if res.Edges.User == nil || res.Edges.User.ID != 7 {
 		t.Fatal("expected normal user edge to be preserved")
+	}
+}
+
+func TestBuildAuditLogResponseKeepsZeroTypeWhenMarshaled(t *testing.T) {
+	t.Parallel()
+
+	res := buildAuditLogResponse(&ent.AuditLog{
+		ID:       3,
+		Type:     0,
+		UserID:   constants.PublicSystemOwnerID,
+		FileID:   11,
+		EntityID: 12,
+		ShareID:  13,
+	}, nil)
+
+	payload, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("failed to marshal response: %v", err)
+	}
+
+	raw := string(payload)
+	for _, expected := range []string{
+		`"type":0`,
+		`"user_id":-1`,
+		`"file_id":11`,
+		`"entity_id":12`,
+		`"share_id":13`,
+	} {
+		if !strings.Contains(raw, expected) {
+			t.Fatalf("expected marshaled response to contain %s, got %s", expected, raw)
+		}
 	}
 }
 

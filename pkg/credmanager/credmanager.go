@@ -63,9 +63,6 @@ var (
 )
 
 func (m *credManager) Upsert(ctx context.Context, cred ...Credential) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	l := logging.FromContext(ctx)
 	for _, c := range cred {
 		l.Info("CredManager: Upsert credential for key %q...", c.Key())
@@ -73,31 +70,22 @@ func (m *credManager) Upsert(ctx context.Context, cred ...Credential) error {
 			return fmt.Errorf("failed to update credential in KV for key %q: %w", c.Key(), err)
 		}
 
-		if _, ok := m.locks[c.Key()]; !ok {
-			m.locks[c.Key()] = &sync.Mutex{}
-		}
+		m.lockForKey(c.Key())
 	}
 
 	return nil
 }
 
 func (m *credManager) Obtain(ctx context.Context, key string) (Credential, error) {
-	m.mu.RLock()
-	itemRaw, ok := m.kv.Get(key)
-	if !ok {
-		m.mu.RUnlock()
-		return nil, fmt.Errorf("credential not found for key %q: %w", key, ErrNotFound)
-	}
-
 	l := logging.FromContext(ctx)
+	lock := m.lockForKey(key)
+	lock.Lock()
+	defer lock.Unlock()
 
-	item := itemRaw.(Credential)
-	if _, ok := m.locks[key]; !ok {
-		m.locks[key] = &sync.Mutex{}
+	item, err := credentialFromCache(m.kv, key)
+	if err != nil {
+		return nil, err
 	}
-	m.locks[key].Lock()
-	defer m.locks[key].Unlock()
-	m.mu.RUnlock()
 
 	if item.Expiry().After(time.Now()) {
 		// Credential is still valid
@@ -120,33 +108,79 @@ func (m *credManager) Obtain(ctx context.Context, key string) (Credential, error
 }
 
 func (m *credManager) RefreshAll(ctx context.Context) {
+	l := logging.FromContext(ctx)
+	for _, key := range m.keys() {
+		func() {
+			l.Info("Refreshing credential for key %q...", key)
+			lock := m.lockForKey(key)
+			lock.Lock()
+			defer lock.Unlock()
+
+			item, err := credentialFromCache(m.kv, key)
+			if errors.Is(err, ErrNotFound) {
+				l.Warning("Credential not found for key %q", key)
+				return
+			}
+			if err != nil {
+				l.Warning("Failed to read credential for key %q: %s", key, err)
+				return
+			}
+			newCred, err := item.Refresh(ctx)
+			if err != nil {
+				l.Warning("Failed to refresh credential for key %q: %s", key, err)
+				return
+			}
+
+			l.Info("New credential for key %q is obtained, expire at %s", key, newCred.Expiry().String())
+			if err := m.kv.Set(key, newCred, 0); err != nil {
+				l.Warning("Failed to update credential in KV for key %q: %s", key, err)
+			}
+		}()
+	}
+}
+
+func (m *credManager) lockForKey(key string) *sync.Mutex {
+	m.mu.RLock()
+	lock, ok := m.locks[key]
+	m.mu.RUnlock()
+	if ok {
+		return lock
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if lock, ok = m.locks[key]; !ok {
+		lock = &sync.Mutex{}
+		m.locks[key] = lock
+	}
+
+	return lock
+}
+
+func (m *credManager) keys() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	l := logging.FromContext(ctx)
+	keys := make([]string, 0, len(m.locks))
 	for key := range m.locks {
-		l.Info("Refreshing credential for key %q...", key)
-		m.locks[key].Lock()
-		defer m.locks[key].Unlock()
-
-		itemRaw, ok := m.kv.Get(key)
-		if !ok {
-			l.Warning("Credential not found for key %q", key)
-			continue
-		}
-
-		item := itemRaw.(Credential)
-		newCred, err := item.Refresh(ctx)
-		if err != nil {
-			l.Warning("Failed to refresh credential for key %q: %s", key, err)
-			continue
-		}
-
-		l.Info("New credential for key %q is obtained, expire at %s", key, newCred.Expiry().String())
-		if err := m.kv.Set(key, newCred, 0); err != nil {
-			l.Warning("Failed to update credential in KV for key %q: %s", key, err)
-		}
+		keys = append(keys, key)
 	}
+
+	return keys
+}
+
+func credentialFromCache(kv cache.Driver, key string) (Credential, error) {
+	itemRaw, ok := kv.Get(key)
+	if !ok {
+		return nil, fmt.Errorf("credential not found for key %q: %w", key, ErrNotFound)
+	}
+
+	item, ok := itemRaw.(Credential)
+	if !ok {
+		return nil, fmt.Errorf("invalid credential cache entry for key %q: %T", key, itemRaw)
+	}
+
+	return item, nil
 }
 
 type (
@@ -167,7 +201,7 @@ func NewSlaveManager(kv cache.Driver, config conf.ConfigProvider) CredManager {
 		client: request.NewClient(
 			config,
 			request.WithCredential(auth.HMACAuth{
-				[]byte(config.Slave().Secret),
+				SecretKey: []byte(config.Slave().Secret),
 			}, int64(config.Slave().SignatureTTL)),
 		),
 	}
@@ -198,12 +232,16 @@ func (m *slaveCredManager) Upsert(ctx context.Context, cred ...Credential) error
 }
 
 func (m *slaveCredManager) Obtain(ctx context.Context, key string) (Credential, error) {
-	itemRaw, ok := m.kv.Get(key)
-	if !ok {
-		return m.requestCredFromMaster(ctx, key)
+	item, err := credentialFromCache(m.kv, key)
+	if err == nil {
+		return item, nil
 	}
 
-	return itemRaw.(Credential), nil
+	if !errors.Is(err, ErrNotFound) {
+		logging.FromContext(ctx).Warning("SlaveCredManager: Invalid cached credential for key %q: %s", key, err)
+	}
+
+	return m.requestCredFromMaster(ctx, key)
 }
 
 // No op on slave node

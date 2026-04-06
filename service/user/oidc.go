@@ -919,10 +919,10 @@ func stringFromAny(value any) string {
 		return ""
 	case string:
 		return strings.TrimSpace(typed)
-	case fmt.Stringer:
-		return strings.TrimSpace(typed.String())
 	case json.Number:
 		return typed.String()
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", typed))
 	}

@@ -62,8 +62,24 @@ type ListAuditLogResponse struct {
 	Logs       []GetAuditLogResponse        `json:"logs"`
 }
 
+type AuditLogPayload struct {
+	ID            int                    `json:"id"`
+	CreatedAt     time.Time              `json:"created_at,omitempty"`
+	UpdatedAt     time.Time              `json:"updated_at,omitempty"`
+	DeletedAt     *time.Time             `json:"deleted_at,omitempty"`
+	Type          int                    `json:"type"`
+	CorrelationID string                 `json:"correlation_id,omitempty"`
+	IP            string                 `json:"ip,omitempty"`
+	Content       map[string]interface{} `json:"content,omitempty"`
+	UserID        int                    `json:"user_id,omitempty"`
+	FileID        int                    `json:"file_id,omitempty"`
+	EntityID      int                    `json:"entity_id,omitempty"`
+	ShareID       int                    `json:"share_id,omitempty"`
+	Edges         ent.AuditLogEdges      `json:"edges"`
+}
+
 type GetAuditLogResponse struct {
-	*ent.AuditLog
+	AuditLogPayload
 	UserHashID string `json:"user_hash_id,omitempty"`
 }
 

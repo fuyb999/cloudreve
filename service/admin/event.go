@@ -101,14 +101,26 @@ func buildAuditLogResponse(item *ent.AuditLog, hasher hashid.Encoder) GetAuditLo
 		return GetAuditLogResponse{}
 	}
 
-	sanitized := *item
-	sanitized.Edges = item.Edges
-
-	res := GetAuditLogResponse{AuditLog: &sanitized}
+	res := GetAuditLogResponse{
+		AuditLogPayload: AuditLogPayload{
+			ID:            item.ID,
+			CreatedAt:     item.CreatedAt,
+			UpdatedAt:     item.UpdatedAt,
+			DeletedAt:     item.DeletedAt,
+			Type:          item.Type,
+			CorrelationID: item.CorrelationID,
+			IP:            item.IP,
+			Content:       item.Content,
+			UserID:        item.UserID,
+			FileID:        item.FileID,
+			EntityID:      item.EntityID,
+			ShareID:       item.ShareID,
+			Edges:         item.Edges,
+		},
+	}
 	if item.Edges.User != nil {
 		if inventory.IsInternalSystemUser(item.Edges.User) {
-			res.AuditLog.UserID = 0
-			res.AuditLog.Edges.User = nil
+			res.AuditLogPayload.Edges.User = nil
 			return res
 		}
 		res.UserHashID = hashid.EncodeUserID(hasher, item.Edges.User.ID)

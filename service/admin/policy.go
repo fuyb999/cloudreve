@@ -124,9 +124,13 @@ func (service *SlavePingService) Test(c *gin.Context) error {
 	}
 
 	version := constants.BackendVersion
+	masterVersion, ok := res.Data.(string)
+	if !ok {
+		return serializer.NewError(serializer.CodeSlavePingMaster, "Master returned unexpected version payload", fmt.Errorf("unexpected response data: %T", res.Data))
+	}
 
-	if strings.TrimSuffix(res.Data.(string), "-pro") != version {
-		return serializer.NewError(serializer.CodeVersionMismatch, "Master: "+res.Data.(string)+", Slave: "+version, nil)
+	if strings.TrimSuffix(masterVersion, "-pro") != version {
+		return serializer.NewError(serializer.CodeVersionMismatch, "Master: "+masterVersion+", Slave: "+version, nil)
 	}
 
 	return nil

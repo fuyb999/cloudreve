@@ -47,27 +47,29 @@ const (
 var esIndex = "cloudreve_files"
 var smokePreferredContentNodeID int
 
+type esAttachment struct {
+	ID                 string `json:"id"`
+	ParentID           string `json:"parent_id"`
+	ParentAttachmentID string `json:"parent_attachment_id"`
+	Depth              int    `json:"depth"`
+	Type               string `json:"type"`
+	Name               string `json:"name"`
+	Path               string `json:"path"`
+	Content            string `json:"content"`
+}
+
 type esDoc struct {
 	Found  bool `json:"found"`
 	Source struct {
-		FileID      int    `json:"file_id"`
-		PathText    string `json:"path_text"`
-		Content     string `json:"content"`
-		FileName    string `json:"file_name"`
-		OwnerID     int    `json:"owner_id"`
-		EntityID    int    `json:"entity_id"`
-		ParentID    int    `json:"parent_id"`
-		UpdatedAt   string `json:"updated_at"`
-		Attachments []struct {
-			ID                 string `json:"id"`
-			ParentID           int    `json:"parent_id"`
-			ParentAttachmentID string `json:"parent_attachment_id"`
-			Depth              int    `json:"depth"`
-			Type               string `json:"type"`
-			Name               string `json:"name"`
-			Path               string `json:"path"`
-			Content            string `json:"content"`
-		} `json:"attachments"`
+		FileID      int            `json:"file_id"`
+		PathText    string         `json:"path_text"`
+		Content     string         `json:"content"`
+		FileName    string         `json:"file_name"`
+		OwnerID     int            `json:"owner_id"`
+		EntityID    int            `json:"entity_id"`
+		ParentID    int            `json:"parent_id"`
+		UpdatedAt   string         `json:"updated_at"`
+		Attachments []esAttachment `json:"attachments"`
 	} `json:"_source"`
 }
 
@@ -294,20 +296,28 @@ func main() {
 	assertDocContentContains(copiedChildID, "child smoke content "+suffix, "copy folder descendant")
 	assertPGSidecarStored(baseCtx, dep, copiedChildID, "copied child.txt")
 
-	archiveFileIDs := []int{
-		smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.zip", buildNestedZip(
-			"archive outer content "+suffix,
-			"archive inner content "+suffix,
-		), "zip"),
-		smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.tar", buildNestedTar(
-			"tar outer content "+suffix,
-			"tar inner content "+suffix,
-		), "tar"),
-		smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.jar", buildNestedJar(
-			"jar outer content "+suffix,
-			"jar inner content "+suffix,
-		), "jar"),
-	}
+		archiveFileIDs := []int{
+			smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.zip", buildNestedZip(
+				"archive outer content "+suffix,
+				"archive inner content "+suffix,
+			), "zip"),
+			smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.tar", buildNestedTar(
+				"tar outer content "+suffix,
+				"tar inner content "+suffix,
+			), "tar"),
+			smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.jar", buildNestedJar(
+				"jar outer content "+suffix,
+				"jar inner content "+suffix,
+			), "jar"),
+			smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.war", buildNestedJar(
+				"war outer content "+suffix,
+				"war inner content "+suffix,
+			), "war"),
+			smokeArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.ear", buildNestedJar(
+				"ear outer content "+suffix,
+				"ear inner content "+suffix,
+			), "ear"),
+		}
 	archiveFileIDs = append(archiveFileIDs, smokeCompressedTarArchiveUpload(baseCtx, dep, fm, user, archivesDir, "nested.tgz", buildNestedTGZ(
 		"tgz outer content "+suffix,
 		"tgz inner content "+suffix,
@@ -822,16 +832,7 @@ func smokeBoundaryArchiveUpload(
 	return fileID
 }
 
-func attachmentNames(items []struct {
-	ID                 string `json:"id"`
-	ParentID           int    `json:"parent_id"`
-	ParentAttachmentID string `json:"parent_attachment_id"`
-	Depth              int    `json:"depth"`
-	Type               string `json:"type"`
-	Name               string `json:"name"`
-	Path               string `json:"path"`
-	Content            string `json:"content"`
-}) []string {
+func attachmentNames(items []esAttachment) []string {
 	names := make([]string, 0, len(items))
 	for _, item := range items {
 		names = append(names, item.Name)
@@ -1183,23 +1184,53 @@ func docHasAttachment(fileID int, wantName string) bool {
 
 func assertDocAttachmentHierarchy(fileID int, wantName, wantParentAttachmentID string, wantDepth int, op string) {
 	doc := mustGetDoc(fileID)
+	resolvedParentID := wantParentAttachmentID
+	if wantParentAttachmentID != "" {
+		for _, candidate := range doc.Source.Attachments {
+			if candidate.ID == wantParentAttachmentID || candidate.Path == wantParentAttachmentID {
+				resolvedParentID = candidate.ID
+				break
+			}
+			if strings.HasSuffix(candidate.ID, ":"+wantParentAttachmentID) || strings.HasSuffix(candidate.Path, "/"+wantParentAttachmentID) {
+				resolvedParentID = candidate.ID
+				break
+			}
+		}
+	}
 	for _, attachment := range doc.Source.Attachments {
 		if attachment.Name != wantName {
 			continue
 		}
-		if attachment.ParentAttachmentID != wantParentAttachmentID || attachment.Depth != wantDepth {
+		parentMatches := false
+		if wantParentAttachmentID == "" {
+			parentMatches = attachment.ParentAttachmentID == "" && (attachment.ParentID == "" || attachment.ParentID == strconv.Itoa(fileID))
+		} else {
+			parentMatches = attachment.ParentAttachmentID == resolvedParentID || attachment.ParentID == resolvedParentID
+		}
+		if !parentMatches || attachment.Depth != wantDepth {
 			panic(fmt.Sprintf(
-				"%s: unexpected hierarchy for file %d attachment %q: got parent=%q depth=%d want parent=%q depth=%d",
+				"%s: unexpected hierarchy for file %d attachment %q: got parent_id=%q parent_attachment_id=%q depth=%d want parent=%q resolved_parent=%q depth=%d",
 				op,
 				fileID,
 				wantName,
+				attachment.ParentID,
 				attachment.ParentAttachmentID,
 				attachment.Depth,
 				wantParentAttachmentID,
+				resolvedParentID,
 				wantDepth,
 			))
 		}
-		fmt.Printf("%s ok file_id=%d attachment=%s parent_attachment_id=%q depth=%d\n", op, fileID, attachment.Name, attachment.ParentAttachmentID, attachment.Depth)
+		fmt.Printf(
+			"%s ok file_id=%d attachment=%s parent_id=%q parent_attachment_id=%q resolved_parent=%q depth=%d\n",
+			op,
+			fileID,
+			attachment.Name,
+			attachment.ParentID,
+			attachment.ParentAttachmentID,
+			resolvedParentID,
+			attachment.Depth,
+		)
 		return
 	}
 
@@ -1752,9 +1783,17 @@ func buildNestedCPIO(outerText, innerText string) ([]byte, bool) {
 
 	cmd := exec.Command("sh", "-lc", "printf 'outer.txt\ninner.zip\n' | cpio -o -H newc --quiet")
 	cmd.Dir = tempDir
-	output, err := cmd.CombinedOutput()
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
-		panic(fmt.Sprintf("cpio create archive failed: %v output=%s", err, strings.TrimSpace(string(output))))
+		panic(fmt.Sprintf(
+			"cpio create archive failed: %v output=%s stderr=%s",
+			err,
+			strings.TrimSpace(string(output)),
+			strings.TrimSpace(stderr.String()),
+		))
 	}
 
 	return output, true

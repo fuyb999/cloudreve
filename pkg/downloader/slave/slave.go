@@ -191,7 +191,12 @@ func (s *slaveDownloader) Test(ctx context.Context) (string, error) {
 		return "", serializer.NewErrorFromResponse(resp)
 	}
 
-	return resp.Data.(string), nil
+	message, ok := resp.Data.(string)
+	if !ok {
+		return "", fmt.Errorf("unexpected response data: %T", resp.Data)
+	}
+
+	return message, nil
 }
 
 // Slave remote download related

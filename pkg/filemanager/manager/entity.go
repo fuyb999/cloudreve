@@ -178,10 +178,14 @@ func (m *manager) GetUrlForRedirectedDirectLink(ctx context.Context, dl *ent.Dir
 	cacheKey := entityUrlCacheKey(primaryEntity.ID(), int64(dl.Speed), dl.Name, o.IsDownload,
 		m.settings.SiteURL(ctx).String())
 	if cached, ok := m.kv.Get(cacheKey); ok {
-		cachedItem := cached.(EntityUrlCache)
-		res = cachedItem.Url
-		expire = cachedItem.ExpireAt
-	} else {
+		if cachedItem, cacheOK := cached.(EntityUrlCache); cacheOK {
+			res = cachedItem.Url
+			expire = cachedItem.ExpireAt
+		} else {
+			m.l.Warning("Ignoring invalid entity url cache entry for key %q: %T", cacheKey, cached)
+		}
+	}
+	if res == "" {
 		// Cache miss, Generate new url
 		policy, d, err := m.getEntityPolicyDriver(ctx, primaryEntity, nil)
 		if err != nil {
@@ -275,16 +279,18 @@ func (m *manager) GetEntityUrls(ctx context.Context, args []GetEntityUrlArgs, op
 		cacheKey := entityUrlCacheKey(target.ID(), o.DownloadSpeed, getEntityDisplayName(file, target), o.IsDownload,
 			m.settings.SiteURL(ctx).String())
 		if cached, ok := m.kv.Get(cacheKey); ok && !o.NoCache {
-			cachedItem := cached.(EntityUrlCache)
-			// Find the earliest expiry time
-			if cachedItem.ExpireAt != nil && (earliestExpireAt == nil || cachedItem.ExpireAt.Before(*earliestExpireAt)) {
-				earliestExpireAt = cachedItem.ExpireAt
+			if cachedItem, cacheOK := cached.(EntityUrlCache); cacheOK {
+				// Find the earliest expiry time
+				if cachedItem.ExpireAt != nil && (earliestExpireAt == nil || cachedItem.ExpireAt.Before(*earliestExpireAt)) {
+					earliestExpireAt = cachedItem.ExpireAt
+				}
+				res[i] = EntityUrl{
+					Url:                        cachedItem.Url,
+					BrowserDownloadDisplayName: cachedItem.BrowserDownloadDisplayName,
+				}
+				continue
 			}
-			res[i] = EntityUrl{
-				Url:                        cachedItem.Url,
-				BrowserDownloadDisplayName: cachedItem.BrowserDownloadDisplayName,
-			}
-			continue
+			m.l.Warning("Ignoring invalid entity url cache entry for key %q: %T", cacheKey, cached)
 		}
 
 		// Cache miss, Generate new url

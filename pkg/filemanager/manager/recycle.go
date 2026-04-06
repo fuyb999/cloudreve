@@ -250,9 +250,14 @@ func (m *manager) RecycleEntities(ctx context.Context, force bool, entityIDs ...
 				}
 
 				if session, ok := m.kv.Get(UploadSessionCachePrefix + sid.String()); ok {
-					session := session.(fs.UploadSession)
-					if err := d.CancelToken(ctx, &session); err != nil {
-						m.l.Warning("Failed to cancel upload session for %q: %s, this is expected if it's remote policy.", session.Props.Uri.String(), err)
+					uploadSession, sessionOK := session.(fs.UploadSession)
+					if !sessionOK {
+						m.l.Warning("Ignoring invalid upload session cache entry for %q: %T", sid.String(), session)
+						_ = m.kv.Delete(UploadSessionCachePrefix, sid.String())
+						continue
+					}
+					if err := d.CancelToken(ctx, &uploadSession); err != nil {
+						m.l.Warning("Failed to cancel upload session for %q: %s, this is expected if it's remote policy.", uploadSession.Props.Uri.String(), err)
 					}
 					_ = m.kv.Delete(UploadSessionCachePrefix, sid.String())
 				}

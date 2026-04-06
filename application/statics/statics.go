@@ -72,6 +72,7 @@ func NewServerStaticFS(l logging.Logger, statics fs.FS, isPro bool) (static.Serv
 		l.Warning("Missing version identifier file in static resources, please delete \"statics\" folder and rebuild it.")
 		return staticFS, nil
 	}
+	defer f.Close()
 
 	b, err := io.ReadAll(f)
 	if err != nil {
@@ -183,14 +184,17 @@ func Eject(l logging.Logger, statics fs.FS) error {
 			// 写入文件
 			dst := util.DataPath(filepath.Join(StaticFolder, relPath))
 			out, err := util.CreatNestedFile(dst)
-			defer out.Close()
-
 			if err != nil {
 				return fmt.Errorf("failed to create file %q: %s, skipping...", dst, err)
 			}
+			defer out.Close()
 
 			l.Info("Ejecting %q...", dst)
-			obj, _ := embedFS.Open(relPath)
+			obj, err := embedFS.Open(relPath)
+			if err != nil {
+				return fmt.Errorf("failed to open embedded file %q: %s, skipping...", relPath, err)
+			}
+			defer obj.Close()
 			if _, err := io.Copy(out, bufio.NewReader(obj)); err != nil {
 				return fmt.Errorf("cannot write file %q: %s, skipping...", relPath, err)
 			}

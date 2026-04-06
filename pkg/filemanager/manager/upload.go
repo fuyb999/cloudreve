@@ -244,8 +244,11 @@ func (m *manager) CancelUploadSession(ctx context.Context, path *fs.URI, session
 	var session *fs.UploadSession
 	sessionRaw, ok := m.kv.Get(UploadSessionCachePrefix + sessionID)
 	if ok {
-		sessionTyped := sessionRaw.(fs.UploadSession)
-		session = &sessionTyped
+		if sessionTyped, sessionOK := sessionRaw.(fs.UploadSession); sessionOK {
+			session = &sessionTyped
+		} else {
+			m.l.Warning("Ignoring invalid upload session cache entry for %q: %T", sessionID, sessionRaw)
+		}
 	}
 
 	var (

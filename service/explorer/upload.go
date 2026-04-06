@@ -112,7 +112,10 @@ func (service *UploadService) LocalUpload(c *gin.Context) error {
 		return serializer.NewError(serializer.CodeUploadSessionExpired, "", nil)
 	}
 
-	uploadSession := uploadSessionRaw.(fs.UploadSession)
+	uploadSession, sessionOK := uploadSessionRaw.(fs.UploadSession)
+	if !sessionOK {
+		return serializer.NewError(serializer.CodeUploadSessionExpired, "", fmt.Errorf("unexpected upload session type: %T", uploadSessionRaw))
+	}
 
 	user := inventory.UserFromContext(c)
 	m := manager.NewFileManager(dep, user)
@@ -141,7 +144,10 @@ func (service *UploadService) SlaveUpload(c *gin.Context) error {
 		return serializer.NewError(serializer.CodeUploadSessionExpired, "", nil)
 	}
 
-	uploadSession := uploadSessionRaw.(fs.UploadSession)
+	uploadSession, sessionOK := uploadSessionRaw.(fs.UploadSession)
+	if !sessionOK {
+		return serializer.NewError(serializer.CodeUploadSessionExpired, "", fmt.Errorf("unexpected upload session type: %T", uploadSessionRaw))
+	}
 	uploadSession.Props.ClientSideEncrypted = true
 
 	// Parse chunk index from query

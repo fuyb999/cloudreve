@@ -83,7 +83,7 @@ func (c *auditLogClient) Create(ctx context.Context, args *CreateAuditLogArgs) (
 	if args.Content != nil {
 		stm.SetContent(args.Content)
 	}
-	if args.UserID > 0 {
+	if args.UserID != 0 {
 		stm.SetUserID(args.UserID)
 	}
 	if args.FileID > 0 {

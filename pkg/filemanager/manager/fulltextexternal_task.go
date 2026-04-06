@@ -121,8 +121,11 @@ func (t *FullTextIndexTask) dispatchExternalIfConfigured(
 	item FullTextIndexTaskItem,
 ) (enttask.Status, bool, error) {
 	cfg := fm.settings.FTSExternalExtractor(ctx)
+	if cfg == nil {
+		return enttask.StatusProcessing, false, nil
+	}
 	mode := normalizeExternalFTSMode(cfg.Mode)
-	if cfg == nil || !cfg.Enabled || mode == setting.FTSExternalModeDisabled {
+	if !cfg.Enabled || mode == setting.FTSExternalModeDisabled {
 		return enttask.StatusProcessing, false, nil
 	}
 

@@ -115,6 +115,9 @@ func InitializeDBClient(l logging.Logger,
 	if err := ensureSystemPublicRootSupport(ctx, l, client, dbType); err != nil {
 		return nil, fmt.Errorf("failed to ensure hidden public root: %w", err)
 	}
+	if err := ensureAuditLogSystemUserSupport(ctx, l, client); err != nil {
+		return nil, fmt.Errorf("failed to ensure audit log system user support: %w", err)
+	}
 
 	//createMockData(client, ctx)
 	return client, nil

@@ -288,7 +288,11 @@ func (service *OtpValidationService) Verify2FA(c *gin.Context) (*ent.User, error
 		return nil, serializer.NewError(serializer.CodeNotFound, "Session not found", nil)
 	}
 
-	uid := sessionRaw.(int)
+	uid, sessionOK := sessionRaw.(int)
+	if !sessionOK {
+		_ = kv.Delete("user_2fa_", service.SessionID)
+		return nil, serializer.NewError(serializer.CodeNotFound, "Session not found", fmt.Errorf("unexpected 2FA session type: %T", sessionRaw))
+	}
 	ctx := context.WithValue(c, inventory.LoadUserGroup{}, true)
 	expectedUser, err := dep.UserClient().GetByID(ctx, uid)
 	if err != nil {

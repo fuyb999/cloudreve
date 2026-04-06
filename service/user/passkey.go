@@ -110,7 +110,10 @@ func (s *FinishPasskeyLoginService) FinishPasskeyLogin(c *gin.Context) (*ent.Use
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "Failed to initialize WebAuthn", err)
 	}
 
-	sessionData := sessionDataRaw.(webauthn.SessionData)
+	sessionData, sessionOK := sessionDataRaw.(webauthn.SessionData)
+	if !sessionOK {
+		return nil, serializer.NewError(serializer.CodeNotFound, "Session not found", fmt.Errorf("unexpected passkey login session type: %T", sessionDataRaw))
+	}
 	pcc, err := protocol.ParseCredentialRequestResponseBody(strings.NewReader(s.Response))
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "Failed to parse request", err)
@@ -230,7 +233,10 @@ func (s *FinishPasskeyRegisterService) FinishPasskeyRegister(c *gin.Context) (*P
 		return nil, serializer.NewError(serializer.CodeInternalSetting, "Failed to initialize WebAuthn", err)
 	}
 
-	sessionData := sessionDataRaw.(webauthn.SessionData)
+	sessionData, sessionOK := sessionDataRaw.(webauthn.SessionData)
+	if !sessionOK {
+		return nil, serializer.NewError(serializer.CodeNotFound, "Session not found", fmt.Errorf("unexpected passkey registration session type: %T", sessionDataRaw))
+	}
 	pcc, err := protocol.ParseCredentialCreationResponseBody(strings.NewReader(s.Response))
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "Failed to parse request", err)

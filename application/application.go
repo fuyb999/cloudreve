@@ -18,8 +18,8 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/crontab"
 	"github.com/cloudreve/Cloudreve/v4/pkg/email"
-	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver/onedrive"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -124,7 +124,16 @@ func (s *server) Start() error {
 			return err
 		}
 
-		if err := audit.Publish(context.Background(), &audit.Event{Type: audit.ServerStart}); err != nil {
+		if err := audit.Publish(context.Background(), &audit.Event{
+			Type:   audit.ServerStart,
+			UserID: constants.PublicSystemOwnerID,
+			Content: map[string]any{
+				"version": constants.BackendVersion,
+				"commit":  constants.LastCommit,
+				"pro":     constants.IsProBool,
+				"mode":    s.config.System().Mode,
+			},
+		}); err != nil {
 			s.logger.Warning("Failed to write startup audit log: %s", err)
 		}
 	} else {
