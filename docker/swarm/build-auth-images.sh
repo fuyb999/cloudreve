@@ -80,6 +80,14 @@ if [[ "$PULL_BASE" == "yes" ]]; then
   build_args+=(--pull)
 fi
 
+docker_build() {
+  if [[ ${#build_args[@]} -gt 0 ]]; then
+    docker build "${build_args[@]}" "$@"
+  else
+    docker build "$@"
+  fi
+}
+
 build_authverse_web() {
   local image="${AUTHVERSE_WEB_LOCAL_IMAGE:-${AUTHVERSE_WEB_IMAGE:-}}"
 
@@ -93,10 +101,10 @@ build_authverse_web() {
   fi
 
   echo "[$HOST_NAME] [BUILD] AUTHVERSE_WEB -> $image"
-  docker build \
-    "${build_args[@]}" \
+  docker_build \
     -f "$AUTHVERSE_FRONTEND_DOCKERFILE" \
     -t "$image" \
+    --build-arg "NODE_OPTIONS=${AUTHVERSE_WEB_BUILD_NODE_OPTIONS:---max-old-space-size=4096}" \
     --build-arg "VITE_YUDAO_AUTH_ENABLED=true" \
     --build-arg "VITE_YUDAO_API_BASE=/admin-api" \
     --build-arg "VITE_YUDAO_APP_API_BASE=/app-api" \
@@ -126,8 +134,7 @@ build_authverse_backend() {
   fi
 
   echo "[$HOST_NAME] [BUILD] AUTHVERSE_BACKEND -> $image"
-  docker build \
-    "${build_args[@]}" \
+  docker_build \
     -f "$AUTHVERSE_BACKEND_DOCKERFILE" \
     -t "$image" \
     "$AUTHVERSE_BACKEND_DIR"

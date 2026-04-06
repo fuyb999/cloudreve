@@ -117,6 +117,7 @@
 - `AUTHVERSE_SERVER_NAME`
 - `AUTHVERSE_WEB_IMAGE`
 - `AUTHVERSE_BACKEND_IMAGE`
+- `AUTHVERSE_WEB_BUILD_NODE_OPTIONS`
 
 ### 4.2 与 Cloudreve 主栈的关系
 
@@ -264,6 +265,12 @@ docker/swarm/build-auth-images.sh --env-file .env.swarm
 
 - `AUTHVERSE_WEB_LOCAL_IMAGE`
 - `AUTHVERSE_BACKEND_LOCAL_IMAGE`
+
+如果前端在 `vite build` 阶段出现 Node 堆内存不足，可以提高：
+
+```env
+AUTHVERSE_WEB_BUILD_NODE_OPTIONS=--max-old-space-size=6144
+```
 
 ### 5.6 推送到私有仓库
 
