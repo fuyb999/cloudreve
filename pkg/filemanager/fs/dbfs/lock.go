@@ -8,11 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/lock"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/samber/lo"
 )
 
@@ -256,8 +259,10 @@ func (f *DBFS) ensureConsistency(ctx context.Context, files ...*File) error {
 		}
 
 		for _, file := range files {
-			latest := uniqueFiles[file.ID].Model
-			if file.Name != latest.Name ||
+			cached := uniqueFiles[file.ID]
+			latest := cached.Model
+			nameChanged := file.Name != latest.Name && !isDisplayOnlyPublicRootNameAlias(cached, file)
+			if nameChanged ||
 				file.FileChildren != latest.FileChildren ||
 				file.OwnerID != latest.OwnerID ||
 				file.Type != latest.Type {
@@ -270,6 +275,25 @@ func (f *DBFS) ensureConsistency(ctx context.Context, files ...*File) error {
 	}
 
 	return nil
+}
+
+func isDisplayOnlyPublicRootNameAlias(cached *File, latest *ent.File) bool {
+	if cached == nil || cached.IsNil() || latest == nil {
+		return false
+	}
+
+	uri := cached.Uri(false)
+	if uri == nil || uri.FileSystem() != constants.FileSystemPublic {
+		return false
+	}
+
+	if !cached.IsRootFolder() || cached.Name() != publicshare.DefaultRootName {
+		return false
+	}
+
+	return latest.Name == inventory.RootFolderName &&
+		latest.FileChildren == 0 &&
+		latest.Type == int(types.FileTypeFolder)
 }
 
 // LockSessionFromCtx retrieves lock session from context. If no lock session
