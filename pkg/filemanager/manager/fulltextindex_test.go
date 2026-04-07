@@ -1125,6 +1125,124 @@ func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
 	}
 }
 
+func TestFullTextIndexTaskDoDeleteOnlyStateSkipsSlaveDispatch(t *testing.T) {
+	settings := testSettingProvider{
+		enabled: true,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:           "http://tika:9998",
+			Exts:               []string{".pdf"},
+			MaxFileSize:        20 << 20,
+			SidecarEnabled:     true,
+			SidecarTextEnabled: true,
+		},
+	}
+	textExtractor := tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg)
+	indexer := &testSearchIndexer{}
+	node := &testClusterNode{
+		id:       21,
+		isMaster: false,
+		createID: 314,
+	}
+	dep := testDep{
+		settings:      settings,
+		taskClient:    &testTaskClient{},
+		mediaMeta:     &testQueue{},
+		registry:      queue.NewTaskRegistry(),
+		config:        testConfigProvider{},
+		searchIndexer: indexer,
+		fileClient:    &testFileClient{},
+		nodePool:      &testNodePool{node: node},
+		textExtractor: textExtractor,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	ftTask, err := NewFullTextIndexTask(ctx, nil, 0, 801, 0, nil)
+	if err != nil {
+		t.Fatalf("failed to create full text index task: %v", err)
+	}
+
+	status, err := ftTask.Do(ctx)
+	if err != nil {
+		t.Fatalf("unexpected index task error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected index task status: got %s want %s", status, task.StatusCompleted)
+	}
+	if node.createdTaskType != "" {
+		t.Fatalf("expected delete-only reconcile not to dispatch slave task, got %s", node.createdTaskType)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != 801 {
+		t.Fatalf("expected delete-only reconcile to clear stale index, got %v", indexer.deleted)
+	}
+	if indexer.upserted != 0 {
+		t.Fatalf("expected no upsert for delete-only reconcile, got %d", indexer.upserted)
+	}
+}
+
+func TestFullTextIndexTaskDoFolderStateSkipsSlaveDispatch(t *testing.T) {
+	settings := testSettingProvider{
+		enabled:     true,
+		syncFolders: false,
+		tikaCfg: &setting.FTSTikaExtractorSetting{
+			Endpoint:           "http://tika:9998",
+			Exts:               []string{".pdf"},
+			MaxFileSize:        20 << 20,
+			SidecarEnabled:     true,
+			SidecarTextEnabled: true,
+		},
+	}
+	textExtractor := tikaextractor.NewTikaExtractor(nil, settings, logging.NewConsoleLogger(logging.LevelError), settings.tikaCfg)
+	indexer := &testSearchIndexer{}
+	node := &testClusterNode{
+		id:       21,
+		isMaster: false,
+		createID: 314,
+	}
+	dep := testDep{
+		settings:      settings,
+		taskClient:    &testTaskClient{},
+		mediaMeta:     &testQueue{},
+		registry:      queue.NewTaskRegistry(),
+		config:        testConfigProvider{},
+		searchIndexer: indexer,
+		fileClient: &testFileClient{
+			fileByID: map[int]*ent.File{
+				801: {
+					ID:      801,
+					OwnerID: 701,
+					Type:    int(inventorytypes.FileTypeFolder),
+					Name:    "reports",
+				},
+			},
+		},
+		nodePool:      &testNodePool{node: node},
+		textExtractor: textExtractor,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	ftTask, err := NewFullTextIndexTask(ctx, mustURI(t, "cloudreve:///folder/reports"), 0, 801, 701, nil)
+	if err != nil {
+		t.Fatalf("failed to create full text index task: %v", err)
+	}
+
+	status, err := ftTask.Do(ctx)
+	if err != nil {
+		t.Fatalf("unexpected index task error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected index task status: got %s want %s", status, task.StatusCompleted)
+	}
+	if node.createdTaskType != "" {
+		t.Fatalf("expected folder reconcile not to dispatch slave task, got %s", node.createdTaskType)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != 801 {
+		t.Fatalf("expected folder reconcile to clear stale index, got %v", indexer.deleted)
+	}
+	if indexer.upserted != 0 {
+		t.Fatalf("expected no upsert for folder reconcile, got %d", indexer.upserted)
+	}
+}
+
 func TestManagerShouldOffloadFullTextToSlaveRequiresTikaAndSidecarText(t *testing.T) {
 	tikaSettings := testSettingProvider{
 		enabled: true,

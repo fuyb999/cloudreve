@@ -13,14 +13,60 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	enttask "github.com/cloudreve/Cloudreve/v4/ent/task"
 	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/kafka"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	_ "modernc.org/sqlite"
 )
+
+type testKafkaProducer struct {
+	lastTopic string
+	lastKey   []byte
+	lastValue any
+}
+
+func (p *testKafkaProducer) Publish(ctx context.Context, msg *kafka.Message) (*kafka.PublishResult, error) {
+	return &kafka.PublishResult{Partition: 0, Offset: 1}, nil
+}
+
+func (p *testKafkaProducer) PublishJSON(ctx context.Context, topic string, key []byte, payload any, headers map[string]string) (*kafka.PublishResult, error) {
+	p.lastTopic = topic
+	p.lastKey = append([]byte(nil), key...)
+	p.lastValue = payload
+	return &kafka.PublishResult{Partition: 0, Offset: 1}, nil
+}
+
+type testKafkaClient struct {
+	producer      *testKafkaProducer
+	registrations []kafka.ConsumerRegistration
+	started       bool
+}
+
+func (c *testKafkaClient) Enabled() bool { return true }
+
+func (c *testKafkaClient) Producer() kafka.Producer {
+	if c.producer == nil {
+		c.producer = &testKafkaProducer{}
+	}
+	return c.producer
+}
+
+func (c *testKafkaClient) RegisterConsumer(reg kafka.ConsumerRegistration) error {
+	c.registrations = append(c.registrations, reg)
+	return nil
+}
+
+func (c *testKafkaClient) Start(ctx context.Context) error {
+	c.started = true
+	return nil
+}
+
+func (c *testKafkaClient) Close() error { return nil }
 
 func containsString(items []string, target string) bool {
 	for _, item := range items {
@@ -58,6 +104,95 @@ func TestUpsertFTSExternalJobPayloadIgnoresSnapshotMismatch(t *testing.T) {
 	}
 	if job.ResultPayload != "" || job.CompletedAt != nil {
 		t.Fatalf("expected mismatched payload to be ignored, got result=%q completed_at=%v", job.ResultPayload, job.CompletedAt)
+	}
+}
+
+func TestPublishFTSExternalRequestUsesExplicitCfgWhenProviderDisabled(t *testing.T) {
+	ctx := context.Background()
+	client := newFTSExternalTestClient(t, ctx)
+	defer client.Close()
+
+	_ = CloseFTSExternalKafka()
+	originalNewClient := newFTSExternalKafkaClient
+	defer func() {
+		newFTSExternalKafkaClient = originalNewClient
+		_ = CloseFTSExternalKafka()
+	}()
+
+	fakeKafka := &testKafkaClient{producer: &testKafkaProducer{}}
+	var capturedCfg *conf.Kafka
+	newFTSExternalKafkaClient = func(cfg *conf.Kafka, logger logging.Logger) (kafka.Client, error) {
+		capturedCfg = cfg
+		return fakeKafka, nil
+	}
+
+	dep := ftsExternalIntegrationDep{
+		dbClient: client,
+		logger:   logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{externalCfg: &setting.FTSExternalExtractorSetting{}},
+	}
+
+	fileModel := &ent.File{ID: 101, OwnerID: 7, Name: "report.pdf", Size: 4096, UpdatedAt: time.Now().UTC()}
+	entity := &ent.Entity{ID: 201, Source: "tenant-a/u7/report.pdf", UpdatedAt: fileModel.UpdatedAt}
+	policy := &ent.StoragePolicy{ID: 301, BucketName: "cloudreve-test-bucket"}
+	explicitCfg := &setting.FTSExternalExtractorSetting{
+		Enabled:        true,
+		Mode:           setting.FTSExternalModePrimary,
+		TimeoutSeconds: 20,
+		Kafka: setting.FTSExternalKafkaSetting{
+			UseGlobalKafka:   false,
+			Brokers:          []string{"127.0.0.1:9092"},
+			SecurityProtocol: "PLAINTEXT",
+			ProcessTopic:     "process.override",
+			ResultTopic:      "result.override",
+			ErrorTopic:       "error.override",
+			ConsumerGroup:    "group.override",
+		},
+	}
+
+	job, err := publishFTSExternalRequest(ctx, dep, fileModel, entity, policy, explicitCfg, "primary", 1, "")
+	if err != nil {
+		t.Fatalf("expected explicit cfg to bootstrap kafka runtime, got error: %v", err)
+	}
+	if job == nil || strings.TrimSpace(job.RequestID) == "" {
+		t.Fatalf("expected external job to be created, got %+v", job)
+	}
+	if capturedCfg == nil || strings.TrimSpace(capturedCfg.Brokers) != "127.0.0.1:9092" {
+		t.Fatalf("expected kafka config to use explicit brokers, got %+v", capturedCfg)
+	}
+	if !fakeKafka.started {
+		t.Fatal("expected explicit kafka runtime to be started")
+	}
+	if len(fakeKafka.registrations) != 1 {
+		t.Fatalf("expected one consumer registration, got %d", len(fakeKafka.registrations))
+	}
+	if fakeKafka.producer.lastTopic != explicitCfg.Kafka.ProcessTopic {
+		t.Fatalf("expected publish topic %q, got %q", explicitCfg.Kafka.ProcessTopic, fakeKafka.producer.lastTopic)
+	}
+}
+
+func TestBuildFTSExternalKafkaConfigUsesOldestInitialOffset(t *testing.T) {
+	cfg := &setting.FTSExternalExtractorSetting{
+		Enabled: true,
+		Kafka: setting.FTSExternalKafkaSetting{
+			UseGlobalKafka:   false,
+			Brokers:          []string{"127.0.0.1:9092"},
+			SecurityProtocol: "PLAINTEXT",
+			ProcessTopic:     "process.override",
+			ResultTopic:      "result.override",
+			ErrorTopic:       "error.override",
+			ConsumerGroup:    "group.override",
+		},
+	}
+
+	kafkaCfg, err := buildFTSExternalKafkaConfig(ftsExternalIntegrationDep{
+		logger: logging.NewConsoleLogger(logging.LevelError),
+	}, cfg)
+	if err != nil {
+		t.Fatalf("expected external kafka config to build, got error: %v", err)
+	}
+	if kafkaCfg.Consumer.InitialOffset != "oldest" {
+		t.Fatalf("expected external consumer initial offset to be oldest, got %q", kafkaCfg.Consumer.InitialOffset)
 	}
 }
 

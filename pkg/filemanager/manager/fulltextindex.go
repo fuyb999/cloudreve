@@ -69,6 +69,14 @@ type (
 	}
 )
 
+func (i FullTextIndexTaskItem) IsDeleteOnly() bool {
+	return i.FileID > 0 && i.Uri == nil && i.EntityID == 0 && i.OwnerID == 0
+}
+
+func (i FullTextIndexTaskItem) HasPrimaryEntity() bool {
+	return i.EntityID > 0
+}
+
 var fullTextMergeableTaskTypes = []string{
 	queue.FullTextIndexTaskType,
 }
@@ -689,6 +697,26 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 }
 
 func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *manager, state *FullTextIndexTaskState, item FullTextIndexTaskItem) (task.Status, error) {
+	if item.IsDeleteOnly() {
+		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if err != nil {
+			return status, err
+		}
+
+		state.CompleteActive()
+		return t.persistAndContinue(state)
+	}
+
+	if !item.HasPrimaryEntity() {
+		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if err != nil {
+			return status, err
+		}
+
+		state.CompleteActive()
+		return t.persistAndContinue(state)
+	}
+
 	node, err := allocateContentProcessingNode(ctx, fm.dep, state.NodeID)
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to allocate content processing node: %w", err)

@@ -28,7 +28,6 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
-	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/kafka"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
@@ -49,6 +48,7 @@ const (
 	waitJobTimeout    = 25 * time.Second
 	waitIndexTimeout  = 45 * time.Second
 	waitProcessTapTTL = 8 * time.Second
+	resultSettleDelay = 3 * time.Second
 )
 
 type smokeCase struct {
@@ -148,11 +148,15 @@ type apiResponse struct {
 }
 
 type uploadSessionResponse struct {
-	SessionID   string   `json:"session_id"`
-	ChunkSize   int64    `json:"chunk_size"`
-	UploadURLs  []string `json:"upload_urls,omitempty"`
-	CompleteURL string   `json:"completeURL,omitempty"`
-	URI         string   `json:"uri,omitempty"`
+	SessionID      string   `json:"session_id"`
+	ChunkSize      int64    `json:"chunk_size"`
+	UploadURLs     []string `json:"upload_urls,omitempty"`
+	CompleteURL    string   `json:"completeURL,omitempty"`
+	URI            string   `json:"uri,omitempty"`
+	CallbackSecret string   `json:"callback_secret,omitempty"`
+	StoragePolicy  *struct {
+		Type string `json:"type"`
+	} `json:"storage_policy,omitempty"`
 }
 
 func buildCases() []smokeCase {
@@ -166,6 +170,17 @@ func buildCases() []smokeCase {
 			ExpectExternalJob: true,
 			ExpectESContent:   "primary external result",
 			ExternalContent:   "primary external result",
+			ExpectReason:      "primary",
+		},
+		{
+			Name:              "primary_global_external_success",
+			Mode:              "primary",
+			UseGlobalKafka:    true,
+			FileName:          "primary-global-probe.txt",
+			Content:           []byte("primary global local text should be replaced by external result"),
+			ExpectExternalJob: true,
+			ExpectESContent:   "primary global external result",
+			ExternalContent:   "primary global external result",
 			ExpectReason:      "primary",
 		},
 		{
@@ -205,6 +220,18 @@ func buildCases() []smokeCase {
 			ExpectExternalJob: true,
 			ExpectESContent:   "quality fallback external result",
 			ExternalContent:   "quality fallback external result",
+			ExpectReason:      "quality_rejected",
+			ExpectQualityHint: "font_issue_box_glyphs",
+		},
+		{
+			Name:              "fallback_on_quality_global_external_success",
+			Mode:              "fallback_on_error_or_quality",
+			UseGlobalKafka:    true,
+			FileName:          "quality-bad-global.txt",
+			Content:           []byte("□□□□ □□□□ □□□□"),
+			ExpectExternalJob: true,
+			ExpectESContent:   "quality global external result",
+			ExternalContent:   "quality global external result",
 			ExpectReason:      "quality_rejected",
 			ExpectQualityHint: "font_issue_box_glyphs",
 		},
@@ -414,6 +441,9 @@ func runSmokeCase(configPath string, tc smokeCase, topics kafkaTopics) error {
 
 	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
 	ctx = context.WithValue(ctx, inventory.LoadTaskUser{}, true)
+	if err := ensureSmokeFTSSettings(ctx, dep, tc, topics); err != nil {
+		return fmt.Errorf("apply smoke fts settings: %w", err)
+	}
 	if err := setAdminGroupPolicy(ctx, dep, externalPolicyID); err != nil {
 		return fmt.Errorf("set admin group policy: %w", err)
 	}
@@ -511,6 +541,7 @@ func runExternalCase(ctx context.Context, dep dependency.Dep, tap *processTap, f
 		return fmt.Errorf("process topic did not receive message for request_id=%s", job.RequestID)
 	}
 	fmt.Printf("case=%s process_message_ok request_id=%s topic=%s\n", tc.Name, job.RequestID, topics.Process)
+	time.Sleep(resultSettleDelay)
 
 	if err := publishSyntheticExternalResult(job, defaultBroker, topics.Result, tc.ExternalContent); err != nil {
 		return fmt.Errorf("publish synthetic result: %w", err)
@@ -920,15 +951,6 @@ func (t *processTap) close() {
 	_ = t.client.Close()
 }
 
-func uploadBytes(ctx context.Context, fm manager.FileManager, uri *fs.URI, data []byte) (fs.File, error) {
-	reader := bytes.NewReader(data)
-	return fm.Update(ctx, &fs.UploadRequest{
-		Props:  &fs.UploadProps{Uri: uri, Size: int64(len(data))},
-		File:   io.NopCloser(reader),
-		Seeker: reader,
-	})
-}
-
 func issueAccessToken(ctx context.Context, dep dependency.Dep, user *ent.User) (string, error) {
 	token, err := dep.TokenAuth().Issue(ctx, &auth.IssueTokenArgs{
 		User: user,
@@ -974,11 +996,14 @@ func uploadViaMasterHTTP(accessToken, uri string, data []byte) error {
 	if err := json.Unmarshal(sessionResp.Data, &session); err != nil {
 		return err
 	}
-	if len(session.UploadURLs) > 0 || session.CompleteURL != "" {
-		return fmt.Errorf("unexpected direct-upload credential for uri=%s, relay upload is required", uri)
-	}
 	if session.SessionID == "" {
 		return fmt.Errorf("upload session id is empty for uri=%s", uri)
+	}
+	if len(session.UploadURLs) > 0 {
+		if err := uploadDirectS3Like(session, data); err != nil {
+			return fmt.Errorf("direct upload failed: %w", err)
+		}
+		return nil
 	}
 	if session.ChunkSize > 0 && int64(len(data)) > session.ChunkSize {
 		return fmt.Errorf("single chunk upload is insufficient size=%d chunk_size=%d", len(data), session.ChunkSize)
@@ -1010,6 +1035,110 @@ func uploadViaMasterHTTP(accessToken, uri string, data []byte) error {
 	}
 
 	return nil
+}
+
+func uploadDirectS3Like(session uploadSessionResponse, data []byte) error {
+	policyType := "s3"
+	if session.StoragePolicy != nil && strings.TrimSpace(session.StoragePolicy.Type) != "" {
+		policyType = strings.TrimSpace(session.StoragePolicy.Type)
+	}
+	if session.CallbackSecret == "" {
+		return fmt.Errorf("callback secret is empty for session=%s", session.SessionID)
+	}
+	if len(session.UploadURLs) == 0 {
+		return fmt.Errorf("upload urls are empty for session=%s", session.SessionID)
+	}
+
+	chunkSize := session.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = int64(len(data))
+	}
+
+	partCount := int((int64(len(data)) + chunkSize - 1) / chunkSize)
+	if len(data) == 0 {
+		partCount = 1
+	}
+	if len(session.UploadURLs) < partCount {
+		return fmt.Errorf("upload urls are insufficient got=%d want=%d", len(session.UploadURLs), partCount)
+	}
+
+	partsXML := new(strings.Builder)
+	partsXML.WriteString("<CompleteMultipartUpload>")
+	for i := 0; i < partCount; i++ {
+		start := int64(i) * chunkSize
+		end := min(int64(len(data)), start+chunkSize)
+		payload := data[start:end]
+		etag, err := uploadDirectChunk(session.UploadURLs[i], payload)
+		if err != nil {
+			return fmt.Errorf("upload part %d failed: %w", i+1, err)
+		}
+		fmt.Fprintf(partsXML, "<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>", i+1, etag)
+	}
+	partsXML.WriteString("</CompleteMultipartUpload>")
+
+	if session.CompleteURL != "" {
+		req, err := http.NewRequest(http.MethodPost, session.CompleteURL, strings.NewReader(partsXML.String()))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			return fmt.Errorf("complete multipart upload failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+	}
+
+	callbackURL := fmt.Sprintf("%s%s/callback/%s/%s/%s", defaultSiteURL, constants.APIPrefix, policyType, session.SessionID, session.CallbackSecret)
+	callbackReq, err := http.NewRequest(http.MethodGet, callbackURL, nil)
+	if err != nil {
+		return err
+	}
+	callbackResp, err := http.DefaultClient.Do(callbackReq)
+	if err != nil {
+		return err
+	}
+	defer callbackResp.Body.Close()
+
+	var callbackResult apiResponse
+	if err := json.NewDecoder(callbackResp.Body).Decode(&callbackResult); err != nil {
+		return err
+	}
+	if callbackResult.Code != 0 {
+		return fmt.Errorf("upload callback failed code=%d msg=%q err=%q", callbackResult.Code, callbackResult.Msg, callbackResult.Error)
+	}
+	return nil
+}
+
+func uploadDirectChunk(url string, payload []byte) (string, error) {
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	etag := strings.TrimSpace(resp.Header.Get("Etag"))
+	if etag == "" {
+		etag = strings.TrimSpace(resp.Header.Get("ETag"))
+	}
+	if etag == "" {
+		return "", fmt.Errorf("etag header missing")
+	}
+	return etag, nil
 }
 
 func waitUploadedFileID(ctx context.Context, dep dependency.Dep, ownerID int, fileName string, size int64, timeout time.Duration) (int, error) {

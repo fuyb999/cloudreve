@@ -139,14 +139,15 @@ type externalFTSKafkaRuntime struct {
 }
 
 var ftsExternalKafkaRuntime externalFTSKafkaRuntime
+var newFTSExternalKafkaClient = kafka.New
 
 func StartFTSExternalKafka(ctx context.Context, dep dependency.Dep) error {
-	_, _, err := ensureFTSExternalKafkaRuntime(ctx, dep, false)
+	_, _, err := ensureFTSExternalKafkaRuntimeWithConfig(ctx, dep, nil, false)
 	return err
 }
 
 func ReloadFTSExternalKafka(ctx context.Context, dep dependency.Dep) error {
-	_, _, err := ensureFTSExternalKafkaRuntime(ctx, dep, true)
+	_, _, err := ensureFTSExternalKafkaRuntimeWithConfig(ctx, dep, nil, true)
 	return err
 }
 
@@ -170,7 +171,19 @@ func closeFTSExternalKafkaRuntimeLocked() error {
 }
 
 func ensureFTSExternalKafkaRuntime(ctx context.Context, dep dependency.Dep, force bool) (kafka.Client, *setting.FTSExternalExtractorSetting, error) {
-	cfg := dep.SettingProvider().FTSExternalExtractor(ctx)
+	return ensureFTSExternalKafkaRuntimeWithConfig(ctx, dep, nil, force)
+}
+
+func ensureFTSExternalKafkaRuntimeWithConfig(
+	ctx context.Context,
+	dep dependency.Dep,
+	override *setting.FTSExternalExtractorSetting,
+	force bool,
+) (kafka.Client, *setting.FTSExternalExtractorSetting, error) {
+	cfg := cloneFTSExternalExtractorSetting(override)
+	if cfg == nil && dep != nil && dep.SettingProvider() != nil {
+		cfg = cloneFTSExternalExtractorSetting(dep.SettingProvider().FTSExternalExtractor(ctx))
+	}
 
 	ftsExternalKafkaRuntime.mu.Lock()
 	defer ftsExternalKafkaRuntime.mu.Unlock()
@@ -200,7 +213,7 @@ func ensureFTSExternalKafkaRuntime(ctx context.Context, dep dependency.Dep, forc
 		return nil, cfg, err
 	}
 
-	client, err := kafka.New(kafkaCfg, dep.Logger())
+	client, err := newFTSExternalKafkaClient(kafkaCfg, dep.Logger())
 	if err != nil {
 		return nil, cfg, err
 	}
@@ -249,7 +262,9 @@ func buildFTSExternalKafkaConfig(dep dependency.Dep, cfg *setting.FTSExternalExt
 	}
 
 	base.ClientID = strings.TrimSpace(base.ClientID) + "-fts-external"
-	base.Consumer.InitialOffset = "newest"
+	// External result consumers may start slightly after the process request is published.
+	// Use oldest so a fast third-party response is still visible to a brand-new consumer group.
+	base.Consumer.InitialOffset = "oldest"
 	base.Consumer.ReturnErrors = true
 
 	if strings.TrimSpace(base.Brokers) == "" {
@@ -438,7 +453,7 @@ func publishFTSExternalRequest(
 	attempt int,
 	qualityReport string,
 ) (*ent.FTSExternalJob, error) {
-	client, _, err := ensureFTSExternalKafkaRuntime(ctx, dep, false)
+	client, _, err := ensureFTSExternalKafkaRuntimeWithConfig(ctx, dep, cfg, false)
 	if err != nil {
 		return nil, err
 	}
