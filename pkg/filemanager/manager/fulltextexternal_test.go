@@ -78,6 +78,57 @@ func containsString(items []string, target string) bool {
 	return false
 }
 
+func TestBuildFTSExternalProcessMessageIncludesPolicyID(t *testing.T) {
+	fileModel := &ent.File{ID: 101, OwnerID: 7, Name: "report.pdf", Size: 4096, UpdatedAt: time.Now().UTC()}
+	entity := &ent.Entity{ID: 201, Source: "tenant-a/u7/report.pdf", UpdatedAt: fileModel.UpdatedAt}
+	policy := &ent.StoragePolicy{ID: 301, BucketName: "cloudreve-test-bucket"}
+	cfg := &setting.FTSExternalExtractorSetting{RecursiveAttachments: true, OCREnabled: true}
+
+	msg, snapshotToken, err := buildFTSExternalProcessMessage(fileModel, entity, policy, cfg)
+	if err != nil {
+		t.Fatalf("buildFTSExternalProcessMessage returned error: %v", err)
+	}
+	if msg == nil {
+		t.Fatal("expected process message")
+	}
+	if snapshotToken == "" {
+		t.Fatal("expected snapshot token")
+	}
+	if got, want := msg.Source.PolicyID, policy.ID; got != want {
+		t.Fatalf("unexpected source policy id: got %d want %d", got, want)
+	}
+	if got, want := msg.Source.Bucket, policy.BucketName; got != want {
+		t.Fatalf("unexpected source bucket: got %q want %q", got, want)
+	}
+	if got, want := msg.Source.Path, entity.Source; got != want {
+		t.Fatalf("unexpected source path: got %q want %q", got, want)
+	}
+	if !msg.Options.RecursiveAttachments || !msg.Options.OCREnabled {
+		t.Fatalf("unexpected process options: %+v", msg.Options)
+	}
+}
+
+func TestBuildFTSExternalSnapshotTokenIncludesOCRAndAttachmentFlags(t *testing.T) {
+	reqTime := time.Now().UTC().Round(time.Second)
+	fileModel := &ent.File{ID: 101, OwnerID: 7, Name: "report.pdf", Size: 4096, UpdatedAt: reqTime}
+	entity := &ent.Entity{ID: 201, Source: "tenant-a/u7/report.pdf", UpdatedAt: reqTime}
+
+	base := buildFTSExternalSnapshotToken(fileModel, entity, &setting.FTSExternalExtractorSetting{})
+	withRecursive := buildFTSExternalSnapshotToken(fileModel, entity, &setting.FTSExternalExtractorSetting{
+		RecursiveAttachments: true,
+	})
+	withOCR := buildFTSExternalSnapshotToken(fileModel, entity, &setting.FTSExternalExtractorSetting{
+		OCREnabled: true,
+	})
+
+	if base == withRecursive {
+		t.Fatalf("expected recursive attachment flag to change snapshot token: %q", base)
+	}
+	if base == withOCR {
+		t.Fatalf("expected OCR flag to change snapshot token: %q", base)
+	}
+}
+
 func TestUpsertFTSExternalJobPayloadIgnoresSnapshotMismatch(t *testing.T) {
 	ctx := context.Background()
 	client := newFTSExternalTestClient(t, ctx)
@@ -643,7 +694,8 @@ func TestFindReusableFTSExternalJobPrefersSuccessForSameSnapshot(t *testing.T) {
 	reqTime := time.Now().UTC().Round(time.Second)
 	fileModel := &ent.File{ID: 10, Size: 4096, UpdatedAt: reqTime}
 	entity := &ent.Entity{ID: 30, UpdatedAt: reqTime}
-	snapshotToken := buildFTSExternalSnapshotToken(fileModel, entity)
+	cfg := &setting.FTSExternalExtractorSetting{RecursiveAttachments: true, OCREnabled: true}
+	snapshotToken := buildFTSExternalSnapshotToken(fileModel, entity, cfg)
 
 	createFTSExternalJob(t, ctx, client, "req-queued", snapshotToken)
 	successJob := createFTSExternalJob(t, ctx, client, "req-success", snapshotToken)
@@ -660,7 +712,7 @@ func TestFindReusableFTSExternalJobPrefersSuccessForSameSnapshot(t *testing.T) {
 		logger:   logging.NewConsoleLogger(logging.LevelError),
 	}
 
-	job, err := findReusableFTSExternalJob(ctx, dep, fileModel, entity)
+	job, err := findReusableFTSExternalJob(ctx, dep, fileModel, entity, cfg)
 	if err != nil {
 		t.Fatalf("expected reusable job query to succeed, got error: %v", err)
 	}
@@ -685,7 +737,7 @@ func TestQueueExternalExtractionReusesQueuedJob(t *testing.T) {
 	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
 		return false
 	}
-	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, cfg *setting.FTSExternalExtractorSetting) (*ent.FTSExternalJob, error) {
 		return &ent.FTSExternalJob{
 			RequestID: "req-reused-queued",
 			Status:    ftsExternalJobStatusQueued,
@@ -736,7 +788,7 @@ func TestQueueExternalExtractionReusesSuccessfulJob(t *testing.T) {
 	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
 		return false
 	}
-	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, cfg *setting.FTSExternalExtractorSetting) (*ent.FTSExternalJob, error) {
 		return &ent.FTSExternalJob{
 			RequestID:     "req-reused-success",
 			Status:        ftsExternalJobStatusSuccess,
@@ -800,7 +852,7 @@ func TestDispatchExternalIfConfiguredFallbackOnErrorQueuesWhenLocalTextEmpty(t *
 	uri := mustURI(t, "cloudreve:///my/report.pdf")
 	loadFTSExternalCandidateForTask = func(m *manager, ctx context.Context, fileID int) (*ftsExternalCandidate, error) {
 		return &ftsExternalCandidate{
-			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "report.pdf"},
+			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "report.pdf", Size: 4096},
 			primaryEntity: &ent.Entity{ID: 201, Source: "tenant-a/u7/report.pdf", UpdatedAt: time.Now()},
 			policy:        &ent.StoragePolicy{ID: 301, BucketName: "cloudreve", Type: inventorytypes.PolicyTypeS3},
 			uri:           uri,
@@ -865,7 +917,7 @@ func TestDispatchExternalIfConfiguredFallbackOnQualityQueuesWhenRejected(t *test
 	uri := mustURI(t, "cloudreve:///my/bad.pdf")
 	loadFTSExternalCandidateForTask = func(m *manager, ctx context.Context, fileID int) (*ftsExternalCandidate, error) {
 		return &ftsExternalCandidate{
-			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "bad.pdf"},
+			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "bad.pdf", Size: 4096},
 			primaryEntity: &ent.Entity{ID: 202, Source: "tenant-a/u7/bad.pdf", UpdatedAt: time.Now()},
 			policy:        &ent.StoragePolicy{ID: 302, BucketName: "cloudreve", Type: inventorytypes.PolicyTypeS3},
 			uri:           uri,
@@ -955,7 +1007,7 @@ func TestDispatchExternalIfConfiguredFallbackOnQualityKeepsLocalResultWhenAccept
 	uri := mustURI(t, "cloudreve:///my/good.pdf")
 	loadFTSExternalCandidateForTask = func(m *manager, ctx context.Context, fileID int) (*ftsExternalCandidate, error) {
 		return &ftsExternalCandidate{
-			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "good.pdf"},
+			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "good.pdf", Size: 4096},
 			primaryEntity: &ent.Entity{ID: 203, Source: "tenant-a/u7/good.pdf", UpdatedAt: time.Now()},
 			policy:        &ent.StoragePolicy{ID: 303, BucketName: "cloudreve", Type: inventorytypes.PolicyTypeS3},
 			uri:           uri,
@@ -1024,6 +1076,84 @@ func TestDispatchExternalIfConfiguredFallbackOnQualityKeepsLocalResultWhenAccept
 	}
 	if len(backend.patches) != 1 || backend.patches[0].Key != dbfs.FullTextIndexKey {
 		t.Fatalf("expected fulltext metadata patch, got %+v", backend.patches)
+	}
+}
+
+func TestDispatchExternalIfConfiguredQueuesWhenOCRCandidatesReady(t *testing.T) {
+	originalLoadCandidate := loadFTSExternalCandidateForTask
+	originalHasSidecar := hasCurrentExternalFTSSidecarForTask
+	originalBuildDoc := buildFTSFileDocumentForTask
+	originalHasOCRCandidates := hasFTSOCRCandidatesForTask
+	originalPublish := publishFTSExternalRequestForTask
+	defer func() {
+		loadFTSExternalCandidateForTask = originalLoadCandidate
+		hasCurrentExternalFTSSidecarForTask = originalHasSidecar
+		buildFTSFileDocumentForTask = originalBuildDoc
+		hasFTSOCRCandidatesForTask = originalHasOCRCandidates
+		publishFTSExternalRequestForTask = originalPublish
+	}()
+
+	uri := mustURI(t, "cloudreve:///my/poster.pdf")
+	loadFTSExternalCandidateForTask = func(m *manager, ctx context.Context, fileID int) (*ftsExternalCandidate, error) {
+		return &ftsExternalCandidate{
+			fileModel:     &ent.File{ID: fileID, OwnerID: 7, Name: "poster.pdf", Size: 4096},
+			primaryEntity: &ent.Entity{ID: 204, Source: "tenant-a/u7/poster.pdf", UpdatedAt: time.Now()},
+			policy:        &ent.StoragePolicy{ID: 304, BucketName: "cloudreve", Type: inventorytypes.PolicyTypeS3},
+			uri:           uri,
+		}, nil
+	}
+	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
+		return false
+	}
+	buildFTSFileDocumentForTask = func(m *manager, ctx context.Context, fileID int, opts FTSBuildOptions) (*searcher.SearchFileDocument, *fs.URI, error) {
+		return &searcher.SearchFileDocument{
+			FileID:   fileID,
+			EntityID: 204,
+			Content:  "existing local text",
+		}, uri, nil
+	}
+	hasFTSOCRCandidatesForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate, doc *searcher.SearchFileDocument, uri *fs.URI) bool {
+		return true
+	}
+
+	var capturedReason string
+	publishFTSExternalRequestForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, policy *ent.StoragePolicy, cfg *setting.FTSExternalExtractorSetting, triggerReason string, attempt int, qualityReport string) (*ent.FTSExternalJob, error) {
+		capturedReason = triggerReason
+		if !cfg.OCREnabled {
+			t.Fatalf("expected OCR to stay enabled in external config: %+v", cfg)
+		}
+		return &ent.FTSExternalJob{RequestID: "req-ocr"}, nil
+	}
+
+	cfg := &setting.FTSExternalExtractorSetting{
+		Enabled:        true,
+		Mode:           setting.FTSExternalModeFallbackOnError,
+		TimeoutSeconds: 60,
+		OCREnabled:     true,
+	}
+	taskModel := &FullTextIndexTask{DBTask: &queue.DBTask{Task: &ent.Task{PublicState: &inventorytypes.TaskPublicState{}}}}
+	state := &FullTextIndexTaskState{}
+	state.Upsert(FullTextIndexTaskItem{FileID: 104, Uri: uri})
+	fm := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{externalCfg: cfg},
+	}
+
+	status, handled, err := taskModel.dispatchExternalIfConfigured(context.Background(), fm, state, FullTextIndexTaskItem{FileID: 104, Uri: uri})
+	if err != nil {
+		t.Fatalf("expected OCR candidates to queue external extraction, got error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected external dispatcher to handle OCR candidates case")
+	}
+	if status != enttask.StatusSuspending {
+		t.Fatalf("unexpected status for OCR candidate fallback: got %s want %s", status, enttask.StatusSuspending)
+	}
+	if state.Phase != fullTextIndexPhaseAwaitExternal || state.ExternalRequestID != "req-ocr" {
+		t.Fatalf("expected await external state, got phase=%s request=%q", state.Phase, state.ExternalRequestID)
+	}
+	if capturedReason != "ocr_candidates_ready" {
+		t.Fatalf("unexpected OCR trigger reason: got %q want %q", capturedReason, "ocr_candidates_ready")
 	}
 }
 

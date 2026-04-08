@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,6 +365,7 @@ func TestPersistExternalFTSSidecarsToHandlerWritesExpectedArtifacts(t *testing.T
 	tempDir := t.TempDir()
 	handler := &memorySidecarHandler{dir: tempDir}
 	m := &manager{}
+	policy := &ent.StoragePolicy{ID: 11, BucketName: "cloudreve-test-bucket"}
 
 	fileModel := &ent.File{ID: 42, OwnerID: 9, Name: "report.pdf"}
 	entity := &testEntity{id: 7, source: "tenant-a/u9/report.pdf"}
@@ -390,7 +392,7 @@ func TestPersistExternalFTSSidecarsToHandlerWritesExpectedArtifacts(t *testing.T
 		}},
 	}
 
-	manifest, manifestPath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, entity, handler, result)
+	manifest, manifestPath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, entity, policy, handler, result)
 	if err != nil {
 		t.Fatalf("persistExternalFTSSidecarsToHandler returned error: %v", err)
 	}
@@ -457,6 +459,187 @@ func TestPersistExternalFTSSidecarsToHandlerWritesExpectedArtifacts(t *testing.T
 	}
 }
 
+func TestPersistExternalFTSSidecarsToHandlerReadsReferencedContentByPolicyID(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	m := &manager{}
+	policy := &ent.StoragePolicy{ID: 17, BucketName: "cloudreve-extract-bucket"}
+
+	if err := putSidecarBytes(ctx, handler, "third-party/root.txt", "root.txt", "text/plain; charset=utf-8", []byte("hello from referenced object")); err != nil {
+		t.Fatalf("failed to seed referenced root content: %v", err)
+	}
+	if err := putSidecarBytes(ctx, handler, "third-party/attachments/embedded.txt", "embedded.txt", "text/plain; charset=utf-8", []byte("hello from referenced attachment")); err != nil {
+		t.Fatalf("failed to seed referenced attachment content: %v", err)
+	}
+
+	fileModel := &ent.File{ID: 43, OwnerID: 9, Name: "report.pdf"}
+	entity := &testEntity{id: 8, source: "tenant-a/u9/report.pdf"}
+	result := &externalFTSResultMessage{
+		SnapshotToken: "snapshot-43",
+		Provider: externalFTSProviderInfo{
+			Name:    "vendor-x",
+			Version: "1.0.1",
+		},
+		Root: externalFTSResultRoot{
+			ContentPolicyID: policy.ID,
+			ContentBucket:   policy.BucketName,
+			ContentPath:     "third-party/root.txt",
+		},
+		Attachments: []externalFTSAttachment{{
+			ID:              "att-1",
+			ParentID:        "file:43",
+			Depth:           1,
+			Type:            "attachment",
+			Name:            "embedded.txt",
+			Path:            "embedded/embedded.txt",
+			MimeType:        "text/plain",
+			ContentPolicyID: policy.ID,
+			ContentBucket:   policy.BucketName,
+			ContentPath:     "third-party/attachments/embedded.txt",
+		}},
+	}
+
+	manifest, manifestPath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, entity, policy, handler, result)
+	if err != nil {
+		t.Fatalf("persistExternalFTSSidecarsToHandler returned error: %v", err)
+	}
+	if manifest == nil {
+		t.Fatal("expected manifest")
+	}
+
+	contentRaw, err := os.ReadFile(handler.LocalPath(ctx, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "content.txt"))))
+	if err != nil {
+		t.Fatalf("failed to read content sidecar: %v", err)
+	}
+	if got, want := string(contentRaw), "hello from referenced object"; got != want {
+		t.Fatalf("unexpected content sidecar: got %q want %q", got, want)
+	}
+
+	attachmentsRaw, err := os.ReadFile(handler.LocalPath(ctx, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "attachments.json"))))
+	if err != nil {
+		t.Fatalf("failed to read attachments sidecar: %v", err)
+	}
+	var attachments []searcher.SearchAttachmentDocument
+	if err := json.Unmarshal(attachmentsRaw, &attachments); err != nil {
+		t.Fatalf("failed to unmarshal attachments sidecar: %v", err)
+	}
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachments sidecar count: got %d want 1", len(attachments))
+	}
+	if got := attachments[0].Content; got != "" {
+		t.Fatalf("expected attachment content to be stripped from attachments.json, got %q", got)
+	}
+	if got, want := attachments[0].Bucket, policy.BucketName; got != want {
+		t.Fatalf("unexpected attachment bucket: got %q want %q", got, want)
+	}
+	if !strings.Contains(attachments[0].Source, "/attachment-text/") {
+		t.Fatalf("expected attachment source to point to attachment text sidecar, got %q", attachments[0].Source)
+	}
+
+	textSidecarRaw, err := os.ReadFile(handler.LocalPath(ctx, attachments[0].Source))
+	if err != nil {
+		t.Fatalf("failed to read attachment text sidecar: %v", err)
+	}
+	if got, want := string(textSidecarRaw), "hello from referenced attachment"; got != want {
+		t.Fatalf("unexpected attachment text sidecar: got %q want %q", got, want)
+	}
+
+	if _, ok := manifest.ObjectByName(sidecarAttachmentTextObjectIDFromDocID(attachments[0].ID)); !ok {
+		t.Fatalf("expected manifest to include attachment text artifact for %q", attachments[0].ID)
+	}
+}
+
+func TestHydrateFTSSidecarAttachmentContentsLoadsAttachmentTextSidecar(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	m := &manager{}
+
+	savePath := "cloudreve/fts-sidecar/1/42/7/attachment-text/attachments/nested/note.txt.txt"
+	if err := putSidecarBytes(ctx, handler, savePath, "note.txt.txt", "text/plain; charset=utf-8", []byte("hello from sidecar attachment")); err != nil {
+		t.Fatalf("failed to seed attachment text sidecar: %v", err)
+	}
+
+	attachments := []searcher.SearchAttachmentDocument{{
+		ID:     embeddedAttachmentDocID(42, "attachments/nested/note.txt"),
+		Source: savePath,
+	}}
+	hydrated := m.hydrateFTSSidecarAttachmentContents(ctx, handler, attachments)
+	if len(hydrated) != 1 {
+		t.Fatalf("unexpected hydrated attachment count: got %d want 1", len(hydrated))
+	}
+	if got, want := hydrated[0].Content, "hello from sidecar attachment"; got != want {
+		t.Fatalf("unexpected hydrated attachment content: got %q want %q", got, want)
+	}
+}
+
+func TestBuildFTSSidecarOCRCandidatesIncludesRootAndAttachmentImages(t *testing.T) {
+	fileModel := &ent.File{ID: 42, OwnerID: 9, Name: "poster.png", Size: 4096}
+	entity := &testEntity{id: 7, source: "tenant-a/u9/poster.png"}
+	policy := &ent.StoragePolicy{ID: 11, BucketName: "cloudreve-fts"}
+	manifest := &FTSSidecarManifest{
+		Objects: []FTSSidecarArtifact{
+			{
+				ID:       "attachments/slide/image1.png",
+				Kind:     "embedded",
+				Name:     "image1.png",
+				Path:     "cloudreve/fts-sidecar/9/42/7/attachments/slide/image1.png",
+				MimeType: "image/png",
+				Size:     2048,
+			},
+			{
+				ID:       "attachments/slide/image2.png",
+				Kind:     "embedded",
+				Name:     "image2.png",
+				Path:     "cloudreve/fts-sidecar/9/42/7/attachments/slide/image2.png",
+				MimeType: "image/png",
+				Size:     2048,
+			},
+			{
+				ID:       sidecarAttachmentTextObjectID("attachments/slide/image2.png"),
+				ParentID: "attachments/slide/image2.png",
+				Kind:     "attachment_text",
+				Name:     "image2.png.txt",
+				Path:     "cloudreve/fts-sidecar/9/42/7/attachment-text/attachments/slide/image2.png.txt",
+				MimeType: "text/plain; charset=utf-8",
+				Size:     32,
+			},
+			{
+				ID:       "attachments/slide/note.txt",
+				Kind:     "embedded",
+				Name:     "note.txt",
+				Path:     "cloudreve/fts-sidecar/9/42/7/attachments/slide/note.txt",
+				MimeType: "text/plain",
+				Size:     128,
+			},
+		},
+	}
+
+	candidates := buildFTSSidecarOCRCandidates(fileModel, entity, policy, "", manifest)
+	if len(candidates) != 2 {
+		t.Fatalf("unexpected ocr candidate count: got %d want 2", len(candidates))
+	}
+	if got, want := candidates[0].Scope, "file"; got != want {
+		t.Fatalf("unexpected root candidate scope: got %q want %q", got, want)
+	}
+	if got, want := candidates[0].Path, entity.Source(); got != want {
+		t.Fatalf("unexpected root candidate path: got %q want %q", got, want)
+	}
+	if got, want := candidates[0].PolicyID, policy.ID; got != want {
+		t.Fatalf("unexpected root candidate policy id: got %d want %d", got, want)
+	}
+	if got, want := candidates[1].Scope, "attachment"; got != want {
+		t.Fatalf("unexpected attachment candidate scope: got %q want %q", got, want)
+	}
+	if got, want := candidates[1].AttachmentID, embeddedAttachmentDocID(42, "attachments/slide/image1.png"); got != want {
+		t.Fatalf("unexpected attachment candidate id: got %q want %q", got, want)
+	}
+	if got, want := candidates[1].Path, "cloudreve/fts-sidecar/9/42/7/attachments/slide/image1.png"; got != want {
+		t.Fatalf("unexpected attachment candidate path: got %q want %q", got, want)
+	}
+}
+
 func TestReadFTSSidecarBytesFallsBackToOpenWithoutInboundCapability(t *testing.T) {
 	tempDir := t.TempDir()
 	base := &memorySidecarHandler{dir: tempDir}
@@ -473,6 +656,139 @@ func TestReadFTSSidecarBytesFallsBackToOpenWithoutInboundCapability(t *testing.T
 	}
 	if got, want := string(raw), "sidecar via open"; got != want {
 		t.Fatalf("unexpected sidecar content: got %q want %q", got, want)
+	}
+}
+
+func TestRewriteFTSSidecarAttachmentsJSONRewritesCopiedAttachmentMetadata(t *testing.T) {
+	sourceBase := "cloudreve/fts-sidecar/1/2/3"
+	targetPrefix := "cloudreve/fts-sidecar/9/42/7"
+	raw, err := json.Marshal([]searcher.SearchAttachmentDocument{
+		{
+			ID:       embeddedAttachmentDocID(2, "attachments/a.txt"),
+			ParentID: attachmentRootParentID(2),
+			EntityID: 3,
+			Source:   sourceBase + "/attachment-text/attachments/a.txt.txt",
+			Bucket:   "source-bucket",
+		},
+		{
+			ID:       embeddedAttachmentDocID(2, "attachments/folder/b.txt"),
+			ParentID: embeddedAttachmentDocID(2, "attachments/folder"),
+			EntityID: 3,
+			Source:   "s3://shared/original.txt",
+			Bucket:   "shared-bucket",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal attachments: %v", err)
+	}
+
+	rewrittenRaw, err := rewriteFTSSidecarAttachmentsJSON(raw, 2, 42, 7, "target-bucket", sourceBase, targetPrefix)
+	if err != nil {
+		t.Fatalf("rewriteFTSSidecarAttachmentsJSON returned error: %v", err)
+	}
+
+	var rewritten []searcher.SearchAttachmentDocument
+	if err := json.Unmarshal(rewrittenRaw, &rewritten); err != nil {
+		t.Fatalf("failed to unmarshal rewritten attachments: %v", err)
+	}
+	if len(rewritten) != 2 {
+		t.Fatalf("unexpected rewritten attachment count: %d", len(rewritten))
+	}
+
+	if got, want := rewritten[0].ID, embeddedAttachmentDocID(42, "attachments/a.txt"); got != want {
+		t.Fatalf("unexpected rewritten attachment id: got %q want %q", got, want)
+	}
+	if got, want := rewritten[0].ParentID, attachmentRootParentID(42); got != want {
+		t.Fatalf("unexpected rewritten attachment parent id: got %q want %q", got, want)
+	}
+	if got, want := rewritten[0].EntityID, 7; got != want {
+		t.Fatalf("unexpected rewritten attachment entity id: got %d want %d", got, want)
+	}
+	if got, want := rewritten[0].Source, targetPrefix+"/attachment-text/attachments/a.txt.txt"; got != want {
+		t.Fatalf("unexpected rewritten attachment source: got %q want %q", got, want)
+	}
+	if got, want := rewritten[0].Bucket, "target-bucket"; got != want {
+		t.Fatalf("unexpected rewritten attachment bucket: got %q want %q", got, want)
+	}
+	if got, want := rewritten[1].ParentID, embeddedAttachmentDocID(42, "attachments/folder"); got != want {
+		t.Fatalf("unexpected nested attachment parent id: got %q want %q", got, want)
+	}
+	if got, want := rewritten[1].Bucket, "shared-bucket"; got != want {
+		t.Fatalf("unexpected external attachment bucket rewrite: got %q want %q", got, want)
+	}
+}
+
+func TestRewriteFTSSidecarOCRCandidatesJSONRewritesCopiedCandidateTargets(t *testing.T) {
+	sourceBase := "cloudreve/fts-sidecar/1/2/3"
+	targetPrefix := "cloudreve/fts-sidecar/9/42/7"
+	raw, err := json.Marshal([]FTSSidecarOCRCandidate{
+		{
+			Scope:      "file",
+			FileID:     2,
+			EntityID:   3,
+			DocumentID: "2",
+			Bucket:     "source-bucket",
+			Path:       "old/source.txt",
+		},
+		{
+			Scope:        "attachment",
+			FileID:       2,
+			EntityID:     3,
+			DocumentID:   embeddedAttachmentDocID(2, "attachments/a.png"),
+			AttachmentID: embeddedAttachmentDocID(2, "attachments/a.png"),
+			Bucket:       "source-bucket",
+			Path:         sourceBase + "/attachments/a.png",
+		},
+		{
+			Scope:        "attachment",
+			FileID:       2,
+			EntityID:     3,
+			DocumentID:   embeddedAttachmentDocID(2, "attachments/external.png"),
+			AttachmentID: embeddedAttachmentDocID(2, "attachments/external.png"),
+			Bucket:       "external-bucket",
+			Path:         "s3://external-bucket/external.png",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal ocr candidates: %v", err)
+	}
+
+	rewrittenRaw, err := rewriteFTSSidecarOCRCandidatesJSON(raw, 42, &ent.Entity{ID: 7, Source: "entity/source.txt"}, &ent.StoragePolicy{
+		ID:         9,
+		BucketName: "target-bucket",
+	}, sourceBase, targetPrefix)
+	if err != nil {
+		t.Fatalf("rewriteFTSSidecarOCRCandidatesJSON returned error: %v", err)
+	}
+
+	var rewritten []FTSSidecarOCRCandidate
+	if err := json.Unmarshal(rewrittenRaw, &rewritten); err != nil {
+		t.Fatalf("failed to unmarshal rewritten ocr candidates: %v", err)
+	}
+	if len(rewritten) != 3 {
+		t.Fatalf("unexpected rewritten candidate count: %d", len(rewritten))
+	}
+
+	if got, want := rewritten[0].DocumentID, "42"; got != want {
+		t.Fatalf("unexpected rewritten root candidate id: got %q want %q", got, want)
+	}
+	if got, want := rewritten[0].Path, "entity/source.txt"; got != want {
+		t.Fatalf("unexpected rewritten root candidate path: got %q want %q", got, want)
+	}
+	if got, want := rewritten[0].Bucket, "target-bucket"; got != want {
+		t.Fatalf("unexpected rewritten root candidate bucket: got %q want %q", got, want)
+	}
+	if got, want := rewritten[1].AttachmentID, embeddedAttachmentDocID(42, "attachments/a.png"); got != want {
+		t.Fatalf("unexpected rewritten attachment candidate id: got %q want %q", got, want)
+	}
+	if got, want := rewritten[1].Path, targetPrefix+"/attachments/a.png"; got != want {
+		t.Fatalf("unexpected rewritten attachment candidate path: got %q want %q", got, want)
+	}
+	if got, want := rewritten[1].Bucket, "target-bucket"; got != want {
+		t.Fatalf("unexpected rewritten attachment candidate bucket: got %q want %q", got, want)
+	}
+	if got, want := rewritten[2].Bucket, "external-bucket"; got != want {
+		t.Fatalf("unexpected external attachment candidate bucket rewrite: got %q want %q", got, want)
 	}
 }
 

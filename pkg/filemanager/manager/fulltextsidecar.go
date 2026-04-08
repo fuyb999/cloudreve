@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/ent/storagepolicy"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
@@ -43,6 +44,7 @@ var ftsSidecarFiles = []string{
 	"content.txt",
 	"rmeta.json",
 	"attachments.json",
+	"ocr-candidates.json",
 	"diagnostics.json",
 	"assets.zip",
 	"docx-media.zip",
@@ -52,6 +54,7 @@ var ftsSidecarFiles = []string{
 const (
 	ftsSidecarEmbeddedDir = "attachments"
 	ftsSidecarDocxDir     = "docx-media"
+	ftsSidecarTextDir     = "attachment-text"
 )
 
 type FTSSidecarManifest struct {
@@ -83,6 +86,23 @@ type FTSSidecarContent struct {
 	Content     io.ReadCloser
 	RedirectURL string
 	Expires     *time.Time
+}
+
+type FTSSidecarOCRCandidate struct {
+	Scope            string `json:"scope"`
+	FileID           int    `json:"file_id"`
+	EntityID         int    `json:"entity_id"`
+	DocumentID       string `json:"document_id,omitempty"`
+	AttachmentID     string `json:"attachment_id,omitempty"`
+	ArtifactID       string `json:"artifact_id,omitempty"`
+	PolicyID         int    `json:"policy_id,omitempty"`
+	Bucket           string `json:"bucket,omitempty"`
+	Path             string `json:"path,omitempty"`
+	Name             string `json:"name,omitempty"`
+	MimeType         string `json:"mime_type,omitempty"`
+	Size             int64  `json:"size,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	TargetContentKey string `json:"target_content_key,omitempty"`
 }
 
 type ftsSidecarEntity struct {
@@ -143,6 +163,170 @@ func (e *ftsSidecarEntity) Encrypted() bool {
 	return false
 }
 
+func sidecarAttachmentTextObjectID(logicalID string) string {
+	logicalID, ok := normalizeFTSSidecarRelativePath(logicalID)
+	if !ok {
+		return ""
+	}
+
+	return path.Join(ftsSidecarTextDir, logicalID) + ".txt"
+}
+
+func sidecarAttachmentLogicalIDFromDocID(docID string) string {
+	const prefix = ":embedded:"
+	index := strings.Index(docID, prefix)
+	if index >= 0 {
+		return docID[index+len(prefix):]
+	}
+
+	return docID
+}
+
+func sidecarAttachmentTextObjectIDFromDocID(docID string) string {
+	return sidecarAttachmentTextObjectID(sidecarAttachmentLogicalIDFromDocID(docID))
+}
+
+func isFTSSidecarAttachmentTextPath(source string) bool {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return false
+	}
+
+	return strings.Contains(source, "/"+ftsSidecarTextDir+"/")
+}
+
+func buildFTSSidecarOCRCandidates(
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	policy *ent.StoragePolicy,
+	rootText string,
+	manifest *FTSSidecarManifest,
+) []FTSSidecarOCRCandidate {
+	if fileModel == nil || primaryEntity == nil || policy == nil {
+		return nil
+	}
+
+	candidates := make([]FTSSidecarOCRCandidate, 0)
+	if shouldCreateFTSOCRCandidate(fileModel.Name, mime.TypeByExtension(filepath.Ext(fileModel.Name)), fileModel.Size, rootText) {
+		candidates = append(candidates, FTSSidecarOCRCandidate{
+			Scope:            "file",
+			FileID:           fileModel.ID,
+			EntityID:         primaryEntity.ID(),
+			DocumentID:       strconv.Itoa(fileModel.ID),
+			PolicyID:         policy.ID,
+			Bucket:           policy.BucketName,
+			Path:             primaryEntity.Source(),
+			Name:             fileModel.Name,
+			MimeType:         mime.TypeByExtension(filepath.Ext(fileModel.Name)),
+			Size:             fileModel.Size,
+			Reason:           "image_file_without_text",
+			TargetContentKey: "content",
+		})
+	}
+
+	if manifest == nil {
+		return candidates
+	}
+
+	textArtifacts := map[string]struct{}{}
+	for _, item := range manifest.Objects {
+		if item.Kind != "attachment_text" {
+			continue
+		}
+		textArtifacts[item.ID] = struct{}{}
+	}
+
+	for _, object := range manifest.Objects {
+		objectName := strings.TrimSpace(firstNonEmpty(object.ID, object.Name))
+		if objectName == "" {
+			continue
+		}
+		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" || objectName == "ocr-candidates.json" {
+			continue
+		}
+		if object.Kind == "attachment_text" || object.Kind == "external_attachments" || object.Kind == "diagnostics" || object.Kind == "ocr_candidates" || object.Kind == "archive" {
+			continue
+		}
+		if strings.TrimSpace(object.Path) == "" {
+			continue
+		}
+		if _, ok := textArtifacts[sidecarAttachmentTextObjectID(objectName)]; ok {
+			continue
+		}
+		if !shouldCreateFTSOCRCandidate(object.Name, object.MimeType, object.Size, "") {
+			continue
+		}
+
+		candidates = append(candidates, FTSSidecarOCRCandidate{
+			Scope:            "attachment",
+			FileID:           fileModel.ID,
+			EntityID:         primaryEntity.ID(),
+			DocumentID:       embeddedAttachmentDocID(fileModel.ID, objectName),
+			AttachmentID:     embeddedAttachmentDocID(fileModel.ID, objectName),
+			ArtifactID:       object.ID,
+			PolicyID:         policy.ID,
+			Bucket:           policy.BucketName,
+			Path:             object.Path,
+			Name:             object.Name,
+			MimeType:         firstNonEmpty(object.MimeType, mime.TypeByExtension(filepath.Ext(object.Name))),
+			Size:             object.Size,
+			Reason:           attachmentOCRReason(object),
+			TargetContentKey: "content",
+		})
+	}
+
+	return candidates
+}
+
+func hasFTSOCRCandidates(
+	fileModel *ent.File,
+	primaryEntity fs.Entity,
+	policy *ent.StoragePolicy,
+	rootText string,
+	manifest *FTSSidecarManifest,
+) bool {
+	return len(buildFTSSidecarOCRCandidates(fileModel, primaryEntity, policy, rootText, manifest)) > 0
+}
+
+func shouldCreateFTSOCRCandidate(name, mimeType string, size int64, content string) bool {
+	if strings.TrimSpace(content) != "" {
+		return false
+	}
+	if size <= 0 {
+		return false
+	}
+
+	mimeType = strings.TrimSpace(firstNonEmpty(mimeType, mime.TypeByExtension(filepath.Ext(name))))
+	if !isFTSOCRImageMimeType(mimeType) {
+		return false
+	}
+
+	return size >= 512
+}
+
+func isFTSOCRImageMimeType(mimeType string) bool {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
+		return false
+	}
+
+	switch mimeType {
+	case "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon":
+		return false
+	default:
+		return true
+	}
+}
+
+func attachmentOCRReason(object FTSSidecarArtifact) string {
+	switch object.Kind {
+	case "docx_media":
+		return "docx_embedded_image_without_text"
+	default:
+		return "embedded_image_without_text"
+	}
+}
+
 func persistFTSSidecars(
 	ctx context.Context,
 	extractor searcher.TextExtractor,
@@ -176,13 +360,13 @@ func persistFTSSidecars(
 		return
 	}
 
-	_, handler, err := internal.getEntityPolicyDriver(ctx, primaryEntity, nil)
+	policy, handler, err := internal.getEntityPolicyDriver(ctx, primaryEntity, nil)
 	if err != nil {
 		internal.l.Warning("Failed to resolve storage driver for Tika sidecar: %s", err)
 		return
 	}
 
-	manifest, savePath, err := internal.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, uri.String(), primaryEntity, handler, source, text)
+	manifest, savePath, err := internal.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, uri.String(), primaryEntity, policy, handler, source, text)
 	if err != nil {
 		internal.l.Warning("Failed to persist Tika sidecars for file %d: %s", fileModel.ID, err)
 		return
@@ -249,7 +433,7 @@ func (m *manager) persistFTSSidecarsForSlave(
 		return nil, "", fmt.Errorf("failed to resolve storage driver for slave Tika sidecar: %w", err)
 	}
 
-	return m.persistFTSSidecarsToHandler(ctx, extractor, cfg, fileModel, "", primaryEntity, handler, source, text)
+	return m.persistFTSSidecarsToHandler(ctx, extractor, cfg, fileModel, "", primaryEntity, policy, handler, source, text)
 }
 
 func (m *manager) persistFTSSidecarsToHandler(
@@ -259,11 +443,12 @@ func (m *manager) persistFTSSidecarsToHandler(
 	fileModel *ent.File,
 	sourcePath string,
 	primaryEntity fs.Entity,
+	policy *ent.StoragePolicy,
 	handler driver.Handler,
 	source sidecarSource,
 	text string,
 ) (*FTSSidecarManifest, string, error) {
-	if m == nil || primaryEntity == nil || fileModel == nil || handler == nil {
+	if m == nil || primaryEntity == nil || fileModel == nil || policy == nil || handler == nil {
 		return nil, "", nil
 	}
 
@@ -320,6 +505,7 @@ func (m *manager) persistFTSSidecarsToHandler(
 
 	if cfg.SidecarAssetsEnabled {
 		manifest.AssetsReady = true
+		var rmetaRaw []byte
 
 		if rewindSidecarSource(m, source) {
 			raw, err := tika.RMetaFile(ctx, source, fileModel.Name, artifactOpts)
@@ -327,6 +513,7 @@ func (m *manager) persistFTSSidecarsToHandler(
 				return nil, "", fmt.Errorf("failed to extract tika rmeta: %w", err)
 			}
 			if len(bytes.TrimSpace(raw)) > 0 {
+				rmetaRaw = append([]byte(nil), raw...)
 				savePath := path.Join(prefix, "rmeta.json")
 				if err := putSidecarBytes(ctx, handler, savePath, "rmeta.json", "application/json", raw); err != nil {
 					return nil, "", fmt.Errorf("failed to save tika rmeta sidecar: %w", err)
@@ -340,6 +527,24 @@ func (m *manager) persistFTSSidecarsToHandler(
 					MimeType: "application/json",
 					Size:     int64(len(raw)),
 				})
+			}
+		}
+
+		if len(rmetaRaw) > 0 {
+			for _, item := range parseTikaRMetaAttachments(rmetaRaw) {
+				relativeName, ok := normalizeFTSSidecarRelativePath(firstNonEmpty(item.Path, item.Name))
+				if !ok || item.Content == "" {
+					continue
+				}
+
+				logicalID := path.Join(ftsSidecarEmbeddedDir, relativeName)
+				artifact, _, err := putSidecarTextArtifact(ctx, handler, prefix, logicalID, item.Name, item.Content)
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to save tika attachment text sidecar %q: %w", logicalID, err)
+				}
+				if artifact.ID != "" {
+					manifest.Objects = append(manifest.Objects, artifact)
+				}
 			}
 		}
 
@@ -372,6 +577,28 @@ func (m *manager) persistFTSSidecarsToHandler(
 		}
 	}
 
+	ocrCandidates := buildFTSSidecarOCRCandidates(fileModel, primaryEntity, policy, text, manifest)
+	if len(ocrCandidates) > 0 {
+		raw, err := json.Marshal(ocrCandidates)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to marshal ocr candidates sidecar: %w", err)
+		}
+
+		savePath := path.Join(prefix, "ocr-candidates.json")
+		if err := putSidecarBytes(ctx, handler, savePath, "ocr-candidates.json", "application/json", raw); err != nil {
+			return nil, "", fmt.Errorf("failed to save ocr candidates sidecar: %w", err)
+		}
+		manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+			ID:       "ocr-candidates.json",
+			Depth:    0,
+			Kind:     "ocr_candidates",
+			Name:     "ocr-candidates.json",
+			Path:     savePath,
+			MimeType: "application/json",
+			Size:     int64(len(raw)),
+		})
+	}
+
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to marshal tika sidecar manifest: %w", err)
@@ -396,12 +623,12 @@ func (m *manager) persistExternalFTSSidecars(
 		return nil, "", fmt.Errorf("failed to persist external fts sidecars: invalid arguments")
 	}
 
-	_, handler, err := m.getEntityPolicyDriver(ctx, primaryEntity, nil)
+	policy, handler, err := m.getEntityPolicyDriver(ctx, primaryEntity, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to resolve storage driver for external fts sidecar: %w", err)
 	}
 
-	manifest, savePath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, primaryEntity, handler, result)
+	manifest, savePath, err := m.persistExternalFTSSidecarsToHandler(ctx, fileModel, primaryEntity, policy, handler, result)
 	if err != nil {
 		return nil, "", err
 	}
@@ -455,6 +682,7 @@ func (m *manager) persistExternalFTSSidecarsToHandler(
 	ctx context.Context,
 	fileModel *ent.File,
 	primaryEntity fs.Entity,
+	defaultPolicy *ent.StoragePolicy,
 	handler driver.Handler,
 	result *externalFTSResultMessage,
 ) (*FTSSidecarManifest, string, error) {
@@ -473,7 +701,16 @@ func (m *manager) persistExternalFTSSidecarsToHandler(
 		ExtractedAt:   time.Now(),
 	}
 
-	if content := strings.TrimSpace(result.Root.Content); content != "" {
+	content := strings.TrimSpace(result.Root.Content)
+	if ref := result.Root.contentReference(); ref != nil {
+		raw, err := m.resolveExternalFTSReferenceBytes(ctx, handler, defaultPolicy, ref)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to load external fts content object %q from bucket %q: %w", ref.Path, ref.Bucket, err)
+		}
+		content = strings.TrimSpace(string(raw))
+	}
+
+	if content != "" {
 		savePath := path.Join(prefix, "content.txt")
 		if err := putSidecarBytes(ctx, handler, savePath, "content.txt", "text/plain; charset=utf-8", []byte(content)); err != nil {
 			return nil, "", fmt.Errorf("failed to save external fts content sidecar: %w", err)
@@ -491,6 +728,35 @@ func (m *manager) persistExternalFTSSidecarsToHandler(
 	}
 
 	attachments := normalizeExternalAttachments(fileModel, primaryEntity, result.Attachments)
+	for index := range attachments {
+		attachmentText := strings.TrimSpace(result.Attachments[index].Content)
+		if ref := result.Attachments[index].contentReference(); ref != nil {
+			raw, err := m.resolveExternalFTSReferenceBytes(ctx, handler, defaultPolicy, ref)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to load external fts attachment text object %q from bucket %q: %w", ref.Path, ref.Bucket, err)
+			}
+			attachmentText = strings.TrimSpace(string(raw))
+		}
+
+		if attachmentText == "" {
+			continue
+		}
+
+		logicalID := sidecarAttachmentLogicalIDFromDocID(attachments[index].ID)
+		artifact, savePath, err := putSidecarTextArtifact(ctx, handler, prefix, logicalID, attachments[index].Name, attachmentText)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to save external fts attachment text sidecar %q: %w", logicalID, err)
+		}
+		if artifact.ID != "" {
+			manifest.Objects = append(manifest.Objects, artifact)
+			attachments[index].Source = savePath
+			if defaultPolicy != nil {
+				attachments[index].Bucket = defaultPolicy.BucketName
+			}
+		}
+		attachments[index].Content = ""
+	}
+
 	if len(attachments) > 0 {
 		raw, err := json.Marshal(attachments)
 		if err != nil {
@@ -675,6 +941,162 @@ func (m *manager) loadFTSSidecarManifest(ctx context.Context, uri *fs.URI) (fs.F
 	return file, &manifest, handler, entity, nil
 }
 
+func (m *manager) cloneFTSSidecarsForCopiedFile(ctx context.Context, originalFileID, targetFileID int) (bool, error) {
+	if m == nil || originalFileID <= 0 || targetFileID <= 0 {
+		return false, nil
+	}
+
+	sourceFileModel, err := m.loadFTSFileModel(ctx, originalFileID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load source file model: %w", err)
+	}
+
+	sourceMetadata := metadataMap(sourceFileModel.Edges.Metadata)
+	sourceManifestPath := strings.TrimSpace(sourceMetadata[dbfs.FTSSidecarManifestKey])
+	if sourceManifestPath == "" {
+		return false, nil
+	}
+
+	targetFileModel, err := m.loadFTSFileModel(ctx, targetFileID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load target file model: %w", err)
+	}
+
+	targetEntityModel := findPrimaryFTSEntity(targetFileModel)
+	if targetEntityModel == nil {
+		return false, fmt.Errorf("failed to resolve primary entity for copied file %d", targetFileID)
+	}
+
+	sourceEntity, err := m.resolveFTSSidecarEntityForFileModel(ctx, sourceFileModel)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve source sidecar entity: %w", err)
+	}
+
+	_, sourceHandler, err := m.getEntityPolicyDriver(ctx, sourceEntity, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve source sidecar handler: %w", err)
+	}
+
+	targetEntity := fs.NewEntity(targetEntityModel)
+	targetPolicy, targetHandler, err := m.getEntityPolicyDriver(ctx, targetEntity, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve target sidecar handler: %w", err)
+	}
+
+	rawManifest, err := readFTSSidecarBytes(ctx, requestClientForSidecar(m), sourceHandler, sourceManifestPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to read source sidecar manifest: %w", err)
+	}
+
+	var sourceManifest FTSSidecarManifest
+	if err := json.Unmarshal(rawManifest, &sourceManifest); err != nil {
+		return false, fmt.Errorf("failed to parse source sidecar manifest: %w", err)
+	}
+
+	targetPrefix := ftsSidecarPrefix(targetFileModel.OwnerID, targetFileModel.ID, targetEntityModel.ID)
+	sourceBaseDir := path.Dir(sourceManifestPath)
+	writtenPaths := make([]string, 0, len(sourceManifest.Objects)+1)
+	cleanupTarget := func() {
+		if targetHandler == nil {
+			return
+		}
+		if len(writtenPaths) > 0 {
+			_, _ = targetHandler.Delete(ctx, writtenPaths...)
+		}
+		_, _ = targetHandler.Delete(ctx, ftsSidecarCleanupDirectories(path.Join(targetPrefix, "manifest.json"), nil)...)
+	}
+
+	clonedObjects := make([]FTSSidecarArtifact, 0, len(sourceManifest.Objects))
+	for _, object := range sourceManifest.Objects {
+		relativePath, ok := ftsSidecarRelativePath(sourceBaseDir, object.Path)
+		if !ok {
+			cleanupTarget()
+			return false, fmt.Errorf("sidecar object path %q is not under manifest base %q", object.Path, sourceBaseDir)
+		}
+
+		rawObject, err := readFTSSidecarBytes(ctx, requestClientForSidecar(m), sourceHandler, object.Path)
+		if err != nil {
+			cleanupTarget()
+			return false, fmt.Errorf("failed to read sidecar object %q: %w", object.Path, err)
+		}
+
+		rewrittenObject, err := m.rewriteFTSSidecarObjectForTarget(
+			ctx,
+			object,
+			rawObject,
+			originalFileID,
+			targetFileModel,
+			targetEntityModel,
+			targetPolicy,
+			sourceBaseDir,
+			targetPrefix,
+		)
+		if err != nil {
+			cleanupTarget()
+			return false, err
+		}
+
+		targetObjectPath := path.Join(targetPrefix, relativePath)
+		mimeType := strings.TrimSpace(firstNonEmpty(object.MimeType, "application/octet-stream"))
+		if err := putSidecarBytes(ctx, targetHandler, targetObjectPath, path.Base(targetObjectPath), mimeType, rewrittenObject); err != nil {
+			cleanupTarget()
+			return false, fmt.Errorf("failed to persist cloned sidecar object %q: %w", targetObjectPath, err)
+		}
+
+		clonedObject := object
+		clonedObject.Path = targetObjectPath
+		clonedObject.Size = int64(len(rewrittenObject))
+		clonedObjects = append(clonedObjects, clonedObject)
+		writtenPaths = append(writtenPaths, targetObjectPath)
+	}
+
+	targetManifest := sourceManifest
+	targetManifest.FileID = targetFileModel.ID
+	targetManifest.EntityID = targetEntityModel.ID
+	targetManifest.SourcePath = targetEntityModel.Source
+	targetManifest.Objects = clonedObjects
+	if sourceManifest.Provider == ftsSidecarProviderExternal {
+		targetManifest.SnapshotToken = buildFTSExternalSnapshotToken(targetFileModel, targetEntityModel, m.settings.FTSExternalExtractor(ctx))
+	}
+
+	targetManifestRaw, err := json.Marshal(&targetManifest)
+	if err != nil {
+		cleanupTarget()
+		return false, fmt.Errorf("failed to marshal cloned sidecar manifest: %w", err)
+	}
+
+	targetManifestPath := path.Join(targetPrefix, "manifest.json")
+	if err := putSidecarBytes(ctx, targetHandler, targetManifestPath, "manifest.json", "application/json", targetManifestRaw); err != nil {
+		cleanupTarget()
+		return false, fmt.Errorf("failed to persist cloned sidecar manifest: %w", err)
+	}
+	writtenPaths = append(writtenPaths, targetManifestPath)
+
+	targetURI, err := m.resolveFTSFileURIByModel(ctx, targetFileModel)
+	if err != nil {
+		cleanupTarget()
+		return false, fmt.Errorf("failed to resolve copied file uri: %w", err)
+	}
+
+	if err := m.fs.PatchMetadata(ctx, []*fs.URI{targetURI},
+		fs.MetadataPatch{
+			Key:     dbfs.FTSSidecarManifestKey,
+			Value:   targetManifestPath,
+			Private: true,
+		},
+		fs.MetadataPatch{
+			Key:     dbfs.FTSSidecarEntityIDKey,
+			Value:   strconv.Itoa(targetEntityModel.ID),
+			Private: true,
+		},
+	); err != nil {
+		cleanupTarget()
+		return false, fmt.Errorf("failed to patch cloned sidecar metadata: %w", err)
+	}
+
+	return true, nil
+}
+
 func (m *manager) resolveFTSSidecarEntity(ctx context.Context, file fs.File) (fs.Entity, error) {
 	entityID := file.Metadata()[dbfs.FTSSidecarEntityIDKey]
 	if entityID != "" {
@@ -701,6 +1123,38 @@ func (m *manager) resolveFTSSidecarEntity(ctx context.Context, file fs.File) (fs
 	}
 
 	return entity, nil
+}
+
+func (m *manager) resolveFTSSidecarEntityForFileModel(ctx context.Context, fileModel *ent.File) (fs.Entity, error) {
+	if fileModel == nil {
+		return nil, serializer.NewError(serializer.CodeNotFound, "Full text sidecar source entity not found", nil)
+	}
+
+	metadata := metadataMap(fileModel.Edges.Metadata)
+	entityID := strings.TrimSpace(metadata[dbfs.FTSSidecarEntityIDKey])
+	if entityID != "" {
+		for _, item := range fileModel.Edges.Entities {
+			if item != nil && strconv.Itoa(item.ID) == entityID {
+				return fs.NewEntity(item), nil
+			}
+		}
+
+		id, err := strconv.Atoi(entityID)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeIOFailed, "Invalid full text sidecar entity id", err)
+		}
+
+		entity, err := m.fs.GetEntity(ctx, id)
+		if err == nil && entity != nil {
+			return entity, nil
+		}
+	}
+
+	if primary := findPrimaryFTSEntity(fileModel); primary != nil {
+		return fs.NewEntity(primary), nil
+	}
+
+	return nil, serializer.NewError(serializer.CodeNotFound, "Full text sidecar source entity not found", nil)
 }
 
 func (m *manager) resolveFTSSidecarSource(
@@ -778,6 +1232,48 @@ func putSidecarBytes(ctx context.Context, handler driver.Handler, savePath, file
 	})
 }
 
+func putSidecarTextArtifact(ctx context.Context, handler driver.Handler, prefix, logicalID, fileName, content string) (FTSSidecarArtifact, string, error) {
+	content = strings.TrimSpace(content)
+	if handler == nil || content == "" {
+		return FTSSidecarArtifact{}, "", nil
+	}
+
+	objectID := sidecarAttachmentTextObjectID(logicalID)
+	if objectID == "" {
+		return FTSSidecarArtifact{}, "", fmt.Errorf("invalid sidecar attachment text logical id %q", logicalID)
+	}
+
+	savePath := path.Join(prefix, objectID)
+	displayName := path.Base(fileName)
+	if displayName == "" || displayName == "." || displayName == "/" {
+		displayName = "content.txt"
+	}
+	displayName += ".txt"
+
+	raw := []byte(content)
+	if err := putSidecarBytes(ctx, handler, savePath, displayName, "text/plain; charset=utf-8", raw); err != nil {
+		return FTSSidecarArtifact{}, "", err
+	}
+
+	return FTSSidecarArtifact{
+		ID:       objectID,
+		ParentID: logicalID,
+		Kind:     "attachment_text",
+		Name:     path.Base(savePath),
+		Path:     savePath,
+		MimeType: "text/plain; charset=utf-8",
+		Size:     int64(len(raw)),
+	}, savePath, nil
+}
+
+func requestClientForSidecar(m *manager) request.Client {
+	if m == nil || m.dep == nil || m.dep.RequestClient() == nil {
+		return request.GeneralClient
+	}
+
+	return m.dep.RequestClient()
+}
+
 func readFTSSidecarBytes(ctx context.Context, client request.Client, handler driver.Handler, savePath string) ([]byte, error) {
 	if handler.Capabilities().StaticFeatures.Enabled(int(driver.HandlerCapabilityInboundGet)) {
 		reader, err := handler.Open(ctx, savePath)
@@ -812,6 +1308,127 @@ func readFTSSidecarBytes(ctx context.Context, client request.Client, handler dri
 	}
 
 	return []byte(raw), nil
+}
+
+func (m *manager) resolveExternalFTSReferenceBytes(
+	ctx context.Context,
+	handler driver.Handler,
+	defaultPolicy *ent.StoragePolicy,
+	ref *externalFTSObjectReference,
+) ([]byte, error) {
+	ref = normalizeExternalFTSObjectReference(ref, 0, "", "")
+	if ref == nil || strings.TrimSpace(ref.Path) == "" {
+		return nil, nil
+	}
+
+	targetHandler := handler
+	policyModel, err := m.resolveExternalFTSReferencePolicy(ctx, defaultPolicy, ref)
+	if err != nil {
+		return nil, err
+	}
+	if policyModel != nil && (targetHandler == nil || defaultPolicy == nil || policyModel.ID != defaultPolicy.ID) {
+		if m == nil {
+			return nil, fmt.Errorf("failed to resolve storage driver for policy %d", policyModel.ID)
+		}
+
+		targetHandler, err = m.GetStorageDriver(ctx, m.CastStoragePolicyOnSlave(ctx, policyModel))
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve storage driver for policy %d: %w", policyModel.ID, err)
+		}
+	}
+	if targetHandler == nil {
+		return nil, fmt.Errorf("external fts content source handler is nil")
+	}
+
+	return readFTSSidecarBytes(ctx, requestClientForSidecar(m), targetHandler, ref.Path)
+}
+
+func (m *manager) resolveExternalFTSReferencePolicy(
+	ctx context.Context,
+	defaultPolicy *ent.StoragePolicy,
+	ref *externalFTSObjectReference,
+) (*ent.StoragePolicy, error) {
+	if ref == nil {
+		return defaultPolicy, nil
+	}
+
+	if ref.PolicyID > 0 {
+		if defaultPolicy != nil && defaultPolicy.ID == ref.PolicyID {
+			return defaultPolicy, nil
+		}
+
+		if m != nil {
+			switch {
+			case m.policyClient != nil:
+				policyModel, err := m.policyClient.GetPolicyByID(ctx, ref.PolicyID)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load storage policy by id %d: %w", ref.PolicyID, err)
+				}
+				return policyModel, nil
+			case m.dep != nil && m.dep.StoragePolicyClient() != nil:
+				policyModel, err := m.dep.StoragePolicyClient().GetPolicyByID(ctx, ref.PolicyID)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load storage policy by id %d: %w", ref.PolicyID, err)
+				}
+				return policyModel, nil
+			}
+		}
+
+		return nil, fmt.Errorf("failed to resolve storage policy by id %d", ref.PolicyID)
+	}
+
+	bucket := strings.TrimSpace(ref.Bucket)
+	if bucket == "" {
+		return defaultPolicy, nil
+	}
+	if defaultPolicy != nil && strings.EqualFold(bucket, defaultPolicy.BucketName) {
+		return defaultPolicy, nil
+	}
+	if m == nil || m.dep == nil || m.dep.DBClient() == nil {
+		return nil, fmt.Errorf("failed to resolve storage policy for bucket %q", bucket)
+	}
+
+	policies, err := m.dep.DBClient().StoragePolicy.Query().Where(storagepolicy.BucketNameEQ(bucket)).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load storage policy by bucket %q: %w", bucket, err)
+	}
+	switch len(policies) {
+	case 0:
+		return nil, fmt.Errorf("storage policy for bucket %q not found", bucket)
+	case 1:
+		return policies[0], nil
+	default:
+		return nil, fmt.Errorf("found %d storage policies for bucket %q; external fts result should include policy_id", len(policies), bucket)
+	}
+}
+
+func (m *manager) hydrateFTSSidecarAttachmentContents(
+	ctx context.Context,
+	handler driver.Handler,
+	attachments []searcher.SearchAttachmentDocument,
+) []searcher.SearchAttachmentDocument {
+	if handler == nil || len(attachments) == 0 {
+		return attachments
+	}
+
+	client := requestClientForSidecar(m)
+	for i := range attachments {
+		if strings.TrimSpace(attachments[i].Content) != "" || !isFTSSidecarAttachmentTextPath(attachments[i].Source) {
+			continue
+		}
+
+		raw, err := readFTSSidecarBytes(ctx, client, handler, attachments[i].Source)
+		if err != nil {
+			if m != nil {
+				m.l.Warning("Failed to load FTS attachment text sidecar %q: %s", attachments[i].Source, err)
+			}
+			continue
+		}
+
+		attachments[i].Content = strings.TrimSpace(string(raw))
+	}
+
+	return attachments
 }
 
 func cleanupSidecarFiles(ctx context.Context, handler driver.Handler, manifestPath string) ([]string, error) {
@@ -938,6 +1555,163 @@ func loadFTSSidecarManifestByPath(ctx context.Context, handler driver.Handler, m
 	}
 
 	return &manifest
+}
+
+func ftsSidecarRelativePath(baseDir, itemPath string) (string, bool) {
+	baseDir = strings.TrimSpace(path.Clean(baseDir))
+	itemPath = strings.TrimSpace(path.Clean(itemPath))
+	if baseDir == "" || itemPath == "" {
+		return "", false
+	}
+
+	prefix := strings.TrimSuffix(baseDir, "/") + "/"
+	if !strings.HasPrefix(itemPath, prefix) {
+		return "", false
+	}
+
+	relative := strings.TrimPrefix(itemPath, prefix)
+	if relative == "" || relative == "." {
+		return "", false
+	}
+
+	return relative, true
+}
+
+func (m *manager) rewriteFTSSidecarObjectForTarget(
+	_ context.Context,
+	object FTSSidecarArtifact,
+	raw []byte,
+	originalFileID int,
+	targetFileModel *ent.File,
+	targetEntityModel *ent.Entity,
+	targetPolicy *ent.StoragePolicy,
+	sourceBaseDir, targetPrefix string,
+) ([]byte, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+
+	switch firstNonEmpty(object.ID, object.Name) {
+	case "attachments.json":
+		targetBucket := ""
+		if targetPolicy != nil {
+			targetBucket = targetPolicy.BucketName
+		}
+		return rewriteFTSSidecarAttachmentsJSON(raw, originalFileID, targetFileModel.ID, targetEntityModel.ID, targetBucket, sourceBaseDir, targetPrefix)
+	case "ocr-candidates.json":
+		return rewriteFTSSidecarOCRCandidatesJSON(raw, targetFileModel.ID, targetEntityModel, targetPolicy, sourceBaseDir, targetPrefix)
+	default:
+		return raw, nil
+	}
+}
+
+func rewriteFTSSidecarAttachmentsJSON(
+	raw []byte,
+	originalFileID, targetFileID, targetEntityID int,
+	targetBucket, sourceBaseDir, targetPrefix string,
+) ([]byte, error) {
+	var attachments []searcher.SearchAttachmentDocument
+	if err := json.Unmarshal(raw, &attachments); err != nil {
+		return nil, fmt.Errorf("failed to parse sidecar attachments: %w", err)
+	}
+
+	for i := range attachments {
+		attachments[i].EntityID = targetEntityID
+		attachments[i].ID = rewriteFTSSidecarAttachmentDocID(originalFileID, targetFileID, attachments[i].ID)
+		attachments[i].ParentID = rewriteFTSSidecarAttachmentDocID(originalFileID, targetFileID, attachments[i].ParentID)
+		if relative, ok := ftsSidecarRelativePath(sourceBaseDir, attachments[i].Source); ok {
+			attachments[i].Source = path.Join(targetPrefix, relative)
+			if targetBucket != "" {
+				attachments[i].Bucket = targetBucket
+			}
+		}
+	}
+
+	rewritten, err := json.Marshal(attachments)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal sidecar attachments: %w", err)
+	}
+
+	return rewritten, nil
+}
+
+func rewriteFTSSidecarAttachmentDocID(originalFileID, targetFileID int, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	if raw == strconv.Itoa(originalFileID) || raw == fmt.Sprintf("file:%d", originalFileID) {
+		return attachmentRootParentID(targetFileID)
+	}
+
+	if strings.Contains(raw, ":embedded:") {
+		return embeddedAttachmentDocID(targetFileID, sidecarAttachmentLogicalIDFromDocID(raw))
+	}
+
+	return raw
+}
+
+func rewriteFTSSidecarOCRCandidatesJSON(
+	raw []byte,
+	targetFileID int,
+	targetEntityModel *ent.Entity,
+	targetPolicy *ent.StoragePolicy,
+	sourceBaseDir, targetPrefix string,
+) ([]byte, error) {
+	var candidates []FTSSidecarOCRCandidate
+	if err := json.Unmarshal(raw, &candidates); err != nil {
+		return nil, fmt.Errorf("failed to parse sidecar ocr candidates: %w", err)
+	}
+
+	targetEntityID := 0
+	targetEntityPath := ""
+	if targetEntityModel != nil {
+		targetEntityID = targetEntityModel.ID
+		targetEntityPath = targetEntityModel.Source
+	}
+
+	for i := range candidates {
+		candidates[i].FileID = targetFileID
+		candidates[i].EntityID = targetEntityID
+
+		if candidates[i].Scope == "file" {
+			candidates[i].DocumentID = strconv.Itoa(targetFileID)
+			candidates[i].Path = targetEntityPath
+			if targetPolicy != nil {
+				candidates[i].PolicyID = targetPolicy.ID
+				candidates[i].Bucket = targetPolicy.BucketName
+			}
+			continue
+		}
+
+		logicalID := ""
+		switch {
+		case candidates[i].AttachmentID != "":
+			logicalID = sidecarAttachmentLogicalIDFromDocID(candidates[i].AttachmentID)
+			candidates[i].AttachmentID = embeddedAttachmentDocID(targetFileID, logicalID)
+		case candidates[i].DocumentID != "":
+			logicalID = sidecarAttachmentLogicalIDFromDocID(candidates[i].DocumentID)
+		}
+		if logicalID != "" {
+			candidates[i].DocumentID = embeddedAttachmentDocID(targetFileID, logicalID)
+		}
+
+		if relative, ok := ftsSidecarRelativePath(sourceBaseDir, candidates[i].Path); ok {
+			candidates[i].Path = path.Join(targetPrefix, relative)
+			if targetPolicy != nil {
+				candidates[i].PolicyID = targetPolicy.ID
+				candidates[i].Bucket = targetPolicy.BucketName
+			}
+		}
+	}
+
+	rewritten, err := json.Marshal(candidates)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal sidecar ocr candidates: %w", err)
+	}
+
+	return rewritten, nil
 }
 
 func ftsSidecarCleanupTargets(manifestPath string, manifest *FTSSidecarManifest) []string {

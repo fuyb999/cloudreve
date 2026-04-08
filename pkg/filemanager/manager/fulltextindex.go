@@ -84,6 +84,12 @@ var fullTextMergeableTaskTypes = []string{
 var fullTextEnqueueLocks [64]sync.Mutex
 var fullTextPendingMergeLock sync.Mutex
 var fullTextPerformIndexing = performIndexing
+var fullTextCloneFTSSidecarsForCopiedFile = func(ctx context.Context, fm *manager, originalFileID, targetFileID int) (bool, error) {
+	return fm.cloneFTSSidecarsForCopiedFile(ctx, originalFileID, targetFileID)
+}
+var fullTextSourceExtractionPending = func(ctx context.Context, dep dependency.Dep, originalFileID int) (bool, string, error) {
+	return sourceFullTextExtractionPending(ctx, dep, originalFileID)
+}
 
 const (
 	fullTextMaxFilesPerTask = 64
@@ -91,6 +97,9 @@ const (
 	fullTextIndexPhasePending       FullTextIndexTaskPhase = ""
 	fullTextIndexPhaseAwaitSlave    FullTextIndexTaskPhase = "await_slave_extract"
 	fullTextIndexPhaseAwaitExternal FullTextIndexTaskPhase = "await_external_extract"
+
+	fullTextCopyPhasePending     FullTextCopyTaskPhase = ""
+	fullTextCopyPhaseAwaitSource FullTextCopyTaskPhase = "await_source_extract"
 )
 
 func (m *manager) SearchFullText(ctx context.Context, query string, offset int, base *fs.URI) (*FullTextSearchResults, error) {
@@ -424,12 +433,16 @@ type (
 		*queue.DBTask
 	}
 
+	FullTextCopyTaskPhase string
+
 	FullTextCopyTaskState struct {
-		Uri            *fs.URI `json:"uri"`
-		OriginalFileID int     `json:"original_file_id"`
-		FileID         int     `json:"file_id"`
-		OwnerID        int     `json:"owner_id"`
-		EntityID       int     `json:"entity_id"`
+		Uri            *fs.URI               `json:"uri"`
+		OriginalFileID int                   `json:"original_file_id"`
+		FileID         int                   `json:"file_id"`
+		OwnerID        int                   `json:"owner_id"`
+		EntityID       int                   `json:"entity_id"`
+		Phase          FullTextCopyTaskPhase `json:"phase,omitempty"`
+		WaitReason     string                `json:"wait_reason,omitempty"`
 	}
 )
 
@@ -441,7 +454,7 @@ func NewFullTextCopyTask(ctx context.Context, uri *fs.URI, originalFileID, fileI
 		OwnerID:        ownerID,
 		EntityID:       entityID,
 	}
-	stateBytes, err := json.Marshal(state)
+	stateBytes, err := marshalFullTextCopyTaskState(state)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal state: %w", err)
 	}
@@ -467,26 +480,197 @@ func NewFullTextCopyTaskFromModel(t *ent.Task) queue.Task {
 	}
 }
 
+func parseFullTextCopyTaskState(raw string) (*FullTextCopyTaskState, error) {
+	state := &FullTextCopyTaskState{}
+	if raw == "" {
+		return state, nil
+	}
+
+	if err := json.Unmarshal([]byte(raw), state); err != nil {
+		return nil, err
+	}
+
+	return state, nil
+}
+
+func marshalFullTextCopyTaskState(state *FullTextCopyTaskState) ([]byte, error) {
+	if state == nil {
+		state = &FullTextCopyTaskState{}
+	}
+
+	return json.Marshal(state)
+}
+
 func (t *FullTextCopyTask) Do(ctx context.Context) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
 	fm := NewFileManager(dep, inventory.UserFromContext(ctx)).(*manager)
+	defer fm.Recycle()
 
 	if !fm.settings.FTSEnabled(ctx) {
 		l.Debug("FTS disabled, skipping full text copy task.")
 		return task.StatusCompleted, nil
 	}
 
-	var state FullTextCopyTaskState
-	if err := json.Unmarshal([]byte(t.State()), &state); err != nil {
+	state, err := parseFullTextCopyTaskState(t.State())
+	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
 	}
 
+	cloned, cloneErr := fullTextCloneFTSSidecarsForCopiedFile(ctx, fm, state.OriginalFileID, state.FileID)
+	if !cloned && cloneErr == nil {
+		pending, reason, err := fullTextSourceExtractionPending(ctx, fm.dep, state.OriginalFileID)
+		if err != nil {
+			l.Warning(
+				"Failed to inspect pending full text extraction for source file %d of copied file %d, falling back to rebuild: %s",
+				state.OriginalFileID,
+				state.FileID,
+				err,
+			)
+		} else if pending {
+			l.Debug(
+				"Source file %d full text extraction is still pending for copied file %d (%s), waiting for reusable sidecar.",
+				state.OriginalFileID,
+				state.FileID,
+				reason,
+			)
+			return t.suspendForSourceExtraction(state, reason)
+		}
+	}
+
+	if cloneErr != nil {
+		l.Warning(
+			"Failed to clone full text sidecar from file %d to copied file %d, falling back to rebuild: %s",
+			state.OriginalFileID,
+			state.FileID,
+			cloneErr,
+		)
+	}
+
+	state.Phase = fullTextCopyPhasePending
+	state.WaitReason = ""
+
 	status, err := fullTextPerformIndexing(ctx, fm, state.FileID)
 	if err == nil {
-		l.Debug("Successfully rebuilt full text index for copied file %d.", state.FileID)
+		if cloned {
+			l.Debug("Successfully rebuilt full text index for copied file %d using cloned sidecar.", state.FileID)
+		} else {
+			l.Debug("Successfully rebuilt full text index for copied file %d.", state.FileID)
+		}
 	}
 	return status, err
+}
+
+func (t *FullTextCopyTask) suspendForSourceExtraction(state *FullTextCopyTaskState, reason string) (task.Status, error) {
+	state.Phase = fullTextCopyPhaseAwaitSource
+	state.WaitReason = reason
+	stateBytes, err := marshalFullTextCopyTaskState(state)
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to marshal copy task state: %w", err)
+	}
+
+	t.UpdateState(string(stateBytes))
+	t.ResumeAfter(10 * time.Second)
+	return task.StatusSuspending, nil
+}
+
+func (t *FullTextCopyTask) Summarize(hasher hashid.Encoder) *queue.Summary {
+	state, err := parseFullTextCopyTaskState(t.State())
+	if err != nil {
+		return nil
+	}
+
+	props := map[string]any{
+		"src":              state.Uri,
+		"file_id":          state.FileID,
+		"owner_id":         state.OwnerID,
+		"entity_id":        state.EntityID,
+		"original_file_id": state.OriginalFileID,
+	}
+	if state.WaitReason != "" {
+		props["wait_reason"] = state.WaitReason
+	}
+
+	return &queue.Summary{
+		Phase: string(state.Phase),
+		Props: props,
+	}
+}
+
+func sourceFullTextExtractionPending(ctx context.Context, dep dependency.Dep, originalFileID int) (bool, string, error) {
+	if dep == nil || dep.TaskClient() == nil || originalFileID <= 0 {
+		return false, "", nil
+	}
+
+	candidates, err := dep.TaskClient().GetPendingTasks(ctx, queue.FullTextIndexTaskType)
+	if err != nil {
+		return false, "", err
+	}
+
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.Type != queue.FullTextIndexTaskType {
+			continue
+		}
+
+		if candidate.Status != task.StatusQueued && candidate.Status != task.StatusProcessing && candidate.Status != task.StatusSuspending {
+			continue
+		}
+
+		state, err := parseFullTextIndexTaskState(candidate.PrivateState)
+		if err != nil {
+			dep.Logger().Warning("Failed to parse pending full text task %d while checking source file %d: %s", candidate.ID, originalFileID, err)
+			continue
+		}
+
+		if pending, reason := fullTextIndexTaskContainsActiveExtraction(state, originalFileID, candidate.Status); pending {
+			return true, reason, nil
+		}
+	}
+
+	return false, "", nil
+}
+
+func fullTextIndexTaskContainsActiveExtraction(state *FullTextIndexTaskState, fileID int, status task.Status) (bool, string) {
+	if state == nil || fileID <= 0 {
+		return false, ""
+	}
+
+	if state.Active != nil && state.Active.FileID == fileID {
+		if state.Active.IsDeleteOnly() {
+			return false, ""
+		}
+		return true, fullTextCopyWaitReasonForSource(status, state.Phase)
+	}
+
+	for _, item := range state.Items() {
+		if item.FileID != fileID {
+			continue
+		}
+		if item.IsDeleteOnly() {
+			return false, ""
+		}
+		return true, fullTextCopyWaitReasonForSource(status, fullTextIndexPhasePending)
+	}
+
+	return false, ""
+}
+
+func fullTextCopyWaitReasonForSource(status task.Status, phase FullTextIndexTaskPhase) string {
+	switch phase {
+	case fullTextIndexPhaseAwaitSlave, fullTextIndexPhaseAwaitExternal:
+		return string(phase)
+	}
+
+	switch status {
+	case task.StatusProcessing:
+		return "processing_source_extract"
+	case task.StatusQueued:
+		return "queued_source_extract"
+	case task.StatusSuspending:
+		return "suspending_source_extract"
+	default:
+		return string(fullTextCopyPhaseAwaitSource)
+	}
 }
 
 type (
@@ -541,6 +725,7 @@ func (t *FullTextChangeOwnerTask) Do(ctx context.Context) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
 	fm := NewFileManager(dep, inventory.UserFromContext(ctx)).(*manager)
+	defer fm.Recycle()
 
 	if !fm.settings.FTSEnabled(ctx) {
 		l.Debug("FTS disabled, skipping full text change owner task.")
@@ -603,6 +788,7 @@ func (t *FullTextDeleteTask) Do(ctx context.Context) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
 	fm := NewFileManager(dep, inventory.UserFromContext(ctx)).(*manager)
+	defer fm.Recycle()
 
 	var state FullTextDeleteTaskState
 	if err := json.Unmarshal([]byte(t.State()), &state); err != nil {
@@ -1210,6 +1396,36 @@ func (m *manager) queueFullTextSync(ctx context.Context, uri *fs.URI, fileID, ow
 	m.queueFullTextReconcile(ctx, uri, fileID, ownerID, entityID)
 }
 
+func (m *manager) queueFullTextCopy(ctx context.Context, uri *fs.URI, originalFileID, fileID, ownerID, entityID int) {
+	if !m.settings.FTSEnabled(ctx) || fileID <= 0 {
+		return
+	}
+	if originalFileID <= 0 {
+		m.queueFullTextReconcile(ctx, uri, fileID, ownerID, entityID)
+		return
+	}
+
+	t, err := NewFullTextCopyTask(ctx, uri, originalFileID, fileID, ownerID, entityID, m.user)
+	if err != nil {
+		m.l.Warning("Failed to create full text copy task: %s", err)
+		return
+	}
+
+	if err := m.dep.ContentProcessingQueue(ctx).QueueTask(ctx, t); err != nil {
+		m.l.Warning("Failed to queue full text copy task: %s", err)
+		return
+	}
+
+	m.l.Debug(
+		"Queued full text copy task for file %d from original file %d entity %d owner %d uri %v.",
+		fileID,
+		originalFileID,
+		entityID,
+		ownerID,
+		uri,
+	)
+}
+
 func (m *manager) queueFullTextDelete(ctx context.Context, fileID int) {
 	m.queueFullTextReconcile(ctx, nil, fileID, 0, 0)
 }
@@ -1385,7 +1601,7 @@ func (m *manager) processIndexDiff(ctx context.Context, diff *fs.IndexDiff) {
 	}
 
 	for _, cp := range diff.IndexToCopy {
-		m.queueFullTextSync(ctx, &cp.Uri, cp.FileID, cp.OwnerID, cp.EntityID)
+		m.queueFullTextCopy(ctx, &cp.Uri, cp.OriginalFileID, cp.FileID, cp.OwnerID, cp.EntityID)
 	}
 
 	for _, change := range diff.IndexToChangeOwner {

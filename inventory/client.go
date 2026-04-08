@@ -103,6 +103,7 @@ func InitializeDBClient(l logging.Logger,
 		"fts_external_quality_font_box_min_run",
 		"fts_external_quality_font_box_min_ratio",
 		"fts_external_recursive_attachments",
+		"fts_external_ocr_enabled",
 		"fts_external_skip_encrypted_files",
 	); err != nil {
 		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)

@@ -747,14 +747,15 @@ var DefaultSettings = map[string]string{
 	"fts_external_quality_font_box_min_run":         "3",
 	"fts_external_quality_font_box_min_ratio":       "0.35",
 	"fts_external_recursive_attachments":            "1",
+	"fts_external_ocr_enabled":                      "0",
 	"fts_external_skip_encrypted_files":             "1",
 	"fts_chunk_size":                                "2000",
 	"viewer_default_apps":                           "{}",
 }
 
 var RedactedSettings = map[string]struct{}{
-	"encrypt_master_key": {},
-	"secret_key":         {},
+	"encrypt_master_key":          {},
+	"secret_key":                  {},
 	"fts_external_kafka_password": {},
 }
 

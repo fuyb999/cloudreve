@@ -240,6 +240,91 @@ func TestBuildEmbeddedSearchAttachmentsFromManifestSkipsSyntheticTikaArtifacts(t
 	}
 }
 
+func TestBuildEmbeddedSearchAttachmentsFromManifestPrefersAttachmentTextSidecar(t *testing.T) {
+	rmetaRaw, err := json.Marshal([]map[string]any{
+		{
+			"X-TIKA:embedded_resource_path": "nested/note.txt",
+			"resourceName":                  "note.txt",
+			"Content-Type":                  "text/plain",
+			"X-TIKA:content":                "inline content should stay out of manifest docs",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal rmeta payload: %v", err)
+	}
+
+	textSidecarPath := "cloudreve/fts-sidecar/1/12/4/attachment-text/attachments/nested/note.txt.txt"
+	attachments := buildEmbeddedSearchAttachmentsFromManifest(
+		&ent.File{ID: 12},
+		&testEntity{id: 4},
+		&FTSSidecarManifest{
+			Objects: []FTSSidecarArtifact{
+				{
+					ID:       "attachments/nested/note.txt",
+					Kind:     "embedded",
+					Name:     "note.txt",
+					Path:     "cloudreve/fts-sidecar/1/12/4/attachments/nested/note.txt",
+					MimeType: "text/plain",
+				},
+				{
+					ID:       sidecarAttachmentTextObjectID("attachments/nested/note.txt"),
+					ParentID: "attachments/nested/note.txt",
+					Kind:     "attachment_text",
+					Name:     "note.txt.txt",
+					Path:     textSidecarPath,
+					MimeType: "text/plain; charset=utf-8",
+				},
+			},
+		},
+		rmetaRaw,
+	)
+
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachment count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].Source, textSidecarPath; got != want {
+		t.Fatalf("unexpected attachment source: got %q want %q", got, want)
+	}
+	if got := attachments[0].Content; got != "" {
+		t.Fatalf("expected inline rmeta content to be skipped when sidecar text exists, got %q", got)
+	}
+}
+
+func TestBuildEmbeddedSearchAttachmentsFromManifestSkipsOCRCandidateArtifact(t *testing.T) {
+	attachments := buildEmbeddedSearchAttachmentsFromManifest(
+		&ent.File{ID: 12},
+		&testEntity{id: 4},
+		&FTSSidecarManifest{
+			Objects: []FTSSidecarArtifact{
+				{
+					ID:       "attachments/nested/image1.png",
+					Kind:     "embedded",
+					Name:     "image1.png",
+					Path:     "cloudreve/fts-sidecar/1/12/4/attachments/nested/image1.png",
+					MimeType: "image/png",
+					Size:     1024,
+				},
+				{
+					ID:       "ocr-candidates.json",
+					Kind:     "ocr_candidates",
+					Name:     "ocr-candidates.json",
+					Path:     "cloudreve/fts-sidecar/1/12/4/ocr-candidates.json",
+					MimeType: "application/json",
+					Size:     256,
+				},
+			},
+		},
+		nil,
+	)
+
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachment count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].Name, "image1.png"; got != want {
+		t.Fatalf("unexpected attachment name: got %q want %q", got, want)
+	}
+}
+
 func TestBuildFTSExtractionPlanForcesFreshExtractionWhenRebuildDoesNotSkip(t *testing.T) {
 	settings := testSettingProvider{
 		tikaCfg: &setting.FTSTikaExtractorSetting{

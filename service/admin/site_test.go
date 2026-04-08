@@ -61,6 +61,9 @@ func TestQualityOnlySettingsDoNotTriggerExternalKafkaReload(t *testing.T) {
 	if _, ok := postprocessors["fts_external_timeout_seconds"]; ok {
 		t.Fatal("timeout threshold should not trigger kafka reload")
 	}
+	if _, ok := postprocessors["fts_external_ocr_enabled"]; ok {
+		t.Fatal("ocr toggle should not trigger kafka reload")
+	}
 	if _, ok := postprocessors["fts_external_enabled"]; !ok {
 		t.Fatal("external enable toggle should still trigger kafka reload")
 	}

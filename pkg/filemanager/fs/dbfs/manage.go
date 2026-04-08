@@ -17,6 +17,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/samber/lo"
 	"golang.org/x/tools/container/intsets"
 )
@@ -40,6 +41,24 @@ func (f *DBFS) canManageSharedTrash(target *File) bool {
 	}
 
 	return strings.TrimSpace(target.Metadata()[MetadataTrashVisibility]) == f.currentUserHash()
+}
+
+func shouldQueueFullTextCopy(
+	metadata map[string]string,
+	size int64,
+	ftsEnabled bool,
+	extractorType setting.FTSExtractorType,
+	tikaCfg *setting.FTSTikaExtractorSetting,
+) bool {
+	if _, ok := metadata[FullTextIndexKey]; ok {
+		return true
+	}
+
+	if !ftsEnabled || extractorType != setting.FTSExtractorTypeTika || tikaCfg == nil || size <= 0 {
+		return false
+	}
+
+	return tikaCfg.MaxFileSize > size
 }
 
 func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType, opts ...fs.Option) (fs.File, error) {
@@ -676,6 +695,7 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 	ctx = context.WithValue(ctx, inventory.LoadFileMetadata{}, true)
 
 	for _, p := range path {
+		isShareCopy := isCopy && p != nil && p.FileSystem() == constants.FileSystemShare
 		pathSourceCapability := sourceCapability
 		if !isCopy && p != nil && p.FileSystem() == constants.FileSystemTrash {
 			pathSourceCapability = NavigatorCapabilityRestore
@@ -705,13 +725,13 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 			continue
 		}
 
-		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.Owner().ID != f.user.ID {
+		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.Owner().ID != f.user.ID && !isShareCopy {
 			ae.Add(p.String(), fs.ErrOwnerOnly)
 			continue
 		}
 
 		// Root folder cannot be moved or copied
-		if target.IsRootFolder() {
+		if target.IsRootFolder() && !isShareCopy {
 			ae.Add(p.String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot move root folder")))
 			continue
 		}
@@ -1063,6 +1083,16 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 	copiedUserURI := make(map[int]*fs.URI)
 	storageDiff := make(inventory.StorageDiff)
 	indexToCopy := make([]fs.IndexDiffCopyDetails, 0)
+	ftsEnabled := false
+	extractorType := setting.FTSExtractorTypeNone
+	var tikaCfg *setting.FTSTikaExtractorSetting
+	if f.settingClient != nil {
+		ftsEnabled = f.settingClient.FTSEnabled(ctx)
+		extractorType = f.settingClient.FTSExtractorType(ctx)
+		if extractorType == setting.FTSExtractorTypeTika {
+			tikaCfg = f.settingClient.FTSTikaExtractor(ctx)
+		}
+	}
 	var diff inventory.StorageDiff
 	for n, files := range targets {
 		initialDstMap := make(map[int][]*ent.File)
@@ -1136,7 +1166,7 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 				copiedURI := parentURI.Join(copiedFile.Name)
 				copiedUserURI[file.ID()] = copiedURI
 
-				if _, ok := file.Metadata()[FullTextIndexKey]; ok {
+				if shouldQueueFullTextCopy(file.Metadata(), file.Size(), ftsEnabled, extractorType, tikaCfg) {
 					indexToCopy = append(indexToCopy, fs.IndexDiffCopyDetails{
 						OriginalFileID: file.ID(),
 						FileID:         copiedFile.ID,

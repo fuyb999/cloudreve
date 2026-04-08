@@ -309,7 +309,7 @@ func TestProcessIndexDiffQueuesAllOperationTypes(t *testing.T) {
 			{Uri: *updateURI, FileID: 101, OwnerID: 201, EntityID: 301},
 		},
 		IndexToCopy: []fs.IndexDiffCopyDetails{
-			{Uri: *copyURI, FileID: 102, OwnerID: 202, EntityID: 302},
+			{Uri: *copyURI, OriginalFileID: 101, FileID: 102, OwnerID: 202, EntityID: 302},
 		},
 		IndexToChangeOwner: []fs.IndexDiffOwnerChangeDetails{
 			{Uri: *changeOwnerURI, FileID: 103, NewOwnerID: 203, EntityID: 303},
@@ -325,7 +325,7 @@ func TestProcessIndexDiffQueuesAllOperationTypes(t *testing.T) {
 	}
 
 	assertQueuedState(t, tasks.tasks[0], 101, 201, 301, updateURI.String())
-	assertQueuedState(t, tasks.tasks[1], 102, 202, 302, copyURI.String())
+	assertQueuedCopyState(t, tasks.tasks[1], 101, 102, 202, 302, copyURI.String())
 	assertQueuedState(t, tasks.tasks[2], 103, 203, 303, changeOwnerURI.String())
 	assertQueuedState(t, tasks.tasks[3], 104, 0, 0, "")
 	assertQueuedState(t, tasks.tasks[4], 105, 0, 305, renameURI.String())
@@ -815,6 +815,7 @@ func TestProcessIndexDiffMixedOperationStressKeepsLastStatePerFile(t *testing.T)
 		uri      string
 	}
 	expected := map[int]expectedItem{}
+	copyCount := 0
 	rng := rand.New(rand.NewSource(20260321))
 
 	const fileUniverse = 48
@@ -864,15 +865,20 @@ func TestProcessIndexDiffMixedOperationStressKeepsLastStatePerFile(t *testing.T)
 			entityID := 7000 + i
 			m.processIndexDiff(ctx, &fs.IndexDiff{
 				IndexToCopy: []fs.IndexDiffCopyDetails{
-					{Uri: *uri, FileID: fileID, OwnerID: ownerID, EntityID: entityID},
+					{Uri: *uri, OriginalFileID: fileID + 100000, FileID: fileID, OwnerID: ownerID, EntityID: entityID},
 				},
 			})
-			expected[fileID] = expectedItem{ownerID: ownerID, entityID: entityID, uri: uri.String()}
+			copyCount++
 		}
 	}
 
-	if len(tasks.tasks) != 0 {
-		t.Fatalf("expected mixed diff stream to merge into pending task, got %d new task(s)", len(tasks.tasks))
+	if len(tasks.tasks) != copyCount {
+		t.Fatalf("expected mixed diff stream to create %d copy task(s), got %d", copyCount, len(tasks.tasks))
+	}
+	for _, queued := range tasks.tasks {
+		if queued.Type() != queue.FullTextCopyTaskType {
+			t.Fatalf("expected queued copy task type %s, got %s", queue.FullTextCopyTaskType, queued.Type())
+		}
 	}
 
 	state := mustParseState(t, pending.PrivateState)
@@ -1394,6 +1400,199 @@ func TestFullTextIndexTaskSummarizeReportsPhaseNodeAndCurrentFile(t *testing.T) 
 	}
 }
 
+func TestSourceFullTextExtractionPendingDetectsAwaitingSourceTask(t *testing.T) {
+	state := &FullTextIndexTaskState{
+		Phase: fullTextIndexPhaseAwaitExternal,
+		Active: &FullTextIndexTaskItem{
+			FileID:   901,
+			OwnerID:  71,
+			EntityID: 81,
+			Uri:      mustURI(t, "cloudreve:///source/report.pdf"),
+		},
+		Files: []FullTextIndexTaskItem{
+			{FileID: 901, OwnerID: 71, EntityID: 81, Uri: mustURI(t, "cloudreve:///source/report.pdf")},
+		},
+	}
+	stateBytes, err := marshalFullTextIndexTaskState(state)
+	if err != nil {
+		t.Fatalf("failed to marshal full text state: %v", err)
+	}
+
+	dep := testDep{
+		taskClient: &testTaskClient{
+			pending: []*ent.Task{
+				{
+					ID:           1,
+					Type:         queue.FullTextIndexTaskType,
+					Status:       task.StatusSuspending,
+					PrivateState: string(stateBytes),
+				},
+			},
+		},
+	}
+
+	pending, reason, err := sourceFullTextExtractionPending(context.Background(), dep, 901)
+	if err != nil {
+		t.Fatalf("unexpected source pending error: %v", err)
+	}
+	if !pending {
+		t.Fatal("expected source extraction to be detected as pending")
+	}
+	if reason != string(fullTextIndexPhaseAwaitExternal) {
+		t.Fatalf("unexpected pending reason: got %q want %q", reason, fullTextIndexPhaseAwaitExternal)
+	}
+}
+
+func TestSourceFullTextExtractionPendingIgnoresDeleteOnlyTask(t *testing.T) {
+	state := newFullTextIndexTaskState(nil, 0, 902, 0)
+	stateBytes, err := marshalFullTextIndexTaskState(state)
+	if err != nil {
+		t.Fatalf("failed to marshal delete-only state: %v", err)
+	}
+
+	dep := testDep{
+		taskClient: &testTaskClient{
+			pending: []*ent.Task{
+				{
+					ID:           2,
+					Type:         queue.FullTextIndexTaskType,
+					Status:       task.StatusQueued,
+					PrivateState: string(stateBytes),
+				},
+			},
+		},
+	}
+
+	pending, reason, err := sourceFullTextExtractionPending(context.Background(), dep, 902)
+	if err != nil {
+		t.Fatalf("unexpected delete-only pending error: %v", err)
+	}
+	if pending {
+		t.Fatalf("expected delete-only task to be ignored, got pending reason %q", reason)
+	}
+}
+
+func TestFullTextCopyTaskDoSuspendsWhileSourceExtractionPending(t *testing.T) {
+	originalClone := fullTextCloneFTSSidecarsForCopiedFile
+	originalSourcePending := fullTextSourceExtractionPending
+	originalPerformIndexing := fullTextPerformIndexing
+	defer func() {
+		fullTextCloneFTSSidecarsForCopiedFile = originalClone
+		fullTextSourceExtractionPending = originalSourcePending
+		fullTextPerformIndexing = originalPerformIndexing
+	}()
+
+	fullTextCloneFTSSidecarsForCopiedFile = func(ctx context.Context, fm *manager, originalFileID, targetFileID int) (bool, error) {
+		if originalFileID != 910 || targetFileID != 911 {
+			t.Fatalf("unexpected clone request original=%d target=%d", originalFileID, targetFileID)
+		}
+		return false, nil
+	}
+	fullTextSourceExtractionPending = func(ctx context.Context, dep dependency.Dep, originalFileID int) (bool, string, error) {
+		if originalFileID != 910 {
+			t.Fatalf("unexpected source pending query file=%d", originalFileID)
+		}
+		return true, string(fullTextIndexPhaseAwaitExternal), nil
+	}
+
+	indexCalled := 0
+	fullTextPerformIndexing = func(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
+		indexCalled++
+		return task.StatusCompleted, nil
+	}
+
+	dep := testDep{
+		settings: testSettingProvider{enabled: true},
+		config:   testConfigProvider{},
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	copyTask, err := NewFullTextCopyTask(ctx, mustURI(t, "cloudreve:///copies/report.pdf"), 910, 911, 21, 31, nil)
+	if err != nil {
+		t.Fatalf("failed to create copy task: %v", err)
+	}
+
+	status, err := copyTask.Do(ctx)
+	if err != nil {
+		t.Fatalf("unexpected copy task error: %v", err)
+	}
+	if status != task.StatusSuspending {
+		t.Fatalf("unexpected copy task status: got %s want %s", status, task.StatusSuspending)
+	}
+	if indexCalled != 0 {
+		t.Fatalf("expected copied file indexing to be skipped while source is pending, got %d", indexCalled)
+	}
+	if copyTask.ResumeTime() == 0 {
+		t.Fatal("expected copy task resume time to be set")
+	}
+
+	state, err := parseFullTextCopyTaskState(copyTask.State())
+	if err != nil {
+		t.Fatalf("failed to parse suspended copy state: %v", err)
+	}
+	if state.Phase != fullTextCopyPhaseAwaitSource {
+		t.Fatalf("unexpected suspended copy phase: got %q want %q", state.Phase, fullTextCopyPhaseAwaitSource)
+	}
+	if state.WaitReason != string(fullTextIndexPhaseAwaitExternal) {
+		t.Fatalf("unexpected suspended wait reason: got %q want %q", state.WaitReason, fullTextIndexPhaseAwaitExternal)
+	}
+
+	summary := copyTask.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected copy task summary")
+	}
+	if summary.Phase != string(fullTextCopyPhaseAwaitSource) {
+		t.Fatalf("unexpected summary phase: %+v", summary)
+	}
+	if summary.Props["wait_reason"] != string(fullTextIndexPhaseAwaitExternal) {
+		t.Fatalf("unexpected summary props: %+v", summary.Props)
+	}
+}
+
+func TestFullTextCopyTaskDoFallsBackWhenSourceExtractionNotPending(t *testing.T) {
+	originalClone := fullTextCloneFTSSidecarsForCopiedFile
+	originalSourcePending := fullTextSourceExtractionPending
+	originalPerformIndexing := fullTextPerformIndexing
+	defer func() {
+		fullTextCloneFTSSidecarsForCopiedFile = originalClone
+		fullTextSourceExtractionPending = originalSourcePending
+		fullTextPerformIndexing = originalPerformIndexing
+	}()
+
+	fullTextCloneFTSSidecarsForCopiedFile = func(ctx context.Context, fm *manager, originalFileID, targetFileID int) (bool, error) {
+		return false, nil
+	}
+	fullTextSourceExtractionPending = func(ctx context.Context, dep dependency.Dep, originalFileID int) (bool, string, error) {
+		return false, "", nil
+	}
+
+	indexedFileID := 0
+	fullTextPerformIndexing = func(ctx context.Context, fm *manager, fileID int) (task.Status, error) {
+		indexedFileID = fileID
+		return task.StatusCompleted, nil
+	}
+
+	dep := testDep{
+		settings: testSettingProvider{enabled: true},
+		config:   testConfigProvider{},
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	copyTask, err := NewFullTextCopyTask(ctx, mustURI(t, "cloudreve:///copies/report-final.pdf"), 920, 921, 22, 32, nil)
+	if err != nil {
+		t.Fatalf("failed to create copy task: %v", err)
+	}
+
+	status, err := copyTask.Do(ctx)
+	if err != nil {
+		t.Fatalf("unexpected fallback copy task error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected fallback copy task status: got %s want %s", status, task.StatusCompleted)
+	}
+	if indexedFileID != 921 {
+		t.Fatalf("expected copied file to be indexed locally, got %d", indexedFileID)
+	}
+}
+
 func TestFullTextIndexTaskAwaitSlaveExtractionFallsBackToLocalIndexing(t *testing.T) {
 	originalPerformIndexing := fullTextPerformIndexing
 	defer func() {
@@ -1757,6 +1956,33 @@ func assertQueuedState(t *testing.T, task queue.Task, fileID, ownerID, entityID 
 
 	item := items[0]
 	assertStateItem(t, item, fileID, ownerID, entityID, uri)
+}
+
+func assertQueuedCopyState(t *testing.T, task queue.Task, originalFileID, fileID, ownerID, entityID int, uri string) {
+	t.Helper()
+	if task.Type() != queue.FullTextCopyTaskType {
+		t.Fatalf("unexpected queued task type: got %s want %s", task.Type(), queue.FullTextCopyTaskType)
+	}
+
+	var state FullTextCopyTaskState
+	if err := json.Unmarshal([]byte(task.State()), &state); err != nil {
+		t.Fatalf("failed to parse queued copy task state: %v", err)
+	}
+
+	if state.OriginalFileID != originalFileID || state.FileID != fileID || state.OwnerID != ownerID || state.EntityID != entityID {
+		t.Fatalf(
+			"unexpected queued copy state: got %+v want original=%d file=%d owner=%d entity=%d",
+			state,
+			originalFileID,
+			fileID,
+			ownerID,
+			entityID,
+		)
+	}
+
+	if state.Uri == nil || state.Uri.String() != uri {
+		t.Fatalf("unexpected queued copy uri: got %v want %s", state.Uri, uri)
+	}
 }
 
 func assertStateItem(t *testing.T, item FullTextIndexTaskItem, fileID, ownerID, entityID int, uri string) {

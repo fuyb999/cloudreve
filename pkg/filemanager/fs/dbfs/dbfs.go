@@ -924,7 +924,7 @@ func generateSavePath(policy *ent.StoragePolicy, req *fs.UploadRequest, user *en
 func canMoveOrCopyTo(src, dst *fs.URI, isCopy bool) bool {
 	if isCopy {
 		switch src.FileSystem() {
-		case constants.FileSystemMy, constants.FileSystemPublic:
+		case constants.FileSystemMy, constants.FileSystemPublic, constants.FileSystemShare:
 			return dst.FileSystem() == constants.FileSystemMy || dst.FileSystem() == constants.FileSystemPublic
 		}
 		return false

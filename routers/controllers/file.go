@@ -51,6 +51,22 @@ func ImportFiles(c *gin.Context) {
 	}
 }
 
+func CreateShareSaveTask(c *gin.Context) {
+	service := ParametersFromContext[*explorer.ShareSaveWorkflowService](c, explorer.CreateShareSaveParamCtx{})
+	resp, err := service.CreateShareSaveTask(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	if resp != nil {
+		c.JSON(200, serializer.Response{
+			Data: resp,
+		})
+	}
+}
+
 // CreateRemoteDownload creates remote download task
 func CreateRemoteDownload(c *gin.Context) {
 	service := ParametersFromContext[*explorer.DownloadWorkflowService](c, explorer.CreateDownloadParamCtx{})

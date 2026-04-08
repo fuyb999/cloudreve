@@ -2,6 +2,7 @@ package explorer
 
 import (
 	"encoding/gob"
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"time"
 
@@ -332,6 +333,53 @@ func (service *ImportWorkflowService) CreateImportTask(c *gin.Context) (*TaskRes
 }
 
 type (
+	ShareSaveWorkflowService struct {
+		Src string `json:"src" binding:"required,min=1,max=65535"`
+		Dst string `json:"dst" binding:"required,min=1,max=65535"`
+	}
+	CreateShareSaveParamCtx struct{}
+)
+
+func (service *ShareSaveWorkflowService) CreateShareSaveTask(c *gin.Context) (*TaskResponse, error) {
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+	hasher := dep.HashIDEncoder()
+	m := manager.NewFileManager(dep, user)
+	defer m.Recycle()
+
+	src, err := fs.NewUriFromString(service.Src)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid share source", err)
+	}
+	if src.FileSystem() != constants.FileSystemShare {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Source must be a share uri", nil)
+	}
+
+	dst, err := fs.NewUriFromString(service.Dst)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid destination", err)
+	}
+
+	if _, err := m.Get(c, src, dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityCopyFile)); err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid share source", err)
+	}
+	if _, err := m.Get(c, dst, dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityCreateFile)); err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid destination", err)
+	}
+
+	t, err := workflows.NewShareSaveTask(c, user, src.String(), dst.String())
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to create task", err)
+	}
+
+	if err := dep.IoIntenseQueue(c).QueueTask(c, t); err != nil {
+		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to queue task", err)
+	}
+
+	return BuildTaskResponse(t, nil, hasher), nil
+}
+
+type (
 	ListTaskService struct {
 		PageSize      int    `form:"page_size" binding:"required,min=10,max=100"`
 		Category      string `form:"category" binding:"required,eq=general|eq=downloading|eq=downloaded"`
@@ -352,7 +400,13 @@ func (service *ListTaskService) ListTasks(c *gin.Context) (*TaskListResponse, er
 			PageToken:           service.NextPageToken,
 			PageSize:            service.PageSize,
 		},
-		Types:  []string{queue.CreateArchiveTaskType, queue.ExtractArchiveTaskType, queue.RelocateTaskType, queue.ImportTaskType},
+		Types: []string{
+			queue.CreateArchiveTaskType,
+			queue.ExtractArchiveTaskType,
+			queue.RelocateTaskType,
+			queue.ImportTaskType,
+			queue.ShareSaveTaskType,
+		},
 		UserID: user.ID,
 	}
 

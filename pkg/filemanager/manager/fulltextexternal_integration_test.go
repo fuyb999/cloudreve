@@ -92,9 +92,11 @@ func TestFTSExternalKafkaRoundTripIntegration(t *testing.T) {
 	require.Equal(t, job.RequestID, processMsg.RequestID)
 	require.Equal(t, job.SnapshotToken, processMsg.SnapshotToken)
 	require.Equal(t, fileModel.ID, processMsg.File.FileID)
+	require.Equal(t, policy.ID, processMsg.Source.PolicyID)
 	require.Equal(t, policy.BucketName, processMsg.Source.Bucket)
 	require.Equal(t, entity.Source, processMsg.Source.Path)
 	require.True(t, processMsg.Options.RecursiveAttachments)
+	require.True(t, processMsg.Options.OCREnabled)
 
 	result := externalFTSResultMessage{
 		Version:       1,
@@ -303,6 +305,7 @@ func newFTSExternalIntegrationHarness(t *testing.T, broker string) *ftsExternalI
 		TimeoutSeconds:       30,
 		RetryMax:             1,
 		RecursiveAttachments: true,
+		OCREnabled:           true,
 		SkipEncryptedFiles:   true,
 		Kafka: setting.FTSExternalKafkaSetting{
 			UseGlobalKafka:   false,

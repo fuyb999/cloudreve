@@ -32,11 +32,14 @@ var (
 	hasCurrentExternalFTSSidecarForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate) bool {
 		return m.hasCurrentExternalFTSSidecar(ctx, candidate)
 	}
-	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
-		return findReusableFTSExternalJob(ctx, dep, fileModel, primaryEntity)
+	findReusableFTSExternalJobForTask = func(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, cfg *setting.FTSExternalExtractorSetting) (*ent.FTSExternalJob, error) {
+		return findReusableFTSExternalJob(ctx, dep, fileModel, primaryEntity, cfg)
 	}
 	buildFTSFileDocumentForTask = func(m *manager, ctx context.Context, fileID int, opts FTSBuildOptions) (*searcher.SearchFileDocument, *fs.URI, error) {
 		return m.buildFTSFileDocumentWithOptions(ctx, fileID, opts)
+	}
+	hasFTSOCRCandidatesForTask = func(m *manager, ctx context.Context, candidate *ftsExternalCandidate, doc *searcher.SearchFileDocument, uri *fs.URI) bool {
+		return m.hasFTSOCRCandidatesAfterLocalBuild(ctx, candidate, doc, uri)
 	}
 	finalizeExternalIndexedFileForTask = finalizeExternalIndexedFile
 	publishFTSExternalRequestForTask   = publishFTSExternalRequest
@@ -81,9 +84,40 @@ func (m *manager) hasCurrentExternalFTSSidecar(ctx context.Context, candidate *f
 		return false
 	}
 
+	var cfg *setting.FTSExternalExtractorSetting
+	if m.settings != nil {
+		cfg = m.settings.FTSExternalExtractor(ctx)
+	}
+
 	return manifest.Provider == ftsSidecarProviderExternal &&
 		manifest.EntityID == candidate.primaryEntity.ID &&
-		manifest.SnapshotToken == buildFTSExternalSnapshotToken(candidate.fileModel, candidate.primaryEntity)
+		manifest.SnapshotToken == buildFTSExternalSnapshotToken(candidate.fileModel, candidate.primaryEntity, cfg)
+}
+
+func (m *manager) hasFTSOCRCandidatesAfterLocalBuild(
+	ctx context.Context,
+	candidate *ftsExternalCandidate,
+	doc *searcher.SearchFileDocument,
+	uri *fs.URI,
+) bool {
+	if m == nil || candidate == nil || candidate.fileModel == nil || candidate.primaryEntity == nil || candidate.policy == nil {
+		return false
+	}
+
+	var manifest *FTSSidecarManifest
+	if uri != nil {
+		_, loadedManifest, _, _, err := m.loadFTSSidecarManifest(ctx, uri)
+		if err == nil {
+			manifest = loadedManifest
+		}
+	}
+
+	rootText := ""
+	if doc != nil {
+		rootText = strings.TrimSpace(doc.Content)
+	}
+
+	return hasFTSOCRCandidates(candidate.fileModel, fs.NewEntity(candidate.primaryEntity), candidate.policy, rootText, manifest)
 }
 
 func upsertFTSDocument(ctx context.Context, fm *manager, uri *fs.URI, doc *searcher.SearchFileDocument) (enttask.Status, error) {
@@ -165,24 +199,30 @@ func (t *FullTextIndexTask) dispatchExternalIfConfigured(
 		uri = candidate.uri
 	}
 
+	hasOCRCandidates := cfg.OCREnabled && hasFTSOCRCandidatesForTask(fm, ctx, candidate, doc, uri)
+	triggerReason := ""
+	qualityReport := ""
 	switch mode {
 	case setting.FTSExternalModeFallbackOnError:
 		if strings.TrimSpace(buildFTSQualityText(doc)) == "" {
-			next, queueErr := t.queueExternalExtraction(ctx, fm, state, candidate, "local_text_empty", 1, "")
-			if queueErr == nil {
-				return next, true, nil
-			}
-			fm.l.Warning("Failed to queue external FTS fallback for file %d, using local result: %s", item.FileID, queueErr)
+			triggerReason = "local_text_empty"
 		}
 	case setting.FTSExternalModeFallbackOnErrorOrQuality:
 		report := evaluateFTSExtractionQuality(doc, cfg)
 		if report != nil && !report.Accepted {
-			next, queueErr := t.queueExternalExtraction(ctx, fm, state, candidate, "quality_rejected", 1, marshalExternalQualityReport(report))
-			if queueErr == nil {
-				return next, true, nil
-			}
-			fm.l.Warning("Failed to queue quality-based external FTS fallback for file %d, using local result: %s", item.FileID, queueErr)
+			triggerReason = "quality_rejected"
+			qualityReport = marshalExternalQualityReport(report)
 		}
+	}
+	if triggerReason == "" && hasOCRCandidates {
+		triggerReason = "ocr_candidates_ready"
+	}
+	if triggerReason != "" {
+		next, queueErr := t.queueExternalExtraction(ctx, fm, state, candidate, triggerReason, 1, qualityReport)
+		if queueErr == nil {
+			return next, true, nil
+		}
+		fm.l.Warning("Failed to queue external FTS fallback for file %d, using local result: %s", item.FileID, queueErr)
 	}
 
 	status, err := upsertFTSDocument(ctx, fm, uri, doc)
@@ -217,7 +257,12 @@ func (t *FullTextIndexTask) queueExternalExtraction(
 		return t.persistAndContinue(state)
 	}
 
-	reusableJob, err := findReusableFTSExternalJobForTask(ctx, fm.dep, candidate.fileModel, candidate.primaryEntity)
+	var cfg *setting.FTSExternalExtractorSetting
+	if fm.settings != nil {
+		cfg = fm.settings.FTSExternalExtractor(ctx)
+	}
+
+	reusableJob, err := findReusableFTSExternalJobForTask(ctx, fm.dep, candidate.fileModel, candidate.primaryEntity, cfg)
 	if err != nil {
 		return enttask.StatusError, err
 	}

@@ -775,6 +775,7 @@ func (s *settingProvider) FTSExternalExtractor(ctx context.Context) *FTSExternal
 		TimeoutSeconds:       s.getInt(ctx, "fts_external_timeout_seconds", 300),
 		RetryMax:             s.getInt(ctx, "fts_external_retry_max", 2),
 		RecursiveAttachments: s.getBoolean(ctx, "fts_external_recursive_attachments", true),
+		OCREnabled:           s.getBoolean(ctx, "fts_external_ocr_enabled", false),
 		SkipEncryptedFiles:   s.getBoolean(ctx, "fts_external_skip_encrypted_files", true),
 		Kafka: FTSExternalKafkaSetting{
 			UseGlobalKafka:   s.getBoolean(ctx, "fts_external_use_global_kafka", true),

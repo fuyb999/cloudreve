@@ -225,6 +225,7 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 		}
 		triggerReason := ""
 		qualityReport := ""
+		hasOCRCandidates := externalCfg.OCREnabled && hasFTSOCRCandidates(fileModel, primaryEntity, payload.Policy, extractedText, manifest)
 		switch externalMode {
 		case setting.FTSExternalModeFallbackOnError:
 			if strings.TrimSpace(buildFTSQualityText(doc)) == "" {
@@ -236,6 +237,9 @@ func ExecuteSlaveFullTextExtract(ctx context.Context, dep dependency.Dep, payloa
 				triggerReason = "quality_rejected"
 				qualityReport = marshalExternalQualityReport(report)
 			}
+		}
+		if triggerReason == "" && hasOCRCandidates {
+			triggerReason = "ocr_candidates_ready"
 		}
 		if triggerReason != "" {
 			externalResult, queueErr := queueSlaveExternalRequest(ctx, dep, fileModel, payload.Entity, payload.Policy, externalCfg, triggerReason, 1, qualityReport)
@@ -381,7 +385,7 @@ func queueSlaveExternalRequest(
 		return nil, fmt.Errorf("slave external fts is disabled")
 	}
 
-	reusable, err := findReusableFTSExternalJob(ctx, dep, fileModel, primaryEntity)
+	reusable, err := findReusableFTSExternalJob(ctx, dep, fileModel, primaryEntity, cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
 
 func TestTopLevelMoveCopyTargets(t *testing.T) {
@@ -79,6 +80,88 @@ func TestCanMoveOrCopyToRestoreAllowsPublicDestination(t *testing.T) {
 	}
 	if !canMoveOrCopyTo(src, dstMy, false) {
 		t.Fatalf("expected restore from trash to my to remain allowed")
+	}
+}
+
+func TestCanMoveOrCopyToShareCopyAllowsMyAndPublic(t *testing.T) {
+	src, err := fs.NewUriFromString(fmt.Sprintf("%s://%s/%s", constants.CloudreveScheme, constants.FileSystemShare, "dummy"))
+	if err != nil {
+		t.Fatalf("failed to parse source uri: %v", err)
+	}
+
+	dstPublic, err := fs.NewUriFromString(fmt.Sprintf("%s://%s/%s", constants.CloudreveScheme, constants.FileSystemPublic, "gate6"))
+	if err != nil {
+		t.Fatalf("failed to parse public destination uri: %v", err)
+	}
+
+	dstMy, err := fs.NewUriFromString(fmt.Sprintf("%s://%s/%s", constants.CloudreveScheme, constants.FileSystemMy, "gate6"))
+	if err != nil {
+		t.Fatalf("failed to parse my destination uri: %v", err)
+	}
+
+	if !canMoveOrCopyTo(src, dstPublic, true) {
+		t.Fatalf("expected copy from share to public to be allowed")
+	}
+	if !canMoveOrCopyTo(src, dstMy, true) {
+		t.Fatalf("expected copy from share to my to be allowed")
+	}
+}
+
+func TestShouldQueueFullTextCopyUsesExistingIndexMetadata(t *testing.T) {
+	if !shouldQueueFullTextCopy(
+		map[string]string{FullTextIndexKey: "fts-doc-1"},
+		0,
+		false,
+		setting.FTSExtractorTypeNone,
+		nil,
+	) {
+		t.Fatalf("expected existing index metadata to force full_text_copy queue")
+	}
+}
+
+func TestShouldQueueFullTextCopyQueuesTikaEligibleFileWithoutIndexMetadata(t *testing.T) {
+	if !shouldQueueFullTextCopy(
+		map[string]string{},
+		1024,
+		true,
+		setting.FTSExtractorTypeTika,
+		&setting.FTSTikaExtractorSetting{MaxFileSize: 2048},
+	) {
+		t.Fatalf("expected tika-eligible copied file without index metadata to queue full_text_copy")
+	}
+}
+
+func TestShouldQueueFullTextCopySkipsEmptyOrOversizedTikaFileWithoutIndexMetadata(t *testing.T) {
+	if shouldQueueFullTextCopy(
+		map[string]string{},
+		0,
+		true,
+		setting.FTSExtractorTypeTika,
+		&setting.FTSTikaExtractorSetting{MaxFileSize: 2048},
+	) {
+		t.Fatalf("expected empty copied file to skip full_text_copy")
+	}
+
+	if shouldQueueFullTextCopy(
+		map[string]string{},
+		4096,
+		true,
+		setting.FTSExtractorTypeTika,
+		&setting.FTSTikaExtractorSetting{MaxFileSize: 2048},
+	) {
+		t.Fatalf("expected oversized copied file to skip full_text_copy")
+	}
+}
+
+func TestShouldQueueFullTextCopySkipsWhenFTSDisabledWithoutExistingIndex(t *testing.T) {
+	if shouldQueueFullTextCopy(
+		map[string]string{},
+		1024,
+		false,
+		setting.FTSExtractorTypeTika,
+		&setting.FTSTikaExtractorSetting{MaxFileSize: 2048},
+	) {
+		t.Fatalf("expected copied file without existing index metadata to skip queue when FTS is disabled")
 	}
 }
 

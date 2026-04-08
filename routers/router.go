@@ -591,6 +591,11 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				controllers.FromJSON[explorer.ArchiveWorkflowService](explorer.CreateArchiveParamCtx{}),
 				controllers.ExtractArchive,
 			)
+			wf.POST("share/save",
+				middleware.RequiredScopes(types.ScopeWorkflowWrite),
+				controllers.FromJSON[explorer.ShareSaveWorkflowService](explorer.CreateShareSaveParamCtx{}),
+				controllers.CreateShareSaveTask,
+			)
 
 			remoteDownload := wf.Group("download")
 			{

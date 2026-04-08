@@ -346,6 +346,7 @@ type FTSExternalExtractorSetting struct {
 	TimeoutSeconds       int
 	RetryMax             int
 	RecursiveAttachments bool
+	OCREnabled           bool
 	SkipEncryptedFiles   bool
 	Kafka                FTSExternalKafkaSetting
 	Quality              FTSExternalQualitySetting

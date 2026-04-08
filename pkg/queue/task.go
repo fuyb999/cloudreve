@@ -109,6 +109,7 @@ const (
 	RelocateTaskType              = "relocate"
 	RemoteDownloadTaskType        = "remote_download"
 	ImportTaskType                = "import"
+	ShareSaveTaskType             = "share_save"
 
 	FullTextIndexTaskType       = "full_text_index"
 	FullTextCopyTaskType        = "full_text_copy"

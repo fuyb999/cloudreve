@@ -38,6 +38,12 @@ type externalFTSProviderInfo struct {
 	Version string `json:"version,omitempty"`
 }
 
+type externalFTSObjectReference struct {
+	PolicyID int    `json:"policy_id,omitempty"`
+	Bucket   string `json:"bucket,omitempty"`
+	Path     string `json:"path,omitempty"`
+}
+
 type externalFTSProcessMessage struct {
 	Version       int                      `json:"version"`
 	RequestID     string                   `json:"request_id"`
@@ -58,12 +64,14 @@ type externalFTSProcessFile struct {
 }
 
 type externalFTSProcessSource struct {
-	Bucket string `json:"bucket"`
-	Path   string `json:"path"`
+	PolicyID int    `json:"policy_id,omitempty"`
+	Bucket   string `json:"bucket"`
+	Path     string `json:"path"`
 }
 
 type externalFTSProcessOption struct {
 	RecursiveAttachments bool `json:"recursive_attachments,omitempty"`
+	OCREnabled           bool `json:"ocr_enabled,omitempty"`
 }
 
 type externalFTSResultMessage struct {
@@ -77,23 +85,31 @@ type externalFTSResultMessage struct {
 }
 
 type externalFTSResultRoot struct {
-	Content      string            `json:"content,omitempty"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	Warnings     []string          `json:"warnings,omitempty"`
-	QualityScore float64           `json:"quality_score,omitempty"`
+	Content         string                      `json:"content,omitempty"`
+	ContentRef      *externalFTSObjectReference `json:"content_ref,omitempty"`
+	ContentPolicyID int                         `json:"content_policy_id,omitempty"`
+	ContentBucket   string                      `json:"content_bucket,omitempty"`
+	ContentPath     string                      `json:"content_path,omitempty"`
+	Metadata        map[string]string           `json:"metadata,omitempty"`
+	Warnings        []string                    `json:"warnings,omitempty"`
+	QualityScore    float64                     `json:"quality_score,omitempty"`
 }
 
 type externalFTSAttachment struct {
-	ID       string            `json:"id,omitempty"`
-	ParentID string            `json:"parent_id,omitempty"`
-	Depth    int               `json:"depth,omitempty"`
-	Type     string            `json:"type,omitempty"`
-	Name     string            `json:"name,omitempty"`
-	Path     string            `json:"path,omitempty"`
-	MimeType string            `json:"mime_type,omitempty"`
-	Size     int64             `json:"size,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-	Content  string            `json:"content,omitempty"`
+	ID              string                      `json:"id,omitempty"`
+	ParentID        string                      `json:"parent_id,omitempty"`
+	Depth           int                         `json:"depth,omitempty"`
+	Type            string                      `json:"type,omitempty"`
+	Name            string                      `json:"name,omitempty"`
+	Path            string                      `json:"path,omitempty"`
+	MimeType        string                      `json:"mime_type,omitempty"`
+	Size            int64                       `json:"size,omitempty"`
+	Metadata        map[string]string           `json:"metadata,omitempty"`
+	Content         string                      `json:"content,omitempty"`
+	ContentRef      *externalFTSObjectReference `json:"content_ref,omitempty"`
+	ContentPolicyID int                         `json:"content_policy_id,omitempty"`
+	ContentBucket   string                      `json:"content_bucket,omitempty"`
+	ContentPath     string                      `json:"content_path,omitempty"`
 }
 
 type externalFTSErrorMessage struct {
@@ -523,7 +539,13 @@ func buildFTSExternalProcessMessage(
 	}
 
 	requestID := "fts-ext-" + uuid.Must(uuid.NewV4()).String()
-	snapshotToken := buildFTSExternalSnapshotToken(fileModel, primaryEntity)
+	snapshotToken := buildFTSExternalSnapshotToken(fileModel, primaryEntity, cfg)
+
+	options := externalFTSProcessOption{}
+	if cfg != nil {
+		options.RecursiveAttachments = cfg.RecursiveAttachments
+		options.OCREnabled = cfg.OCREnabled
+	}
 
 	return &externalFTSProcessMessage{
 		Version:       1,
@@ -539,16 +561,15 @@ func buildFTSExternalProcessMessage(
 			Ext:      strings.TrimPrefix(strings.ToLower(filepath.Ext(fileModel.Name)), "."),
 		},
 		Source: externalFTSProcessSource{
-			Bucket: policy.BucketName,
-			Path:   primaryEntity.Source,
+			PolicyID: policy.ID,
+			Bucket:   policy.BucketName,
+			Path:     primaryEntity.Source,
 		},
-		Options: externalFTSProcessOption{
-			RecursiveAttachments: cfg.RecursiveAttachments,
-		},
+		Options: options,
 	}, snapshotToken, nil
 }
 
-func buildFTSExternalSnapshotToken(fileModel *ent.File, primaryEntity *ent.Entity) string {
+func buildFTSExternalSnapshotToken(fileModel *ent.File, primaryEntity *ent.Entity, cfg *setting.FTSExternalExtractorSetting) string {
 	updatedAt := time.Time{}
 	if primaryEntity != nil {
 		updatedAt = primaryEntity.UpdatedAt
@@ -557,8 +578,15 @@ func buildFTSExternalSnapshotToken(fileModel *ent.File, primaryEntity *ent.Entit
 		updatedAt = fileModel.UpdatedAt
 	}
 
+	recursiveAttachments := false
+	ocrEnabled := false
+	if cfg != nil {
+		recursiveAttachments = cfg.RecursiveAttachments
+		ocrEnabled = cfg.OCREnabled
+	}
+
 	return fmt.Sprintf(
-		"file:%d:entity:%d:size:%d:updated:%s",
+		"file:%d:entity:%d:size:%d:updated:%s:recursive:%t:ocr:%t",
 		fileModel.ID,
 		func() int {
 			if primaryEntity == nil {
@@ -568,15 +596,17 @@ func buildFTSExternalSnapshotToken(fileModel *ent.File, primaryEntity *ent.Entit
 		}(),
 		fileModel.Size,
 		updatedAt.UTC().Format(time.RFC3339Nano),
+		recursiveAttachments,
+		ocrEnabled,
 	)
 }
 
-func findReusableFTSExternalJob(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity) (*ent.FTSExternalJob, error) {
+func findReusableFTSExternalJob(ctx context.Context, dep dependency.Dep, fileModel *ent.File, primaryEntity *ent.Entity, cfg *setting.FTSExternalExtractorSetting) (*ent.FTSExternalJob, error) {
 	if dep == nil || dep.DBClient() == nil || fileModel == nil || primaryEntity == nil {
 		return nil, nil
 	}
 
-	snapshotToken := buildFTSExternalSnapshotToken(fileModel, primaryEntity)
+	snapshotToken := buildFTSExternalSnapshotToken(fileModel, primaryEntity, cfg)
 	jobs, err := dep.DBClient().FTSExternalJob.Query().
 		Where(
 			ftsexternaljob.FileIDEQ(fileModel.ID),
@@ -699,6 +729,39 @@ func parseFTSExternalErrorPayload(raw string) (*externalFTSErrorMessage, error) 
 	}
 
 	return &payload, nil
+}
+
+func normalizeExternalFTSObjectReference(ref *externalFTSObjectReference, policyID int, bucket, path string) *externalFTSObjectReference {
+	if ref != nil {
+		if ref.PolicyID > 0 {
+			policyID = ref.PolicyID
+		}
+		bucket = firstNonEmpty(ref.Bucket, bucket)
+		path = firstNonEmpty(ref.Path, path)
+	}
+
+	if policyID < 0 {
+		policyID = 0
+	}
+	bucket = strings.TrimSpace(bucket)
+	path = strings.TrimSpace(path)
+	if policyID == 0 && bucket == "" && path == "" {
+		return nil
+	}
+
+	return &externalFTSObjectReference{
+		PolicyID: policyID,
+		Bucket:   bucket,
+		Path:     path,
+	}
+}
+
+func (r externalFTSResultRoot) contentReference() *externalFTSObjectReference {
+	return normalizeExternalFTSObjectReference(r.ContentRef, r.ContentPolicyID, r.ContentBucket, r.ContentPath)
+}
+
+func (a externalFTSAttachment) contentReference() *externalFTSObjectReference {
+	return normalizeExternalFTSObjectReference(a.ContentRef, a.ContentPolicyID, a.ContentBucket, a.ContentPath)
 }
 
 func markFTSExternalJobLocalFallback(ctx context.Context, dep dependency.Dep, job *ent.FTSExternalJob, reason string) {

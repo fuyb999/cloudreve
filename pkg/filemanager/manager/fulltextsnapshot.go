@@ -504,7 +504,7 @@ func (m *manager) loadFTSContentFromSidecar(
 		if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "attachments.json"); ok {
 			var attachments []searcher.SearchAttachmentDocument
 			if err := json.Unmarshal(raw, &attachments); err == nil {
-				return content, attachments, manifest, true
+				return content, m.hydrateFTSSidecarAttachmentContents(ctx, handler, attachments), manifest, true
 			}
 		}
 		return content, nil, manifest, true
@@ -513,7 +513,7 @@ func (m *manager) loadFTSContentFromSidecar(
 		rmetaRaw = raw
 	}
 
-	return content, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw), manifest, true
+	return content, m.hydrateFTSSidecarAttachmentContents(ctx, handler, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw)), manifest, true
 }
 
 func (m *manager) readFTSSidecarObject(
@@ -531,7 +531,7 @@ func (m *manager) readFTSSidecarObject(
 		return nil, false
 	}
 
-	raw, err := readFTSSidecarBytes(ctx, m.dep.RequestClient(), handler, object.Path)
+	raw, err := readFTSSidecarBytes(ctx, requestClientForSidecar(m), handler, object.Path)
 	if err != nil {
 		return nil, false
 	}
@@ -792,16 +792,27 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 		}
 	}
 
+	textArtifacts := map[string]FTSSidecarArtifact{}
+	for _, item := range manifest.Objects {
+		if item.Kind != "attachment_text" {
+			continue
+		}
+		textArtifacts[item.ID] = item
+	}
+
 	attachments := make([]searcher.SearchAttachmentDocument, 0, len(manifest.Objects))
 	for _, object := range manifest.Objects {
 		objectName := firstNonEmpty(object.ID, object.Name)
 		if objectName == "" {
 			continue
 		}
-		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" {
+		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" || objectName == "ocr-candidates.json" {
 			continue
 		}
 		if strings.HasPrefix(objectName, ftsSidecarEmbeddedDir+"/") && isTikaSyntheticAttachmentArtifact(objectName) {
+			continue
+		}
+		if object.Kind == "attachment_text" || object.Kind == "ocr_candidates" {
 			continue
 		}
 
@@ -833,6 +844,9 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 			CreatedAt: primaryEntity.CreatedAt(),
 			UpdatedAt: primaryEntity.UpdatedAt(),
 		}
+		if textArtifact, ok := textArtifacts[sidecarAttachmentTextObjectID(objectName)]; ok {
+			doc.Source = textArtifact.Path
+		}
 
 		if doc.MimeType == "" {
 			doc.MimeType = mime.TypeByExtension(filepath.Ext(doc.Name))
@@ -844,7 +858,9 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 			if item.Size > 0 {
 				doc.Size = item.Size
 			}
-			doc.Content = firstNonEmpty(doc.Content, item.Content)
+			if !isFTSSidecarAttachmentTextPath(doc.Source) {
+				doc.Content = firstNonEmpty(doc.Content, item.Content)
+			}
 			if len(item.Metadata) > 0 {
 				doc.Metadata = cloneStringMap(item.Metadata)
 			}

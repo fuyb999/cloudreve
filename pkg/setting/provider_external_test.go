@@ -14,6 +14,7 @@ func TestFTSExternalExtractorUsesExpectedKeys(t *testing.T) {
 			"fts_external_timeout_seconds":                "123",
 			"fts_external_retry_max":                      "4",
 			"fts_external_recursive_attachments":          "0",
+			"fts_external_ocr_enabled":                    "1",
 			"fts_external_skip_encrypted_files":           "0",
 			"fts_external_use_global_kafka":               "0",
 			"fts_external_kafka_brokers":                  " broker-a:9092 , broker-b:9092 ",
@@ -49,6 +50,9 @@ func TestFTSExternalExtractorUsesExpectedKeys(t *testing.T) {
 	}
 	if cfg.RecursiveAttachments || cfg.SkipEncryptedFiles {
 		t.Fatalf("unexpected recursive/encrypted flags: %+v", cfg)
+	}
+	if !cfg.OCREnabled {
+		t.Fatalf("expected OCR to be enabled: %+v", cfg)
 	}
 	if cfg.Kafka.UseGlobalKafka {
 		t.Fatal("expected dedicated kafka config")
