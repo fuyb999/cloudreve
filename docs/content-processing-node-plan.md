@@ -631,7 +631,7 @@ QueueTypeContentProcessing
 处理方式：
 
 - 从节点写诊断结果
-- sidecar 可只写 `rmeta.json` 或 diagnostics
+- sidecar 可只写 `manifest.json` 加当前已成功生成的最小对象
 - 主站可写空 content 或直接跳过索引
 - 结合文件类型定义是否需要 fallback
 

@@ -443,6 +443,72 @@ func TestQueueFullTextReconcileLatestOperationWinsForSameFile(t *testing.T) {
 	}
 }
 
+func TestQueueFullTextReconcileSkipsEquivalentProcessingTask(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettingProvider{enabled: true}
+	uri := mustURI(t, "cloudreve:///dup/report.pdf")
+	pending := newPendingFTSTask(t, 1, time.Now(), FullTextIndexTaskItem{
+		FileID:   88,
+		OwnerID:  701,
+		EntityID: 801,
+		Uri:      uri,
+	})
+	pending.Status = taskModel.StatusProcessing
+	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
+	tasks := &testQueue{}
+	dep := testDep{
+		settings:   settings,
+		taskClient: taskClient,
+		mediaMeta:  tasks,
+		registry:   queue.NewTaskRegistry(),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		settings: settings,
+		dep:      dep,
+	}
+
+	m.queueFullTextReconcile(ctx, uri, 88, 701, 801)
+
+	if len(tasks.tasks) != 0 {
+		t.Fatalf("expected equivalent processing task to suppress duplicate enqueue, got %d", len(tasks.tasks))
+	}
+}
+
+func TestQueueFullTextReconcileKeepsNewTaskWhenEntityChanged(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettingProvider{enabled: true}
+	uri := mustURI(t, "cloudreve:///dup/report.pdf")
+	pending := newPendingFTSTask(t, 1, time.Now(), FullTextIndexTaskItem{
+		FileID:   88,
+		OwnerID:  701,
+		EntityID: 801,
+		Uri:      uri,
+	})
+	pending.Status = taskModel.StatusProcessing
+	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
+	tasks := &testQueue{}
+	dep := testDep{
+		settings:   settings,
+		taskClient: taskClient,
+		mediaMeta:  tasks,
+		registry:   queue.NewTaskRegistry(),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		settings: settings,
+		dep:      dep,
+	}
+
+	m.queueFullTextReconcile(ctx, uri, 88, 701, 999)
+
+	if len(tasks.tasks) != 1 {
+		t.Fatalf("expected changed entity to enqueue a fresh reconcile task, got %d", len(tasks.tasks))
+	}
+}
+
 func TestFullTextIndexForNewEntitySkipsWhenContextDisablesNativeFTSEnqueue(t *testing.T) {
 	ctx := inventory.WithSkipNativeFTSEnqueue(context.Background(), true)
 	settings := testSettingProvider{enabled: true}

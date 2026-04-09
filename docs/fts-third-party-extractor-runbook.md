@@ -20,7 +20,7 @@
 - 第三方任务表：`fts_external_jobs`。
 - `process/result/error` Kafka 闭环。
 - `snapshot_token` 防串结果覆盖。
-- 第三方结果落 `content.txt`、`attachments.json`、`diagnostics.json`、`manifest.json`。
+- 第三方结果落 `content.txt`、`manifest.json`、展开后的附件对象和 `attachment-text/...` 文本 sidecar。
 - 重新索引时复用 external sidecar。
 - 文本质量兜底：乱码、控制字符、可打印字符比例，以及正文中连续或高占比的方框字/豆腐块。
 - 加密文件默认不发送第三方。
@@ -377,15 +377,15 @@ Cloudreve 发送给第三方：
 cloudreve/fts-sidecar/<owner_id>/<file_id>/<entity_id>/
   manifest.json
   content.txt
-  attachments.json
-  diagnostics.json
+  attachments/...
+  attachment-text/...
 ```
 
 说明：
 
 - `content.txt`：主文本正文。
-- `attachments.json`：附件树平铺结果，使用 `parent_id` 维持层级。
-- `diagnostics.json`：provider、warning、quality_score、snapshot_token 等诊断信息。
+- `attachments/...`：附件树直接按层级展开，结构与 Tika sidecar 对齐。
+- `attachment-text/...`：附件文本结果，供重建索引时回填附件 `content`。
 - `manifest.json`：标记 `provider = external`，供后续重建索引复用。
 
 ## 8.1 哪些文件会真正发往第三方
@@ -452,8 +452,8 @@ cloudreve/fts-sidecar/<owner_id>/<file_id>/<entity_id>/
 ### 9.3 搜索链路检查
 
 - [x] sidecar 成功落 `content.txt`。
-- [x] sidecar 成功落 `attachments.json`。
-- [x] sidecar 成功落 `diagnostics.json`。
+- [x] sidecar 成功落展开后的附件对象。
+- [x] sidecar 成功落 `attachment-text/...` 文本对象。
 - [ ] 重建索引时可复用 external sidecar。
 
 ### 9.4 策略检查
@@ -578,7 +578,7 @@ CLOUDREVE_FTS_EXTERNAL_KAFKA_ADDR=127.0.0.1:9092 \
 - 重复 `result/error` 不覆盖既有终态
 - `error` 终态后的迟到 `success` 被忽略
 - `snapshot_token` 不匹配时忽略迟到结果
-- external sidecar 的 `content/attachments/diagnostics/manifest` 序列化与回读
+- external sidecar 的 `content/attachments/attachment-text/manifest` 序列化与回读
 - `fallback_on_error` 与 `fallback_on_error_or_quality` 的任务编排分支
 - 文件已删除时，迟到第三方结果只触发旧索引清理，不再重建 sidecar/索引
 - 后台保存 `fts_external_*` 设置时会进入 Kafka runtime reload 后置处理

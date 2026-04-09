@@ -11,6 +11,7 @@ func TestFTSExternalExtractorUsesExpectedKeys(t *testing.T) {
 		values: map[string]any{
 			"fts_external_enabled":                        "1",
 			"fts_external_mode":                           "primary",
+			"fts_external_max_file_size_mb":               "25",
 			"fts_external_timeout_seconds":                "123",
 			"fts_external_retry_max":                      "4",
 			"fts_external_recursive_attachments":          "0",
@@ -44,6 +45,9 @@ func TestFTSExternalExtractorUsesExpectedKeys(t *testing.T) {
 	}
 	if cfg.Mode != FTSExternalModePrimary {
 		t.Fatalf("unexpected mode: %s", cfg.Mode)
+	}
+	if got, want := cfg.MaxFileSize, int64(25<<20); got != want {
+		t.Fatalf("unexpected max file size: got %d want %d", got, want)
 	}
 	if cfg.TimeoutSeconds != 123 || cfg.RetryMax != 4 {
 		t.Fatalf("unexpected timeout/retry: %+v", cfg)

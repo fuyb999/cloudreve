@@ -772,6 +772,7 @@ func (s *settingProvider) FTSExternalExtractor(ctx context.Context) *FTSExternal
 	return &FTSExternalExtractorSetting{
 		Enabled:              s.getBoolean(ctx, "fts_external_enabled", false),
 		Mode:                 FTSExternalMode(s.getString(ctx, "fts_external_mode", string(FTSExternalModeFallbackOnErrorOrQuality))),
+		MaxFileSize:          max(0, s.getInt64(ctx, "fts_external_max_file_size_mb", 25)) << 20,
 		TimeoutSeconds:       s.getInt(ctx, "fts_external_timeout_seconds", 300),
 		RetryMax:             s.getInt(ctx, "fts_external_retry_max", 2),
 		RecursiveAttachments: s.getBoolean(ctx, "fts_external_recursive_attachments", true),

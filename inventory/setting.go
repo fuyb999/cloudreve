@@ -736,6 +736,7 @@ var DefaultSettings = map[string]string{
 	"fts_external_kafka_result_topic":               "result",
 	"fts_external_kafka_error_topic":                "error",
 	"fts_external_kafka_consumer_group":             "cloudreve-fts-external",
+	"fts_external_max_file_size_mb":                 "25",
 	"fts_external_timeout_seconds":                  "300",
 	"fts_external_retry_max":                        "2",
 	"fts_external_quality_enabled":                  "1",

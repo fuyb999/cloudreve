@@ -673,6 +673,43 @@ func fullTextCopyWaitReasonForSource(status task.Status, phase FullTextIndexTask
 	}
 }
 
+func fullTextIndexTaskItemURI(item FullTextIndexTaskItem) string {
+	if item.Uri == nil {
+		return ""
+	}
+
+	return item.Uri.String()
+}
+
+func sameFullTextIndexTaskItem(a, b FullTextIndexTaskItem) bool {
+	if a.FileID != b.FileID || a.OwnerID != b.OwnerID || a.EntityID != b.EntityID {
+		return false
+	}
+	if a.IsDeleteOnly() != b.IsDeleteOnly() {
+		return false
+	}
+
+	return fullTextIndexTaskItemURI(a) == fullTextIndexTaskItemURI(b)
+}
+
+func fullTextTaskContainsEquivalentItem(state *FullTextIndexTaskState, item FullTextIndexTaskItem) bool {
+	if state == nil || item.FileID <= 0 {
+		return false
+	}
+
+	if state.Active != nil && sameFullTextIndexTaskItem(*state.Active, item) {
+		return true
+	}
+
+	for _, existing := range state.Items() {
+		if sameFullTextIndexTaskItem(existing, item) {
+			return true
+		}
+	}
+
+	return false
+}
+
 type (
 	FullTextChangeOwnerTask struct {
 		*queue.DBTask
@@ -1448,6 +1485,17 @@ func (m *manager) queueFullTextReconcile(ctx context.Context, uri *fs.URI, fileI
 		return
 	}
 
+	items := state.Items()
+	if len(items) > 0 {
+		duplicated, err := m.hasEquivalentPendingFullTextTask(ctx, items[0])
+		if err != nil {
+			m.l.Warning("Failed to detect duplicated full text reconcile task for file %d: %s", fileID, err)
+		}
+		if duplicated {
+			return
+		}
+	}
+
 	t, err := NewFullTextIndexTask(ctx, uri, entityID, fileID, ownerID, m.user)
 	if err != nil {
 		m.l.Warning("Failed to create full text reconcile task: %s", err)
@@ -1466,6 +1514,34 @@ func (m *manager) queueFullTextReconcile(ctx context.Context, uri *fs.URI, fileI
 		ownerID,
 		uri,
 	)
+}
+
+func (m *manager) hasEquivalentPendingFullTextTask(ctx context.Context, item FullTextIndexTaskItem) (bool, error) {
+	if item.FileID <= 0 {
+		return false, nil
+	}
+
+	candidates, err := m.dep.TaskClient().GetPendingTasks(ctx, fullTextMergeableTaskTypes...)
+	if err != nil {
+		return false, err
+	}
+
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.Type != queue.FullTextIndexTaskType {
+			continue
+		}
+
+		parsed, err := parseFullTextIndexTaskState(candidate.PrivateState)
+		if err != nil {
+			m.l.Warning("Failed to parse pending full text task %d while checking duplicate file %d: %s", candidate.ID, item.FileID, err)
+			continue
+		}
+		if fullTextTaskContainsEquivalentItem(parsed, item) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (m *manager) mergePendingFullTextTask(ctx context.Context, state *FullTextIndexTaskState) (bool, error) {

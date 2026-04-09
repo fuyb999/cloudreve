@@ -343,6 +343,7 @@ type FTSExternalQualitySetting struct {
 type FTSExternalExtractorSetting struct {
 	Enabled              bool
 	Mode                 FTSExternalMode
+	MaxFileSize          int64
 	TimeoutSeconds       int
 	RetryMax             int
 	RecursiveAttachments bool

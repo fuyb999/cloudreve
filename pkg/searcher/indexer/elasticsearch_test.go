@@ -1,13 +1,17 @@
 package indexer
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
+	elasticsearch "github.com/elastic/go-elasticsearch/v8"
 )
 
 func TestSanitizeElasticsearchDocumentTruncatesContentWithoutMutatingSource(t *testing.T) {
@@ -48,7 +52,7 @@ func TestSanitizeElasticsearchDocumentTruncatesContentWithoutMutatingSource(t *t
 	}
 }
 
-func TestSanitizeElasticsearchDocumentDropsAttachmentContentWhenPayloadTooLarge(t *testing.T) {
+func TestSanitizeElasticsearchDocumentShrinksPayloadWhenDocumentIsTooLarge(t *testing.T) {
 	attachments := make([]searcher.SearchAttachmentDocument, 0, 64)
 	for i := 0; i < 64; i++ {
 		attachments = append(attachments, searcher.SearchAttachmentDocument{
@@ -71,10 +75,59 @@ func TestSanitizeElasticsearchDocumentDropsAttachmentContentWhenPayloadTooLarge(
 	if !elasticsearchDocumentSizeWithinLimit(sanitized, elasticsearchMaxDocumentPayloadBytes) {
 		t.Fatal("expected sanitized document to fit the payload limit")
 	}
+	keptAttachmentContent := false
 	for _, attachment := range sanitized.Attachments {
 		if attachment.Content != "" {
-			t.Fatal("expected attachment contents to be dropped when payload is too large")
+			keptAttachmentContent = true
+			break
 		}
+	}
+	if !keptAttachmentContent {
+		t.Fatal("expected proportional shrinking to retain at least part of attachment content")
+	}
+}
+
+func TestRetryUpsertFileDocumentShrinksOversizedPayloadAndRetries(t *testing.T) {
+	transport := &testElasticsearchTransport{
+		statuses: []int{
+			http.StatusRequestEntityTooLarge,
+			http.StatusCreated,
+		},
+		bodies: []string{
+			`{"error":{"type":"too_large","reason":"payload too large"}}`,
+			`{"result":"created"}`,
+		},
+	}
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{"http://example.com"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("failed to create elasticsearch client: %v", err)
+	}
+
+	indexer := &ElasticsearchIndexer{
+		client: client,
+		index:  elasticsearchDefaultIndexName,
+	}
+	doc := &searcher.SearchFileDocument{
+		ID:      "oversized-doc",
+		FileID:  66,
+		Content: strings.Repeat("root-content-", 512),
+		Attachments: []searcher.SearchAttachmentDocument{
+			{ID: "att-1", Content: strings.Repeat("attachment-content-", 2048)},
+			{ID: "att-2", Content: strings.Repeat("attachment-content-", 2048)},
+		},
+	}
+
+	if err := indexer.UpsertFile(context.Background(), doc); err != nil {
+		t.Fatalf("expected retrying upsert to succeed, got %v", err)
+	}
+	if len(transport.requests) != 2 {
+		t.Fatalf("expected two index requests, got %d", len(transport.requests))
+	}
+	if len(transport.requests[1]) >= len(transport.requests[0]) {
+		t.Fatalf("expected retry payload to shrink, got first=%d second=%d", len(transport.requests[0]), len(transport.requests[1]))
 	}
 }
 
@@ -208,4 +261,37 @@ func TestElasticsearchIndexDefinitionUsesCustomDateFormat(t *testing.T) {
 			t.Fatalf("unexpected %s format: got %v want %s", field, got, util.DateTimeSecondFormat)
 		}
 	}
+}
+
+type testElasticsearchTransport struct {
+	statuses []int
+	bodies   []string
+	requests [][]byte
+}
+
+func (t *testElasticsearchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	raw, _ := io.ReadAll(req.Body)
+	t.requests = append(t.requests, raw)
+
+	index := len(t.requests) - 1
+	if index >= len(t.statuses) {
+		index = len(t.statuses) - 1
+	}
+	status := http.StatusOK
+	body := `{}`
+	if index >= 0 && len(t.statuses) > 0 {
+		status = t.statuses[index]
+	}
+	if index >= 0 && index < len(t.bodies) {
+		body = t.bodies[index]
+	}
+
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header: http.Header{
+			"X-Elastic-Product": []string{"Elasticsearch"},
+		},
+		Body: io.NopCloser(strings.NewReader(body)),
+	}, nil
 }

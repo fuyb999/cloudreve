@@ -500,15 +500,6 @@ func (m *manager) loadFTSContentFromSidecar(
 	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "content.txt"); ok {
 		content = strings.TrimSpace(string(raw))
 	}
-	if manifest.Provider == ftsSidecarProviderExternal {
-		if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "attachments.json"); ok {
-			var attachments []searcher.SearchAttachmentDocument
-			if err := json.Unmarshal(raw, &attachments); err == nil {
-				return content, m.hydrateFTSSidecarAttachmentContents(ctx, handler, attachments), manifest, true
-			}
-		}
-		return content, nil, manifest, true
-	}
 	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "rmeta.json"); ok {
 		rmetaRaw = raw
 	}
@@ -806,13 +797,13 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 		if objectName == "" {
 			continue
 		}
-		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" || objectName == "ocr-candidates.json" {
+		if objectName == "content.txt" || objectName == "rmeta.json" || objectName == "manifest.json" {
 			continue
 		}
 		if strings.HasPrefix(objectName, ftsSidecarEmbeddedDir+"/") && isTikaSyntheticAttachmentArtifact(objectName) {
 			continue
 		}
-		if object.Kind == "attachment_text" || object.Kind == "ocr_candidates" {
+		if object.Kind == "attachment_text" || isLegacyFTSSidecarAuxiliaryKind(object.Kind) {
 			continue
 		}
 
@@ -843,6 +834,7 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 			Source:    object.Path,
 			CreatedAt: primaryEntity.CreatedAt(),
 			UpdatedAt: primaryEntity.UpdatedAt(),
+			Metadata:  cloneStringMap(object.Metadata),
 		}
 		if textArtifact, ok := textArtifacts[sidecarAttachmentTextObjectID(objectName)]; ok {
 			doc.Source = textArtifact.Path
@@ -862,7 +854,12 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 				doc.Content = firstNonEmpty(doc.Content, item.Content)
 			}
 			if len(item.Metadata) > 0 {
-				doc.Metadata = cloneStringMap(item.Metadata)
+				if doc.Metadata == nil {
+					doc.Metadata = map[string]string{}
+				}
+				for mk, mv := range item.Metadata {
+					doc.Metadata[mk] = mv
+				}
 			}
 			if item.Path != "" {
 				if doc.Metadata == nil {

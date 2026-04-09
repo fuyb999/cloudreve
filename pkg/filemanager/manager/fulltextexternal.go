@@ -17,9 +17,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/ftsexternaljob"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
-	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/kafka"
-	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/gofrs/uuid"
 )
@@ -85,31 +83,25 @@ type externalFTSResultMessage struct {
 }
 
 type externalFTSResultRoot struct {
-	Content         string                      `json:"content,omitempty"`
-	ContentRef      *externalFTSObjectReference `json:"content_ref,omitempty"`
-	ContentPolicyID int                         `json:"content_policy_id,omitempty"`
-	ContentBucket   string                      `json:"content_bucket,omitempty"`
-	ContentPath     string                      `json:"content_path,omitempty"`
-	Metadata        map[string]string           `json:"metadata,omitempty"`
-	Warnings        []string                    `json:"warnings,omitempty"`
-	QualityScore    float64                     `json:"quality_score,omitempty"`
+	Content      string                      `json:"content,omitempty"`
+	ContentRef   *externalFTSObjectReference `json:"content_ref,omitempty"`
+	Metadata     map[string]string           `json:"metadata,omitempty"`
+	Warnings     []string                    `json:"warnings,omitempty"`
+	QualityScore float64                     `json:"quality_score,omitempty"`
 }
 
 type externalFTSAttachment struct {
-	ID              string                      `json:"id,omitempty"`
-	ParentID        string                      `json:"parent_id,omitempty"`
-	Depth           int                         `json:"depth,omitempty"`
-	Type            string                      `json:"type,omitempty"`
-	Name            string                      `json:"name,omitempty"`
-	Path            string                      `json:"path,omitempty"`
-	MimeType        string                      `json:"mime_type,omitempty"`
-	Size            int64                       `json:"size,omitempty"`
-	Metadata        map[string]string           `json:"metadata,omitempty"`
-	Content         string                      `json:"content,omitempty"`
-	ContentRef      *externalFTSObjectReference `json:"content_ref,omitempty"`
-	ContentPolicyID int                         `json:"content_policy_id,omitempty"`
-	ContentBucket   string                      `json:"content_bucket,omitempty"`
-	ContentPath     string                      `json:"content_path,omitempty"`
+	ID         string                      `json:"id,omitempty"`
+	ParentID   string                      `json:"parent_id,omitempty"`
+	Depth      int                         `json:"depth,omitempty"`
+	Type       string                      `json:"type,omitempty"`
+	Name       string                      `json:"name,omitempty"`
+	Path       string                      `json:"path,omitempty"`
+	MimeType   string                      `json:"mime_type,omitempty"`
+	Size       int64                       `json:"size,omitempty"`
+	Metadata   map[string]string           `json:"metadata,omitempty"`
+	Content    string                      `json:"content,omitempty"`
+	ContentRef *externalFTSObjectReference `json:"content_ref,omitempty"`
 }
 
 type externalFTSErrorMessage struct {
@@ -123,13 +115,6 @@ type externalFTSErrorMessage struct {
 	Detail        string `json:"detail,omitempty"`
 	Retryable     bool   `json:"retryable,omitempty"`
 	OccurredAt    string `json:"occurred_at,omitempty"`
-}
-
-type externalFTSDiagnostics struct {
-	Provider      externalFTSProviderInfo `json:"provider,omitempty"`
-	SnapshotToken string                  `json:"snapshot_token,omitempty"`
-	Warnings      []string                `json:"warnings,omitempty"`
-	QualityScore  float64                 `json:"quality_score,omitempty"`
 }
 
 type externalFTSQualityReport struct {
@@ -146,6 +131,40 @@ type externalFTSQualityReport struct {
 	ControlRatio     float64  `json:"control_ratio,omitempty"`
 	BoxGlyphRatio    float64  `json:"box_glyph_ratio,omitempty"`
 	PrintableRatio   float64  `json:"printable_ratio,omitempty"`
+}
+
+func (r *externalFTSResultRoot) UnmarshalJSON(data []byte) error {
+	type alias externalFTSResultRoot
+	aux := struct {
+		alias
+		ContentPolicyID int    `json:"content_policy_id,omitempty"`
+		ContentBucket   string `json:"content_bucket,omitempty"`
+		ContentPath     string `json:"content_path,omitempty"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*r = externalFTSResultRoot(aux.alias)
+	r.ContentRef = normalizeExternalFTSObjectReference(r.ContentRef, aux.ContentPolicyID, aux.ContentBucket, aux.ContentPath)
+	return nil
+}
+
+func (a *externalFTSAttachment) UnmarshalJSON(data []byte) error {
+	type alias externalFTSAttachment
+	aux := struct {
+		alias
+		ContentPolicyID int    `json:"content_policy_id,omitempty"`
+		ContentBucket   string `json:"content_bucket,omitempty"`
+		ContentPath     string `json:"content_path,omitempty"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*a = externalFTSAttachment(aux.alias)
+	a.ContentRef = normalizeExternalFTSObjectReference(a.ContentRef, aux.ContentPolicyID, aux.ContentBucket, aux.ContentPath)
+	return nil
 }
 
 type externalFTSKafkaRuntime struct {
@@ -661,6 +680,9 @@ func externalFTSEligible(fileModel *ent.File, primaryEntity *ent.Entity, policy 
 	if fileModel.Size <= 0 {
 		return false
 	}
+	if cfg.MaxFileSize > 0 && fileModel.Size > cfg.MaxFileSize {
+		return false
+	}
 	if fileModel.Type == int(types.FileTypeFolder) {
 		return false
 	}
@@ -757,11 +779,11 @@ func normalizeExternalFTSObjectReference(ref *externalFTSObjectReference, policy
 }
 
 func (r externalFTSResultRoot) contentReference() *externalFTSObjectReference {
-	return normalizeExternalFTSObjectReference(r.ContentRef, r.ContentPolicyID, r.ContentBucket, r.ContentPath)
+	return normalizeExternalFTSObjectReference(r.ContentRef, 0, "", "")
 }
 
 func (a externalFTSAttachment) contentReference() *externalFTSObjectReference {
-	return normalizeExternalFTSObjectReference(a.ContentRef, a.ContentPolicyID, a.ContentBucket, a.ContentPath)
+	return normalizeExternalFTSObjectReference(a.ContentRef, 0, "", "")
 }
 
 func markFTSExternalJobLocalFallback(ctx context.Context, dep dependency.Dep, job *ent.FTSExternalJob, reason string) {
@@ -810,87 +832,134 @@ func fallbackErrorCode(reason string) string {
 	}
 }
 
-func normalizeExternalAttachments(
-	fileModel *ent.File,
-	primaryEntity fs.Entity,
-	items []externalFTSAttachment,
-) []searcher.SearchAttachmentDocument {
-	if fileModel == nil || primaryEntity == nil || len(items) == 0 {
+type externalFTSSidecarAttachment struct {
+	LogicalID   string
+	HasChildren bool
+	Artifact    FTSSidecarArtifact
+}
+
+func normalizeExternalAttachmentArtifacts(fileID int, items []externalFTSAttachment) []externalFTSSidecarAttachment {
+	if fileID <= 0 || len(items) == 0 {
 		return nil
 	}
 
-	res := make([]searcher.SearchAttachmentDocument, 0, len(items))
-	seen := map[string]int{}
+	res := make([]externalFTSSidecarAttachment, 0, len(items))
+	seen := map[string]struct{}{}
 	idMap := map[string]string{}
+	childCounts := map[string]int{}
+
+	for _, item := range items {
+		parentID := strings.TrimSpace(item.ParentID)
+		if parentID == "" || isExternalAttachmentRootParentID(fileID, parentID) {
+			continue
+		}
+		childCounts[parentID]++
+	}
 
 	buildLogicalID := func(item externalFTSAttachment, index int) string {
-		candidate := strings.TrimSpace(item.ID)
-		if candidate == "" {
-			candidate = strings.TrimSpace(item.Path)
+		candidate := strings.TrimSpace(item.Path)
+		if normalized, ok := normalizeFTSSidecarRelativePath(candidate); ok {
+			candidate = normalized
+		} else {
+			candidate = ""
 		}
 		if candidate == "" {
 			candidate = strings.TrimSpace(item.Name)
+			if normalized, ok := normalizeFTSSidecarRelativePath(candidate); ok {
+				candidate = normalized
+			} else {
+				candidate = ""
+			}
+		}
+		if candidate == "" {
+			candidate = strings.TrimSpace(item.ID)
+			if normalized, ok := normalizeFTSSidecarRelativePath(candidate); ok {
+				candidate = normalized
+			} else {
+				candidate = ""
+			}
 		}
 		if candidate == "" {
 			candidate = fmt.Sprintf("attachment_%d", index+1)
 		}
-		candidate = path.Join("external", candidate)
-		if count := seen[candidate]; count > 0 {
-			candidate = fmt.Sprintf("%s_%d", candidate, count+1)
+
+		candidate = path.Join(ftsSidecarEmbeddedDir, candidate)
+		ext := path.Ext(candidate)
+		base := strings.TrimSuffix(candidate, ext)
+		unique := candidate
+		for suffix := 2; ; suffix++ {
+			if _, ok := seen[unique]; !ok {
+				seen[unique] = struct{}{}
+				return unique
+			}
+			unique = fmt.Sprintf("%s_%d%s", base, suffix, ext)
 		}
-		seen[candidate]++
-		return candidate
 	}
 
 	for index, item := range items {
 		logicalID := buildLogicalID(item, index)
-		idMap[strings.TrimSpace(item.ID)] = logicalID
+		if rawID := strings.TrimSpace(item.ID); rawID != "" {
+			idMap[rawID] = logicalID
+		}
+		res = append(res, externalFTSSidecarAttachment{
+			LogicalID:   logicalID,
+			HasChildren: childCounts[strings.TrimSpace(item.ID)] > 0,
+		})
 	}
 
 	for index, item := range items {
-		rawID := strings.TrimSpace(item.ID)
-		logicalID := idMap[rawID]
-		if logicalID == "" {
-			logicalID = buildLogicalID(item, index)
-		}
-
 		parentLogical := ""
-		if parentID := strings.TrimSpace(item.ParentID); parentID != "" {
-			if !isExternalAttachmentRootParent(fileModel, parentID) {
-				parentLogical = idMap[parentID]
-				if parentLogical == "" {
-					parentLogical = path.Join("external", parentID)
-				}
-			}
+		if parentID := strings.TrimSpace(item.ParentID); parentID != "" && !isExternalAttachmentRootParentID(fileID, parentID) {
+			parentLogical = idMap[parentID]
 		}
 
-		doc := searcher.SearchAttachmentDocument{
-			ID:        embeddedAttachmentDocID(fileModel.ID, logicalID),
-			ParentID:  embeddedAttachmentParentID(fileModel.ID, parentLogical),
-			Depth:     item.Depth,
-			EntityID:  primaryEntity.ID(),
-			Type:      firstNonEmpty(item.Type, "external"),
-			Name:      firstNonEmpty(item.Name, filepath.Base(item.Path)),
-			Path:      firstNonEmpty(item.Path, item.Name, logicalID),
-			Size:      item.Size,
-			MimeType:  firstNonEmpty(item.MimeType, mime.TypeByExtension(filepath.Ext(item.Name))),
-			Source:    firstNonEmpty(item.Path, item.Name, logicalID),
-			Metadata:  cloneStringMap(item.Metadata),
-			Content:   strings.TrimSpace(item.Content),
-			CreatedAt: primaryEntity.CreatedAt(),
-			UpdatedAt: primaryEntity.UpdatedAt(),
+		name := firstNonEmpty(item.Name, filepath.Base(item.Path), filepath.Base(res[index].LogicalID))
+		if name == "" || name == "." || name == "/" {
+			name = fmt.Sprintf("attachment_%d", index+1)
 		}
-		res = append(res, doc)
+
+		kind := strings.TrimSpace(item.Type)
+		metadata := cloneStringMap(item.Metadata)
+		if res[index].HasChildren {
+			if kind != "" && kind != "archive" {
+				if metadata == nil {
+					metadata = map[string]string{}
+				}
+				metadata["external_type"] = kind
+			}
+			kind = "archive"
+		} else if kind == "" {
+			kind = "embedded"
+		}
+
+		res[index].Artifact = FTSSidecarArtifact{
+			ID:       res[index].LogicalID,
+			ParentID: parentLogical,
+			Depth:    max(item.Depth, 0),
+			Kind:     kind,
+			Name:     name,
+			MimeType: firstNonEmpty(item.MimeType, mime.TypeByExtension(filepath.Ext(name)), "application/octet-stream"),
+			Size:     item.Size,
+			Metadata: metadata,
+		}
 	}
 
 	return res
 }
 
 func isExternalAttachmentRootParent(fileModel *ent.File, parentID string) bool {
-	parentID = strings.TrimSpace(parentID)
-	if fileModel == nil || fileModel.ID <= 0 || parentID == "" {
+	if fileModel == nil {
 		return false
 	}
 
-	return parentID == fmt.Sprintf("file:%d", fileModel.ID) || parentID == strconv.Itoa(fileModel.ID)
+	return isExternalAttachmentRootParentID(fileModel.ID, parentID)
+}
+
+func isExternalAttachmentRootParentID(fileID int, parentID string) bool {
+	parentID = strings.TrimSpace(parentID)
+	if fileID <= 0 || parentID == "" {
+		return false
+	}
+
+	return parentID == fmt.Sprintf("file:%d", fileID) || parentID == strconv.Itoa(fileID)
 }

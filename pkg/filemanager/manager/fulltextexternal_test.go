@@ -158,6 +158,79 @@ func TestUpsertFTSExternalJobPayloadIgnoresSnapshotMismatch(t *testing.T) {
 	}
 }
 
+func TestParseFTSExternalResultPayloadNormalizesLegacyContentReferenceFields(t *testing.T) {
+	payload, err := parseFTSExternalResultPayload(`{
+		"version": 1,
+		"request_id": "req-legacy",
+		"snapshot_token": "snapshot-legacy",
+		"root": {
+			"content_policy_id": 11,
+			"content_bucket": "bucket-a",
+			"content_path": "extract/root.txt"
+		},
+		"attachments": [
+			{
+				"id": "att-1",
+				"content_policy_id": 12,
+				"content_bucket": "bucket-b",
+				"content_path": "extract/att-1.txt"
+			}
+		]
+	}`)
+	if err != nil {
+		t.Fatalf("failed to parse external payload: %v", err)
+	}
+
+	if payload.Root.ContentRef == nil {
+		t.Fatal("expected root content_ref to be normalized")
+	}
+	if got, want := payload.Root.ContentRef.PolicyID, 11; got != want {
+		t.Fatalf("unexpected root policy id: got %d want %d", got, want)
+	}
+	if got, want := payload.Root.ContentRef.Path, "extract/root.txt"; got != want {
+		t.Fatalf("unexpected root path: got %q want %q", got, want)
+	}
+	if len(payload.Attachments) != 1 || payload.Attachments[0].ContentRef == nil {
+		t.Fatalf("expected attachment content_ref to be normalized, got %+v", payload.Attachments)
+	}
+	if got, want := payload.Attachments[0].ContentRef.PolicyID, 12; got != want {
+		t.Fatalf("unexpected attachment policy id: got %d want %d", got, want)
+	}
+}
+
+func TestParseFTSExternalResultPayloadPrefersStructuredContentReference(t *testing.T) {
+	payload, err := parseFTSExternalResultPayload(`{
+		"version": 1,
+		"request_id": "req-pref",
+		"snapshot_token": "snapshot-pref",
+		"root": {
+			"content_ref": {
+				"policy_id": 21,
+				"bucket": "bucket-new",
+				"path": "extract/new-root.txt"
+			},
+			"content_policy_id": 99,
+			"content_bucket": "bucket-old",
+			"content_path": "extract/old-root.txt"
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("failed to parse external payload: %v", err)
+	}
+	if payload.Root.ContentRef == nil {
+		t.Fatal("expected content_ref to exist")
+	}
+	if got, want := payload.Root.ContentRef.PolicyID, 21; got != want {
+		t.Fatalf("unexpected normalized policy id: got %d want %d", got, want)
+	}
+	if got, want := payload.Root.ContentRef.Bucket, "bucket-new"; got != want {
+		t.Fatalf("unexpected normalized bucket: got %q want %q", got, want)
+	}
+	if got, want := payload.Root.ContentRef.Path, "extract/new-root.txt"; got != want {
+		t.Fatalf("unexpected normalized path: got %q want %q", got, want)
+	}
+}
+
 func TestPublishFTSExternalRequestUsesExplicitCfgWhenProviderDisabled(t *testing.T) {
 	ctx := context.Background()
 	client := newFTSExternalTestClient(t, ctx)
@@ -521,6 +594,7 @@ func TestExternalFTSEligible(t *testing.T) {
 		{name: "allow remote object storage", fileModel: baseFile, primaryEntity: baseEntity, policy: basePolicy, cfg: baseCfg, want: true},
 		{name: "reject disabled config", fileModel: baseFile, primaryEntity: baseEntity, policy: basePolicy, cfg: &setting.FTSExternalExtractorSetting{}, want: false},
 		{name: "reject empty file", fileModel: &ent.File{ID: 12, Size: 0}, primaryEntity: baseEntity, policy: basePolicy, cfg: baseCfg, want: false},
+		{name: "reject file over max size", fileModel: &ent.File{ID: 12, Type: int(inventorytypes.FileTypeFile), Size: 256}, primaryEntity: baseEntity, policy: basePolicy, cfg: &setting.FTSExternalExtractorSetting{Enabled: true, MaxFileSize: 128}, want: false},
 		{name: "reject folders", fileModel: &ent.File{ID: 12, Type: int(inventorytypes.FileTypeFolder)}, primaryEntity: baseEntity, policy: basePolicy, cfg: baseCfg, want: false},
 		{name: "reject encrypted when skip enabled", fileModel: baseFile, primaryEntity: &ent.Entity{ID: 34, Source: "tenant-a/u7/report.pdf", Props: &inventorytypes.EntityProps{EncryptMetadata: &inventorytypes.EncryptMetadata{}}}, policy: basePolicy, cfg: baseCfg, want: false},
 		{name: "allow encrypted when skip disabled", fileModel: baseFile, primaryEntity: &ent.Entity{ID: 34, Source: "tenant-a/u7/report.pdf", Props: &inventorytypes.EntityProps{EncryptMetadata: &inventorytypes.EncryptMetadata{}}}, policy: basePolicy, cfg: &setting.FTSExternalExtractorSetting{Enabled: true, SkipEncryptedFiles: false}, want: true},
@@ -540,11 +614,8 @@ func TestExternalFTSEligible(t *testing.T) {
 	}
 }
 
-func TestNormalizeExternalAttachmentsMapsFileRootParent(t *testing.T) {
-	fileModel := &ent.File{ID: 42}
-	entity := &testEntity{id: 7}
-
-	attachments := normalizeExternalAttachments(fileModel, entity, []externalFTSAttachment{
+func TestNormalizeExternalAttachmentArtifactsMapsFileRootParent(t *testing.T) {
+	attachments := normalizeExternalAttachmentArtifacts(42, []externalFTSAttachment{
 		{
 			ID:       "att-1",
 			ParentID: "file:42",
@@ -569,11 +640,17 @@ func TestNormalizeExternalAttachmentsMapsFileRootParent(t *testing.T) {
 	if len(attachments) != 2 {
 		t.Fatalf("unexpected attachment count: got %d want 2", len(attachments))
 	}
-	if got, want := attachments[0].ParentID, attachmentRootParentID(42); got != want {
-		t.Fatalf("expected file root parent id, got %q want %q", got, want)
+	if got, want := attachments[0].Artifact.ID, "attachments/embedded/outer.txt"; got != want {
+		t.Fatalf("unexpected root artifact id: got %q want %q", got, want)
 	}
-	if got, want := attachments[1].ParentID, attachments[0].ID; got != want {
-		t.Fatalf("expected nested attachment to point to parent doc id, got %q want %q", got, want)
+	if got, want := attachments[0].Artifact.ParentID, ""; got != want {
+		t.Fatalf("expected file root parent id to stay empty in manifest artifact, got %q want %q", got, want)
+	}
+	if got, want := attachments[1].Artifact.ParentID, attachments[0].Artifact.ID; got != want {
+		t.Fatalf("expected nested attachment to point to parent artifact, got %q want %q", got, want)
+	}
+	if got, want := attachments[0].Artifact.Kind, "archive"; got != want {
+		t.Fatalf("expected parent artifact with children to be marked as archive, got %q want %q", got, want)
 	}
 }
 

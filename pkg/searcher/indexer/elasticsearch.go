@@ -25,6 +25,7 @@ const (
 	elasticsearchMaxContentBytes           = 8 << 20
 	elasticsearchMaxAttachmentContentBytes = 512 << 10
 	elasticsearchMaxDocumentPayloadBytes   = 16 << 20
+	elasticsearchMaxRetryShrinkAttempts    = 8
 )
 
 type ElasticsearchIndexer struct {
@@ -227,9 +228,15 @@ func (e *ElasticsearchIndexer) UpsertFile(ctx context.Context, doc *searcher.Sea
 		return nil
 	}
 
-	sanitized := sanitizeElasticsearchDocument(doc)
+	return e.retryUpsertFileDocument(ctx, sanitizeElasticsearchDocument(doc))
+}
 
-	body, err := json.Marshal(newElasticsearchDocument(sanitized))
+func (e *ElasticsearchIndexer) upsertFileOnce(ctx context.Context, doc *searcher.SearchFileDocument) error {
+	if doc == nil {
+		return nil
+	}
+
+	body, err := json.Marshal(newElasticsearchDocument(doc))
 	if err != nil {
 		return fmt.Errorf("failed to marshal search document: %w", err)
 	}
@@ -238,7 +245,7 @@ func (e *ElasticsearchIndexer) UpsertFile(ctx context.Context, doc *searcher.Sea
 		e.index,
 		bytes.NewReader(body),
 		e.client.Index.WithContext(ctx),
-		e.client.Index.WithDocumentID(sanitized.ID),
+		e.client.Index.WithDocumentID(doc.ID),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to upsert file document: %w", err)
@@ -252,11 +259,60 @@ func (e *ElasticsearchIndexer) UpsertFile(ctx context.Context, doc *searcher.Sea
 	return nil
 }
 
+func (e *ElasticsearchIndexer) retryUpsertFileDocument(ctx context.Context, doc *searcher.SearchFileDocument) error {
+	if doc == nil {
+		return nil
+	}
+
+	candidate := cloneSearchFileDocument(doc)
+	var lastErr error
+	for attempt := 0; attempt < elasticsearchMaxRetryShrinkAttempts; attempt++ {
+		lastErr = e.upsertFileOnce(ctx, candidate)
+		if lastErr == nil {
+			return nil
+		}
+		if !isElasticsearchOversizedError(lastErr) {
+			return lastErr
+		}
+		if !shrinkElasticsearchDocumentContents(candidate, elasticsearchShrinkRatio(candidate, elasticsearchMaxDocumentPayloadBytes)) {
+			return lastErr
+		}
+	}
+
+	return lastErr
+}
+
 func (e *ElasticsearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*searcher.SearchFileDocument) error {
 	if len(docs) == 0 {
 		return nil
 	}
 
+	sanitizedDocs := make([]*searcher.SearchFileDocument, 0, len(docs))
+	for _, doc := range docs {
+		if doc == nil {
+			continue
+		}
+		sanitizedDocs = append(sanitizedDocs, sanitizeElasticsearchDocument(doc))
+	}
+	if len(sanitizedDocs) == 0 {
+		return nil
+	}
+
+	if err := e.bulkUpsertFilesOnce(ctx, sanitizedDocs); err != nil {
+		if !isElasticsearchOversizedError(err) {
+			return err
+		}
+		for _, doc := range sanitizedDocs {
+			if err := e.retryUpsertFileDocument(ctx, doc); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (e *ElasticsearchIndexer) bulkUpsertFilesOnce(ctx context.Context, docs []*searcher.SearchFileDocument) error {
 	var payload bytes.Buffer
 	encoder := json.NewEncoder(&payload)
 	for _, doc := range docs {
@@ -264,18 +320,16 @@ func (e *ElasticsearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*sear
 			continue
 		}
 
-		sanitized := sanitizeElasticsearchDocument(doc)
-
 		if err := encoder.Encode(map[string]any{
 			"index": map[string]any{
 				"_index": e.index,
-				"_id":    sanitized.ID,
+				"_id":    doc.ID,
 			},
 		}); err != nil {
 			return fmt.Errorf("failed to encode bulk action: %w", err)
 		}
 
-		if err := encoder.Encode(newElasticsearchDocument(sanitized)); err != nil {
+		if err := encoder.Encode(newElasticsearchDocument(doc)); err != nil {
 			return fmt.Errorf("failed to encode bulk document: %w", err)
 		}
 	}
@@ -492,11 +546,12 @@ func sanitizeElasticsearchDocument(doc *searcher.SearchFileDocument) *searcher.S
 		return nil
 	}
 
-	sanitized := *doc
+	sanitized := cloneSearchFileDocument(doc)
+	if sanitized == nil {
+		return nil
+	}
 	sanitized.Content = truncateUTF8ByBytes(strings.TrimSpace(doc.Content), elasticsearchMaxContentBytes)
 	if len(doc.Attachments) > 0 {
-		sanitized.Attachments = make([]searcher.SearchAttachmentDocument, len(doc.Attachments))
-		copy(sanitized.Attachments, doc.Attachments)
 		for i := range sanitized.Attachments {
 			sanitized.Attachments[i].Content = truncateUTF8ByBytes(
 				strings.TrimSpace(sanitized.Attachments[i].Content),
@@ -505,19 +560,20 @@ func sanitizeElasticsearchDocument(doc *searcher.SearchFileDocument) *searcher.S
 		}
 	}
 
-	if elasticsearchDocumentSizeWithinLimit(&sanitized, elasticsearchMaxDocumentPayloadBytes) {
-		return &sanitized
+	shrinkElasticsearchDocumentToLimit(sanitized, elasticsearchMaxDocumentPayloadBytes)
+	return sanitized
+}
+
+func cloneSearchFileDocument(doc *searcher.SearchFileDocument) *searcher.SearchFileDocument {
+	if doc == nil {
+		return nil
 	}
 
-	for i := range sanitized.Attachments {
-		sanitized.Attachments[i].Content = ""
+	cloned := *doc
+	if len(doc.Attachments) > 0 {
+		cloned.Attachments = append([]searcher.SearchAttachmentDocument(nil), doc.Attachments...)
 	}
-	if elasticsearchDocumentSizeWithinLimit(&sanitized, elasticsearchMaxDocumentPayloadBytes) {
-		return &sanitized
-	}
-
-	sanitized.Content = ""
-	return &sanitized
+	return &cloned
 }
 
 func elasticsearchDocumentSizeWithinLimit(doc *searcher.SearchFileDocument, maxBytes int) bool {
@@ -533,6 +589,89 @@ func elasticsearchDocumentSizeWithinLimit(doc *searcher.SearchFileDocument, maxB
 	return len(raw) <= maxBytes
 }
 
+func shrinkElasticsearchDocumentToLimit(doc *searcher.SearchFileDocument, maxBytes int) {
+	if doc == nil || maxBytes <= 0 {
+		return
+	}
+
+	for attempt := 0; attempt < elasticsearchMaxRetryShrinkAttempts; attempt++ {
+		if elasticsearchDocumentSizeWithinLimit(doc, maxBytes) {
+			return
+		}
+		if !shrinkElasticsearchDocumentContents(doc, elasticsearchShrinkRatio(doc, maxBytes)) {
+			return
+		}
+	}
+}
+
+func elasticsearchShrinkRatio(doc *searcher.SearchFileDocument, maxBytes int) float64 {
+	if doc == nil || maxBytes <= 0 {
+		return 0.8
+	}
+
+	raw, err := json.Marshal(newElasticsearchDocument(doc))
+	if err != nil || len(raw) == 0 {
+		return 0.8
+	}
+
+	ratio := (float64(maxBytes) / float64(len(raw))) * 0.95
+	switch {
+	case ratio <= 0:
+		return 0.1
+	case ratio >= 0.95:
+		return 0.8
+	case ratio < 0.1:
+		return 0.1
+	default:
+		return ratio
+	}
+}
+
+func shrinkElasticsearchDocumentContents(doc *searcher.SearchFileDocument, ratio float64) bool {
+	if doc == nil {
+		return false
+	}
+
+	if ratio <= 0 {
+		ratio = 0.1
+	}
+	if ratio >= 1 {
+		ratio = 0.8
+	}
+
+	changed := false
+	if trimmed, ok := shrinkUTF8ByRatio(doc.Content, ratio); ok {
+		doc.Content = trimmed
+		changed = true
+	}
+
+	for i := range doc.Attachments {
+		if trimmed, ok := shrinkUTF8ByRatio(doc.Attachments[i].Content, ratio); ok {
+			doc.Attachments[i].Content = trimmed
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func shrinkUTF8ByRatio(value string, ratio float64) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+
+	maxBytes := int(float64(len(value)) * ratio)
+	if maxBytes >= len(value) {
+		maxBytes = len(value) - 1
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+
+	trimmed := truncateUTF8ByBytes(value, maxBytes)
+	return trimmed, trimmed != value
+}
+
 func truncateUTF8ByBytes(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(value) <= maxBytes {
 		return value
@@ -544,6 +683,32 @@ func truncateUTF8ByBytes(value string, maxBytes int) string {
 	}
 
 	return value
+}
+
+func isElasticsearchOversizedError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"status=413",
+		"payload too large",
+		"request entity too large",
+		"entity too large",
+		"document is larger than the configured max",
+		"document contains at least one immense term",
+		"source is too large",
+		"too_large",
+		"max_bytes_length_exceeded_exception",
+		"content_too_long",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func bestHighlightSnippet(highlight map[string][]string, fallback ...string) string {

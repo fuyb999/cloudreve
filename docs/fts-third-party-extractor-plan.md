@@ -439,8 +439,8 @@ FTSExternalExtractor(ctx context.Context) *FTSExternalExtractorSetting
 cloudreve/fts-sidecar/{owner_id}/{file_id}/{entity_id}/
   manifest.json
   content.txt
-  attachments.json
-  diagnostics.json
+  attachments/...
+  attachment-text/...
 ```
 
 ### 7.2 文件含义
@@ -454,20 +454,18 @@ cloudreve/fts-sidecar/{owner_id}/{file_id}/{entity_id}/
   - 生成时间
 - `content.txt`
   - 主文档正文
-- `attachments.json`
-  - 第三方平铺附件树
-- `diagnostics.json`
-  - warnings
-  - quality 报告
-  - provider 版本
-  - 外部错误摘要
+- `attachments/...`
+  - 第三方附件树按层级直接展开
+- `attachment-text/...`
+  - 对应附件的文本内容 sidecar，供重建索引时回填 `content`
 
 ### 7.3 兼容策略
 
 `fulltextsnapshot.go` 中读取 sidecar 时：
 
-1. 先尝试读取第三方 `attachments.json`
-2. 读不到时，继续按当前逻辑走 `rmeta.json + 归档附件清单`
+1. 统一按 `manifest.json` 中的对象清单回读
+2. Tika 继续走 `rmeta.json + 归档附件清单`
+3. 第三方继续走展开后的附件对象 + `attachment-text/...`
 
 这样可以：
 
@@ -676,7 +674,8 @@ fts_external_jobs
 
 - `pkg/filemanager/manager/fulltextsidecar.go`
   - 新增第三方 sidecar 落盘入口
-  - 新增 `attachments.json` / `diagnostics.json` 支持
+  - 第三方附件直接展开成 sidecar 对象
+  - 附件文本通过 `attachment-text/...` sidecar 挂接
 - `pkg/filemanager/manager/fulltextsnapshot.go`
   - 新增第三方 sidecar 回读逻辑
   - 将第三方附件树转换为 `SearchAttachmentDocument`
@@ -745,8 +744,8 @@ fts_external_jobs
 ### 13.4 第四阶段：sidecar 接入
 
 - [x] 第三方成功结果落 `content.txt`
-- [x] 第三方成功结果落 `attachments.json`
-- [x] 第三方成功结果落 `diagnostics.json`
+- [x] 第三方成功结果将附件树直接展开进 sidecar 清单
+- [x] 第三方成功结果将附件文本落到 `attachment-text/...`
 - [x] 兼容旧 Tika sidecar 回读
 
 ### 13.5 第五阶段：质量兜底
