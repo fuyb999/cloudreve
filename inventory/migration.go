@@ -800,6 +800,54 @@ var patches = []Patch{
 		},
 	},
 	{
+		Name:       "expand_default_archive_viewer_exts",
+		EndVersion: constants.BackendVersion,
+		Func: func(l logging.Logger, client *ent.Client, ctx context.Context) error {
+			fileViewersSetting, err := client.Setting.Query().Where(setting.Name("file_viewers")).First(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to query file_viewers setting: %w", err)
+			}
+
+			var fileViewers []types.ViewerGroup
+			if err := json.Unmarshal([]byte(fileViewersSetting.Value), &fileViewers); err != nil {
+				return fmt.Errorf("failed to unmarshal file_viewers setting: %w", err)
+			}
+
+			updated := false
+			for groupIndex := range fileViewers {
+				for viewerIndex := range fileViewers[groupIndex].Viewers {
+					viewer := &fileViewers[groupIndex].Viewers[viewerIndex]
+					if viewer.ID != "archive" {
+						continue
+					}
+
+					mergedExts := lo.Uniq(append(append([]string{}, viewer.Exts...), defaultArchiveViewerExts...))
+					if len(mergedExts) == len(viewer.Exts) {
+						continue
+					}
+
+					viewer.Exts = mergedExts
+					updated = true
+				}
+			}
+
+			if !updated {
+				return nil
+			}
+
+			newFileViewersSetting, err := json.Marshal(fileViewers)
+			if err != nil {
+				return fmt.Errorf("failed to marshal file_viewers setting: %w", err)
+			}
+
+			if _, err := client.Setting.UpdateOne(fileViewersSetting).SetValue(string(newFileViewersSetting)).Save(ctx); err != nil {
+				return fmt.Errorf("failed to update file_viewers setting: %w", err)
+			}
+
+			return nil
+		},
+	},
+	{
 		Name:       "apply_email_title_magic_var",
 		EndVersion: "4.7.0",
 		Func: func(l logging.Logger, client *ent.Client, ctx context.Context) error {
@@ -921,7 +969,7 @@ func applyPatches(l logging.Logger, client *ent.Client, ctx context.Context, req
 		return fmt.Errorf("failed to parse required version %s: %w", requiredDbVersion, err)
 	}
 
-	if latestAppliedVersion == nil || requiredVersion.Compare(requiredVersion) > 0 {
+	if latestAppliedVersion == nil || requiredVersion.Compare(latestAppliedVersion) > 0 {
 		latestAppliedVersion = requiredVersion
 	}
 

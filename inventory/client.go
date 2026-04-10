@@ -24,6 +24,7 @@ const (
 	DBVersionPrefix           = "db_version_"
 	EnvDefaultOverwritePrefix = "CR_SETTING_DEFAULT_"
 	EnvEnableAria2            = "CR_ENABLE_ARIA2"
+	settingKVPrefix           = "setting_"
 )
 
 // InitializeDBClient runs migration and returns a new ent.Client with additional configurations
@@ -58,6 +59,7 @@ func InitializeDBClient(l logging.Logger,
 		return nil, fmt.Errorf("failed to ensure user username support: %w", err)
 	}
 	if err := ensureDefaultSettings(ctx, l, client,
+		"file_viewers",
 		"audit_log_enabled_types",
 		"show_desktop_app_promotion",
 		"syncthing_upgrade_version",
@@ -108,6 +110,12 @@ func InitializeDBClient(l logging.Logger,
 		"fts_external_skip_encrypted_files",
 	); err != nil {
 		return nil, fmt.Errorf("failed to ensure audit log settings: %w", err)
+	}
+	if err := ensureArchiveViewerExtSupport(ctx, l, client); err != nil {
+		return nil, fmt.Errorf("failed to ensure archive viewer extensions: %w", err)
+	}
+	if err := kv.Delete(settingKVPrefix, "file_viewers"); err != nil {
+		return nil, fmt.Errorf("failed to invalidate file_viewers cache: %w", err)
 	}
 	if err := removeDeprecatedSettings(ctx, l, client,
 		"fts_external_quality_font_issue_keywords",

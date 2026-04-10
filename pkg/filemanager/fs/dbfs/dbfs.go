@@ -478,7 +478,9 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 
 	// Calculate folder summary if requested
 	if o.loadFolderSummary && target != nil && target.Type() == types.FileTypeFolder {
-		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.OwnerID() != f.user.ID {
+		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok &&
+			target.OwnerID() != f.user.ID &&
+			!allowCrossOwnerPublicFolderSummary(target) {
 			return nil, fs.ErrOwnerOnly
 		}
 
@@ -543,6 +545,15 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 	}
 
 	return target, nil
+}
+
+func allowCrossOwnerPublicFolderSummary(target *File) bool {
+	if target == nil {
+		return false
+	}
+
+	uri := target.Uri(false)
+	return uri != nil && uri.FileSystem() == constants.FileSystemPublic
 }
 
 func (f *DBFS) ensureFileEntitiesLoaded(ctx context.Context, target *File) (*File, error) {

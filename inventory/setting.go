@@ -87,6 +87,12 @@ func (c *settingClient) Set(ctx context.Context, settings map[string]string) err
 }
 
 var (
+	defaultArchiveViewerExts = []string{
+		"zip", "7z", "rar", "tar", "tgz", "tbz", "tbz2", "txz", "tlz",
+		"gz", "z", "zz", "bz", "bz2", "xz", "lz", "lz4", "lzma", "br", "sz", "zst",
+		"jar", "war", "ear", "ar", "cpio", "arj",
+	}
+
 	defaultIcons = []types.FileTypeIconSetting{
 		{
 			Exts:  []string{"mp3", "flac", "ape", "wav", "acc", "ogg", "m4a"},
@@ -139,7 +145,7 @@ var (
 			Icon:  "torrent",
 		},
 		{
-			Exts:  []string{"zip", "gz", "xz", "tar", "rar", "7z", "bz2", "z"},
+			Exts:  defaultArchiveViewerExts,
 			Color: "#f9a825",
 			Icon:  "zip",
 		},
@@ -332,7 +338,7 @@ var (
 					ID:          "archive",
 					Type:        types.ViewerTypeBuiltin,
 					DisplayName: "fileManager.archivePreview",
-					Exts:        []string{"zip", "7z"},
+					Exts:        defaultArchiveViewerExts,
 					RequiredGroupPermission: []types.GroupPermission{
 						types.GroupPermissionArchiveTask,
 					},

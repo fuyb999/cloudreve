@@ -2,6 +2,7 @@ package manager
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/gob"
 	"fmt"
@@ -17,7 +18,9 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager/entitysource"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
+	"github.com/mholt/archives"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/japanese"
@@ -134,18 +137,8 @@ func (m *manager) ListArchiveFiles(ctx context.Context, uri *fs.URI, entity, zip
 	es.Apply(entitysource.WithContext(ctx))
 	defer es.Close()
 
-	var readerFunc func(ctx context.Context, file io.ReaderAt, size int64, textEncoding encoding.Encoding) ([]ArchivedFile, error)
-	switch file.Ext() {
-	case "zip":
-		readerFunc = getZipFileList
-	case "7z":
-		readerFunc = get7zFileList
-	default:
-		return nil, fs.ErrNotSupportedAction.WithError(fmt.Errorf("not supported archive format: %s", file.Ext()))
-	}
-
 	sr := io.NewSectionReader(es, 0, targetEntity.Size())
-	fileList, err := readerFunc(ctx, sr, targetEntity.Size(), enc)
+	fileList, err := m.listArchiveFilesWithFallback(ctx, file.DisplayName(), sr, enc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file list: %w", err)
 	}
@@ -241,6 +234,30 @@ func (m *manager) CreateArchive(ctx context.Context, uris []*fs.URI, writer io.W
 	return failed, nil
 }
 
+func (m *manager) listArchiveFilesWithFallback(ctx context.Context, fileName string, reader *io.SectionReader, textEncoding encoding.Encoding) ([]ArchivedFile, error) {
+	fileList, err := listArchiveFilesByLocalSupport(ctx, fileName, reader, textEncoding)
+	if err == nil {
+		return fileList, nil
+	}
+
+	localErr := err
+	tika, err := BuildArchiveTikaExtractor(ctx, m.dep)
+	if err != nil {
+		return nil, localErr
+	}
+
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to rewind archive source after local listing error: %w", localErr)
+	}
+
+	fileList, err = listArchiveFilesWithTikaFallback(ctx, tika, fileName, reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list archive locally: %w; tika fallback failed: %v", localErr, err)
+	}
+
+	return fileList, nil
+}
+
 func topLevelArchiveURIs(uris []*fs.URI, defaultUID string) []*fs.URI {
 	filtered := make([]*fs.URI, 0, len(uris))
 	for _, candidate := range uris {
@@ -303,6 +320,43 @@ func (m *manager) compressFileToArchive(ctx context.Context, parent string, file
 
 }
 
+func listArchiveFilesByLocalSupport(ctx context.Context, fileName string, reader *io.SectionReader, textEncoding encoding.Encoding) ([]ArchivedFile, error) {
+	format, readStream, err := archives.Identify(ctx, fileName, reader)
+	if err != nil {
+		return nil, err
+	}
+
+	switch format.Extension() {
+	case ".zip":
+		return getZipFileList(ctx, reader, reader.Size(), textEncoding)
+	case ".7z":
+		return get7zFileList(ctx, reader, reader.Size(), textEncoding)
+	}
+
+	if extractor, ok := format.(archives.Extractor); ok {
+		return getExtractorFileList(ctx, extractor, readStream)
+	}
+
+	if _, ok := format.(archives.Decompressor); ok {
+		return []ArchivedFile{{
+			Name: SingleCompressedArchiveEntryName(fileName, format.Extension()),
+			Size: reader.Size(),
+		}}, nil
+	}
+
+	return nil, fmt.Errorf("not supported archive format: %s", format.Extension())
+}
+
+func listArchiveFilesWithTikaFallback(ctx context.Context, tika *tikaextractor.TikaExtractor, fileName string, reader io.Reader) ([]ArchivedFile, error) {
+	raw, err := tika.UnpackAllFile(ctx, reader, fileName, tikaextractor.ArtifactOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	zipReader := bytes.NewReader(raw)
+	return getZipFileList(ctx, zipReader, int64(len(raw)), nil)
+}
+
 func getZipFileList(ctx context.Context, file io.ReaderAt, size int64, textEncoding encoding.Encoding) ([]ArchivedFile, error) {
 	zr, err := zip.NewReader(file, size)
 	if err != nil {
@@ -356,6 +410,42 @@ func get7zFileList(ctx context.Context, file io.ReaderAt, size int64, extEncodin
 		})
 	}
 	return fileList, nil
+}
+
+func getExtractorFileList(ctx context.Context, extractor archives.Extractor, readStream io.Reader) ([]ArchivedFile, error) {
+	fileList := make([]ArchivedFile, 0, 16)
+	if err := extractor.Extract(ctx, readStream, func(ctx context.Context, f archives.FileInfo) error {
+		info := f.FileInfo
+		modTime := info.ModTime()
+		fileList = append(fileList, ArchivedFile{
+			Name:        util.FormSlash(f.NameInArchive),
+			Size:        f.Size(),
+			UpdatedAt:   &modTime,
+			IsDirectory: info.IsDir(),
+		})
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return fileList, nil
+}
+
+func SingleCompressedArchiveEntryName(fileName, formatExtension string) string {
+	name := path.Base(strings.TrimSpace(fileName))
+	normalizedExt := strings.ToLower(strings.TrimSpace(formatExtension))
+	if normalizedExt != "" && strings.HasSuffix(strings.ToLower(name), normalizedExt) {
+		name = name[:len(name)-len(normalizedExt)]
+	} else if ext := path.Ext(name); ext != "" {
+		name = strings.TrimSuffix(name, ext)
+	}
+
+	name = strings.TrimSuffix(strings.TrimSpace(name), ".")
+	if name == "" {
+		return "content"
+	}
+
+	return util.FormSlash(name)
 }
 
 func getArchiveListCacheKey(entity int, encoding string) string {

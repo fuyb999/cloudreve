@@ -1,8 +1,10 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +26,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gofrs/uuid"
 	"github.com/mholt/archives"
@@ -66,6 +69,29 @@ const (
 	SummaryKeySrc         = "src"
 	SummaryKeySrcPhysical = "src_physical"
 	SummaryKeyDst         = "dst"
+)
+
+var errArchiveTempDownloadRequired = errors.New("archive temp download required")
+
+type (
+	archiveExtractionSource interface {
+		io.ReadSeekCloser
+		io.ReaderAt
+
+		Entity() fs.Entity
+		IsLocal() bool
+	}
+
+	preparedArchiveExtraction struct {
+		format       archives.Format
+		extractor    archives.Extractor
+		decompressor archives.Decompressor
+		readStream   io.Reader
+		closer       io.Closer
+	}
+
+	archiveCreateDirFunc  func(context.Context, *fs.URI) error
+	archiveUploadFileFunc func(context.Context, *fs.URI, int64, *time.Time, io.ReadCloser) error
 )
 
 func init() {
@@ -164,6 +190,322 @@ func (m *ExtractArchiveTask) Do(ctx context.Context) (task.Status, error) {
 	m.Task.PrivateState = string(newStateStr)
 	m.Unlock()
 	return next, err
+}
+
+func (p *preparedArchiveExtraction) Close() error {
+	if p == nil || p.closer == nil {
+		return nil
+	}
+
+	return p.closer.Close()
+}
+
+func prepareArchiveExtraction(
+	ctx context.Context,
+	dep dependency.Dep,
+	l logging.Logger,
+	fileName string,
+	source archiveExtractionSource,
+	tempArchivePath string,
+	encoding string,
+	password string,
+) (*preparedArchiveExtraction, error) {
+	format, readStream, err := archives.Identify(ctx, fileName, source)
+	if err == nil {
+		if extractor, ok := format.(archives.Extractor); ok {
+			if requiresArchiveRandomAccess(format) {
+				if source.IsLocal() {
+					if _, err := source.Seek(0, io.SeekStart); err != nil {
+						return nil, fmt.Errorf("failed to seek entity source: %w", err)
+					}
+					readStream = source
+				} else {
+					if tempArchivePath == "" {
+						return nil, errArchiveTempDownloadRequired
+					}
+
+					archiveFile, err := os.Open(tempArchivePath)
+					if err != nil {
+						return nil, fmt.Errorf("failed to open temp archive file: %w", err)
+					}
+
+					return &preparedArchiveExtraction{
+						format:     format,
+						extractor:  applyArchiveExtractorOptions(extractor, encoding, password, l),
+						readStream: archiveFile,
+						closer:     archiveFile,
+					}, nil
+				}
+			}
+
+			return &preparedArchiveExtraction{
+				format:     format,
+				extractor:  applyArchiveExtractorOptions(extractor, encoding, password, l),
+				readStream: readStream,
+			}, nil
+		}
+
+		if decompressor, ok := format.(archives.Decompressor); ok {
+			return &preparedArchiveExtraction{
+				format:       format,
+				decompressor: decompressor,
+				readStream:   readStream,
+			}, nil
+		}
+	}
+
+	localErr := err
+	if localErr == nil && format != nil {
+		localErr = fmt.Errorf("not supported archive format %q", format.Extension())
+	}
+
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		if localErr != nil {
+			return nil, localErr
+		}
+		return nil, fmt.Errorf("failed to seek entity source: %w", err)
+	}
+
+	tika, err := manager.BuildArchiveTikaExtractor(ctx, dep)
+	if err != nil {
+		if localErr != nil {
+			return nil, localErr
+		}
+		return nil, err
+	}
+
+	raw, err := tika.UnpackAllFile(ctx, source, fileName, tikaextractor.ArtifactOptions{})
+	if err != nil {
+		if localErr != nil {
+			return nil, fmt.Errorf("failed to identify archive locally: %w; tika fallback failed: %v", localErr, err)
+		}
+		return nil, fmt.Errorf("failed to unpack archive with tika: %w", err)
+	}
+
+	reader := bytes.NewReader(raw)
+	return &preparedArchiveExtraction{
+		format:     archives.Zip{},
+		extractor:  archives.Zip{},
+		readStream: reader,
+	}, nil
+}
+
+func requiresArchiveRandomAccess(format archives.Format) bool {
+	if format == nil {
+		return false
+	}
+
+	switch strings.ToLower(format.Extension()) {
+	case ".zip", ".7z":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyArchiveExtractorOptions(extractor archives.Extractor, encoding string, password string, l logging.Logger) archives.Extractor {
+	if zipExtractor, ok := extractor.(archives.Zip); ok {
+		if encoding != "" {
+			l.Info("Using encoding %q for zip archive", encoding)
+			textEncoding, ok := manager.ZipEncodings[strings.ToLower(encoding)]
+			if !ok {
+				l.Warning("Unknown encoding %q, fallback to default encoding", encoding)
+			} else {
+				zipExtractor.TextEncoding = textEncoding
+				extractor = zipExtractor
+			}
+		}
+	} else if rarExtractor, ok := extractor.(archives.Rar); ok && password != "" {
+		rarExtractor.Password = password
+		extractor = rarExtractor
+	} else if sevenZipExtractor, ok := extractor.(archives.SevenZip); ok && password != "" {
+		sevenZipExtractor.Password = password
+		extractor = sevenZipExtractor
+	}
+
+	return extractor
+}
+
+func addArchiveProgress(progress *queue.Progress, diff int64) {
+	if progress == nil {
+		return
+	}
+
+	atomic.AddInt64(&progress.Current, diff)
+}
+
+func extractArchiveEntries(
+	ctx context.Context,
+	extractor archives.Extractor,
+	readStream io.Reader,
+	dst *fs.URI,
+	processedCursor *string,
+	fileMask []string,
+	countProgress *queue.Progress,
+	sizeProgress *queue.Progress,
+	l logging.Logger,
+	createDir archiveCreateDirFunc,
+	uploadFile archiveUploadFileFunc,
+) error {
+	needSkipToCursor := processedCursor != nil && *processedCursor != ""
+	var (
+		regularFilesSeen      int
+		regularFilesExtracted int
+		firstOpenErr          error
+	)
+
+	err := extractor.Extract(ctx, readStream, func(ctx context.Context, f archives.FileInfo) error {
+		if needSkipToCursor && f.NameInArchive != *processedCursor {
+			addArchiveProgress(countProgress, 1)
+			addArchiveProgress(sizeProgress, f.Size())
+			l.Info("File %q already processed, skipping...", f.NameInArchive)
+			return nil
+		}
+
+		if processedCursor != nil && *processedCursor == f.NameInArchive {
+			addArchiveProgress(countProgress, 1)
+			addArchiveProgress(sizeProgress, f.Size())
+			needSkipToCursor = false
+			return nil
+		}
+
+		rawPath := util.FormSlash(f.NameInArchive)
+		savePath := dst.JoinRaw(rawPath)
+
+		if len(fileMask) > 0 && !isFileInMask(rawPath, fileMask) {
+			l.Debug("File %q is not in the mask, skipping...", f.NameInArchive)
+			addArchiveProgress(countProgress, 1)
+			addArchiveProgress(sizeProgress, f.Size())
+			return nil
+		}
+
+		if !strings.HasPrefix(savePath.Path(), util.FillSlash(path.Clean(dst.Path()))) {
+			l.Warning("Path %q is not legit, skipping...", f.NameInArchive)
+			addArchiveProgress(countProgress, 1)
+			addArchiveProgress(sizeProgress, f.Size())
+			return nil
+		}
+
+		if f.FileInfo.IsDir() {
+			if err := createDir(ctx, savePath); err != nil {
+				l.Warning("Failed to create directory %q: %s, skipping...", rawPath, err)
+			}
+
+			addArchiveProgress(countProgress, 1)
+			if processedCursor != nil {
+				*processedCursor = f.NameInArchive
+			}
+			return nil
+		}
+
+		if !f.Mode().IsRegular() {
+			l.Warning("Skipping special archive entry %q with mode %q", rawPath, f.Mode())
+			addArchiveProgress(countProgress, 1)
+			addArchiveProgress(sizeProgress, f.Size())
+			if processedCursor != nil {
+				*processedCursor = f.NameInArchive
+			}
+			return nil
+		}
+
+		regularFilesSeen++
+		fileStream, err := f.Open()
+		if err != nil {
+			if firstOpenErr == nil {
+				firstOpenErr = fmt.Errorf("failed to open file %q in archive file: %w", rawPath, err)
+			}
+			l.Warning("Failed to open file %q in archive file: %s, skipping...", rawPath, err)
+			return nil
+		}
+		defer fileStream.Close()
+
+		modTime := f.FileInfo.ModTime().Local()
+		if err := uploadFile(ctx, savePath, f.Size(), &modTime, fileStream); err != nil {
+			return fmt.Errorf("failed to upload file %q in archive file: %w", rawPath, err)
+		}
+
+		regularFilesExtracted++
+		addArchiveProgress(countProgress, 1)
+		if processedCursor != nil {
+			*processedCursor = f.NameInArchive
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if regularFilesSeen > 0 && regularFilesExtracted == 0 && firstOpenErr != nil {
+		return firstOpenErr
+	}
+	return nil
+}
+
+func extractCompressedArchiveFile(
+	ctx context.Context,
+	decompressor archives.Decompressor,
+	readStream io.Reader,
+	archiveName string,
+	formatExtension string,
+	dst *fs.URI,
+	processedCursor *string,
+	fileMask []string,
+	countProgress *queue.Progress,
+	l logging.Logger,
+	uploadFile archiveUploadFileFunc,
+) error {
+	rawPath := manager.SingleCompressedArchiveEntryName(archiveName, formatExtension)
+	if processedCursor != nil && *processedCursor == rawPath {
+		addArchiveProgress(countProgress, 1)
+		return nil
+	}
+
+	savePath := dst.JoinRaw(rawPath)
+	if len(fileMask) > 0 && !isFileInMask(rawPath, fileMask) {
+		l.Debug("File %q is not in the mask, skipping...", rawPath)
+		addArchiveProgress(countProgress, 1)
+		return nil
+	}
+
+	if !strings.HasPrefix(savePath.Path(), util.FillSlash(path.Clean(dst.Path()))) {
+		l.Warning("Path %q is not legit, skipping...", rawPath)
+		addArchiveProgress(countProgress, 1)
+		return nil
+	}
+
+	fileStream, err := decompressor.OpenReader(readStream)
+	if err != nil {
+		return fmt.Errorf("failed to open compressed file %q: %w", archiveName, err)
+	}
+	defer fileStream.Close()
+
+	tempFile, err := os.CreateTemp("", "cloudreve-archive-single-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %q: %w", archiveName, err)
+	}
+	tempName := tempFile.Name()
+	defer func() {
+		tempFile.Close()
+		_ = os.Remove(tempName)
+	}()
+
+	size, err := io.Copy(tempFile, fileStream)
+	if err != nil {
+		return fmt.Errorf("failed to materialize compressed file %q: %w", archiveName, err)
+	}
+
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind temp file for %q: %w", archiveName, err)
+	}
+
+	if err := uploadFile(ctx, savePath, size, nil, tempFile); err != nil {
+		return fmt.Errorf("failed to upload decompressed file %q: %w", rawPath, err)
+	}
+
+	addArchiveProgress(countProgress, 1)
+	if processedCursor != nil {
+		*processedCursor = rawPath
+	}
+	return nil
 }
 
 func (m *ExtractArchiveTask) createSlaveExtractTask(ctx context.Context, dep dependency.Dep) (task.Status, error) {
@@ -288,153 +630,75 @@ func (m *ExtractArchiveTask) masterExtractArchive(ctx context.Context, dep depen
 	defer es.Close()
 
 	m.l.Info("Extracting archive %q to %q", uri, m.state.Dst)
-	// Identify file format
-	format, readStream, err := archives.Identify(ctx, archiveFile.DisplayName(), es)
+	prepared, err := prepareArchiveExtraction(ctx, dep, m.l, archiveFile.DisplayName(), es, m.state.TempZipFilePath, m.state.Encoding, m.state.Password)
+	if errors.Is(err, errArchiveTempDownloadRequired) {
+		m.state.Phase = ExtractArchivePhaseDownloadZip
+		m.ResumeAfter(0)
+		return task.StatusSuspending, nil
+	}
 	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to identify archive format: %w", err)
+		return task.StatusError, fmt.Errorf("failed to prepare archive extraction: %w", err)
 	}
+	defer prepared.Close()
 
-	m.l.Info("Archive file %q format identified as %q", uri, format.Extension())
+	m.l.Info("Archive file %q format identified as %q", uri, prepared.format.Extension())
 
-	extractor, ok := format.(archives.Extractor)
-	if !ok {
-		return task.StatusError, fmt.Errorf("format not an extractor %s", format.Extension())
-	}
-
-	formatExt := format.Extension()
-	if formatExt == ".zip" || formatExt == ".7z" {
-		// Zip/7Z extractor requires a Seeker+ReadAt
-		if m.state.TempZipFilePath == "" && !es.IsLocal() {
-			m.state.Phase = ExtractArchivePhaseDownloadZip
-			m.ResumeAfter(0)
-			return task.StatusSuspending, nil
-		}
-
-		if m.state.TempZipFilePath != "" {
-			// Use temp zip file path
-			zipFile, err := os.Open(m.state.TempZipFilePath)
-			if err != nil {
-				return task.StatusError, fmt.Errorf("failed to open temp zip file: %w", err)
-			}
-
-			defer zipFile.Close()
-			readStream = zipFile
-		}
-
-		if es.IsLocal() {
-			if _, err = es.Seek(0, 0); err != nil {
-				return task.StatusError, fmt.Errorf("failed to seek entity source: %w", err)
-			}
-
-			readStream = es
-		}
-	}
-
-	if zipExtractor, ok := extractor.(archives.Zip); ok {
-		if m.state.Encoding != "" {
-			m.l.Info("Using encoding %q for zip archive", m.state.Encoding)
-			encoding, ok := manager.ZipEncodings[strings.ToLower(m.state.Encoding)]
-			if !ok {
-				m.l.Warning("Unknown encoding %q, fallback to default encoding", m.state.Encoding)
-			} else {
-				zipExtractor.TextEncoding = encoding
-				extractor = zipExtractor
-			}
-		}
-	} else if rarExtractor, ok := extractor.(archives.Rar); ok && m.state.Password != "" {
-		rarExtractor.Password = m.state.Password
-		extractor = rarExtractor
-	} else if sevenZipExtractor, ok := extractor.(archives.SevenZip); ok && m.state.Password != "" {
-		sevenZipExtractor.Password = m.state.Password
-		extractor = sevenZipExtractor
-	}
-
-	needSkipToCursor := false
-	if m.state.ProcessedCursor != "" {
-		needSkipToCursor = true
-	}
 	m.Lock()
 	m.progress[ProgressTypeExtractCount] = &queue.Progress{}
 	m.progress[ProgressTypeExtractSize] = &queue.Progress{}
+	countProgress := m.progress[ProgressTypeExtractCount]
+	sizeProgress := m.progress[ProgressTypeExtractSize]
 	m.Unlock()
 
-	// extract and upload
-	err = extractor.Extract(ctx, readStream, func(ctx context.Context, f archives.FileInfo) error {
-		if needSkipToCursor && f.NameInArchive != m.state.ProcessedCursor {
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			m.l.Info("File %q already processed, skipping...", f.NameInArchive)
-			return nil
-		}
-
-		// Found cursor, start from cursor +1
-		if m.state.ProcessedCursor == f.NameInArchive {
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			needSkipToCursor = false
-			return nil
-		}
-
-		rawPath := util.FormSlash(f.NameInArchive)
-		savePath := dst.JoinRaw(rawPath)
-
-		// If file mask is not empty, check if the path is in the mask
-		if len(m.state.FileMask) > 0 && !isFileInMask(rawPath, m.state.FileMask) {
-			m.l.Warning("File %q is not in the mask, skipping...", f.NameInArchive)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			return nil
-		}
-
-		// Check if path is legit
-		if !strings.HasPrefix(savePath.Path(), util.FillSlash(path.Clean(dst.Path()))) {
-			m.l.Warning("Path %q is not legit, skipping...", f.NameInArchive)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			return nil
-		}
-
-		if f.FileInfo.IsDir() {
-			_, err := fm.Create(ctx, savePath, types.FileTypeFolder)
-			if err != nil {
-				m.l.Warning("Failed to create directory %q: %s, skipping...", rawPath, err)
-			}
-
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			m.state.ProcessedCursor = f.NameInArchive
-			return nil
-		}
-
-		fileStream, err := f.Open()
-		if err != nil {
-			m.l.Warning("Failed to open file %q in archive file: %s, skipping...", rawPath, err)
-			return nil
-		}
-
+	uploadFile := func(ctx context.Context, savePath *fs.URI, size int64, lastModified *time.Time, file io.ReadCloser) error {
 		fileData := &fs.UploadRequest{
 			Props: &fs.UploadProps{
-				Uri:  savePath,
-				Size: f.Size(),
-				LastModified: func() *time.Time {
-					t := f.FileInfo.ModTime().Local()
-					return &t
-				}(),
+				Uri:          savePath,
+				Size:         size,
+				LastModified: lastModified,
 			},
 			ProgressFunc: func(current, diff int64, total int64) {
-				atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, diff)
+				addArchiveProgress(sizeProgress, diff)
 			},
-			File: fileStream,
+			File: file,
 		}
 
-		_, err = fm.Update(ctx, fileData, fs.WithNoEntityType())
-		if err != nil {
-			return fmt.Errorf("failed to upload file %q in archive file: %w", rawPath, err)
-		}
+		_, err := fm.Update(ctx, fileData, fs.WithNoEntityType())
+		return err
+	}
 
-		atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-		m.state.ProcessedCursor = f.NameInArchive
-		return nil
-	})
+	if prepared.extractor != nil {
+		err = extractArchiveEntries(
+			ctx,
+			prepared.extractor,
+			prepared.readStream,
+			dst,
+			&m.state.ProcessedCursor,
+			m.state.FileMask,
+			countProgress,
+			sizeProgress,
+			m.l,
+			func(ctx context.Context, savePath *fs.URI) error {
+				_, err := fm.Create(ctx, savePath, types.FileTypeFolder)
+				return err
+			},
+			uploadFile,
+		)
+	} else {
+		err = extractCompressedArchiveFile(
+			ctx,
+			prepared.decompressor,
+			prepared.readStream,
+			archiveFile.DisplayName(),
+			prepared.format.Extension(),
+			dst,
+			&m.state.ProcessedCursor,
+			m.state.FileMask,
+			countProgress,
+			m.l,
+			uploadFile,
+		)
+	}
 
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to extract archive: %w", err)
@@ -642,173 +906,108 @@ func (m *SlaveExtractArchiveTask) Do(ctx context.Context) (task.Status, error) {
 
 	defer es.Close()
 
-	// 2. Identify file format
-	format, readStream, err := archives.Identify(ctx, m.state.FileName, es)
-	if err != nil {
-		return task.StatusError, fmt.Errorf("failed to identify archive format: %w", err)
-	}
-	m.l.Info("Archive file %q format identified as %q", m.state.FileName, format.Extension())
-
-	extractor, ok := format.(archives.Extractor)
-	if !ok {
-		return task.StatusError, fmt.Errorf("format not an extractor %q", format.Extension())
-	}
-
-	formatExt := format.Extension()
-	if formatExt == ".zip" || formatExt == ".7z" {
-		if _, err = es.Seek(0, 0); err != nil {
+	prepared, err := prepareArchiveExtraction(ctx, dep, m.l, m.state.FileName, es, m.state.TempZipFilePath, m.state.Encoding, m.state.Password)
+	if errors.Is(err, errArchiveTempDownloadRequired) {
+		if _, err = es.Seek(0, io.SeekStart); err != nil {
 			return task.StatusError, fmt.Errorf("failed to seek entity source: %w", err)
 		}
 
-		if m.state.TempZipFilePath == "" && !es.IsLocal() {
-			tempPath, err := prepareTempFolder(ctx, dep, m)
-			if err != nil {
-				return task.StatusError, fmt.Errorf("failed to prepare temp folder: %w", err)
-			}
-			m.state.TempPath = tempPath
-
-			fileName := fmt.Sprintf("%s.zip", uuid.Must(uuid.NewV4()))
-			zipFilePath := filepath.Join(
-				m.state.TempPath,
-				fileName,
-			)
-			zipFile, err := util.CreatNestedFile(zipFilePath)
-			if err != nil {
-				return task.StatusError, fmt.Errorf("failed to create zip file: %w", err)
-			}
-
-			m.Lock()
-			m.progress[ProgressTypeDownload] = &queue.Progress{Total: es.Entity().Size()}
-			m.Unlock()
-
-			defer zipFile.Close()
-			if _, err := io.Copy(zipFile, util.NewCallbackReader(es, func(i int64) {
-				atomic.AddInt64(&m.progress[ProgressTypeDownload].Current, i)
-			})); err != nil {
-				return task.StatusError, fmt.Errorf("failed to copy zip file to local temp: %w", err)
-			}
-
-			zipFile.Close()
-			m.state.TempZipFilePath = zipFilePath
-		}
-
-		if es.IsLocal() {
-			readStream = es
-		} else if m.state.TempZipFilePath != "" {
-			// Use temp zip file path
-			zipFile, err := os.Open(m.state.TempZipFilePath)
-			if err != nil {
-				return task.StatusError, fmt.Errorf("failed to open temp zip file: %w", err)
-			}
-
-			defer zipFile.Close()
-			readStream = zipFile
-		}
-
-		if es.IsLocal() {
-			readStream = es
-		}
-	}
-
-	if zipExtractor, ok := extractor.(archives.Zip); ok {
-		if m.state.Encoding != "" {
-			m.l.Info("Using encoding %q for zip archive", m.state.Encoding)
-			encoding, ok := manager.ZipEncodings[strings.ToLower(m.state.Encoding)]
-			if !ok {
-				m.l.Warning("Unknown encoding %q, fallback to default encoding", m.state.Encoding)
-			} else {
-				zipExtractor.TextEncoding = encoding
-				extractor = zipExtractor
-			}
-		}
-	} else if rarExtractor, ok := extractor.(archives.Rar); ok && m.state.Password != "" {
-		rarExtractor.Password = m.state.Password
-		extractor = rarExtractor
-	} else if sevenZipExtractor, ok := extractor.(archives.SevenZip); ok && m.state.Password != "" {
-		sevenZipExtractor.Password = m.state.Password
-		extractor = sevenZipExtractor
-	}
-
-	needSkipToCursor := false
-	if m.state.ProcessedCursor != "" {
-		needSkipToCursor = true
-	}
-
-	// 3. Extract and upload
-	err = extractor.Extract(ctx, readStream, func(ctx context.Context, f archives.FileInfo) error {
-		if needSkipToCursor && f.NameInArchive != m.state.ProcessedCursor {
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			m.l.Info("File %q already processed, skipping...", f.NameInArchive)
-			return nil
-		}
-
-		// Found cursor, start from cursor +1
-		if m.state.ProcessedCursor == f.NameInArchive {
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			needSkipToCursor = false
-			return nil
-		}
-
-		rawPath := util.FormSlash(f.NameInArchive)
-		savePath := dst.JoinRaw(rawPath)
-
-		// If file mask is not empty, check if the path is in the mask
-		if len(m.state.FileMask) > 0 && !isFileInMask(rawPath, m.state.FileMask) {
-			m.l.Debug("File %q is not in the mask, skipping...", f.NameInArchive)
-			return nil
-		}
-
-		// Check if path is legit
-		if !strings.HasPrefix(savePath.Path(), util.FillSlash(path.Clean(dst.Path()))) {
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, f.Size())
-			m.l.Warning("Path %q is not legit, skipping...", f.NameInArchive)
-			return nil
-		}
-
-		if f.FileInfo.IsDir() {
-			_, err := fm.Create(ctx, savePath, types.FileTypeFolder, fs.WithNode(m.node), fs.WithStatelessUserID(m.state.UserID))
-			if err != nil {
-				m.l.Warning("Failed to create directory %q: %s, skipping...", rawPath, err)
-			}
-
-			atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-			m.state.ProcessedCursor = f.NameInArchive
-			return nil
-		}
-
-		fileStream, err := f.Open()
+		tempPath, err := prepareTempFolder(ctx, dep, m)
 		if err != nil {
-			m.l.Warning("Failed to open file %q in archive file: %s, skipping...", rawPath, err)
-			return nil
+			return task.StatusError, fmt.Errorf("failed to prepare temp folder: %w", err)
+		}
+		m.state.TempPath = tempPath
+
+		fileName := fmt.Sprintf("%s.zip", uuid.Must(uuid.NewV4()))
+		zipFilePath := filepath.Join(
+			m.state.TempPath,
+			fileName,
+		)
+		zipFile, err := util.CreatNestedFile(zipFilePath)
+		if err != nil {
+			return task.StatusError, fmt.Errorf("failed to create zip file: %w", err)
 		}
 
+		m.Lock()
+		m.progress[ProgressTypeDownload] = &queue.Progress{Total: es.Entity().Size()}
+		m.Unlock()
+
+		defer zipFile.Close()
+		if _, err := io.Copy(zipFile, util.NewCallbackReader(es, func(i int64) {
+			addArchiveProgress(m.progress[ProgressTypeDownload], i)
+		})); err != nil {
+			return task.StatusError, fmt.Errorf("failed to copy zip file to local temp: %w", err)
+		}
+
+		zipFile.Close()
+		m.state.TempZipFilePath = zipFilePath
+		m.Lock()
+		delete(m.progress, ProgressTypeDownload)
+		m.Unlock()
+		if _, err = es.Seek(0, io.SeekStart); err != nil {
+			return task.StatusError, fmt.Errorf("failed to rewind entity source after local temp download: %w", err)
+		}
+
+		prepared, err = prepareArchiveExtraction(ctx, dep, m.l, m.state.FileName, es, m.state.TempZipFilePath, m.state.Encoding, m.state.Password)
+	}
+	if err != nil {
+		return task.StatusError, fmt.Errorf("failed to prepare archive extraction: %w", err)
+	}
+	defer prepared.Close()
+
+	m.l.Info("Archive file %q format identified as %q", m.state.FileName, prepared.format.Extension())
+
+	countProgress := m.progress[ProgressTypeExtractCount]
+	sizeProgress := m.progress[ProgressTypeExtractSize]
+	uploadFile := func(ctx context.Context, savePath *fs.URI, size int64, lastModified *time.Time, file io.ReadCloser) error {
 		fileData := &fs.UploadRequest{
 			Props: &fs.UploadProps{
-				Uri:  savePath,
-				Size: f.Size(),
-				LastModified: func() *time.Time {
-					t := f.FileInfo.ModTime().Local()
-					return &t
-				}(),
+				Uri:          savePath,
+				Size:         size,
+				LastModified: lastModified,
 			},
 			ProgressFunc: func(current, diff int64, total int64) {
-				atomic.AddInt64(&m.progress[ProgressTypeExtractSize].Current, diff)
+				addArchiveProgress(sizeProgress, diff)
 			},
-			File: fileStream,
+			File: file,
 		}
 
-		_, err = fm.Update(ctx, fileData, fs.WithNode(m.node), fs.WithStatelessUserID(m.state.UserID), fs.WithNoEntityType())
-		if err != nil {
-			return fmt.Errorf("failed to upload file %q in archive file: %w", rawPath, err)
-		}
+		_, err := fm.Update(ctx, fileData, fs.WithNode(m.node), fs.WithStatelessUserID(m.state.UserID), fs.WithNoEntityType())
+		return err
+	}
 
-		atomic.AddInt64(&m.progress[ProgressTypeExtractCount].Current, 1)
-		m.state.ProcessedCursor = f.NameInArchive
-		return nil
-	})
+	if prepared.extractor != nil {
+		err = extractArchiveEntries(
+			ctx,
+			prepared.extractor,
+			prepared.readStream,
+			dst,
+			&m.state.ProcessedCursor,
+			m.state.FileMask,
+			countProgress,
+			sizeProgress,
+			m.l,
+			func(ctx context.Context, savePath *fs.URI) error {
+				_, err := fm.Create(ctx, savePath, types.FileTypeFolder, fs.WithNode(m.node), fs.WithStatelessUserID(m.state.UserID))
+				return err
+			},
+			uploadFile,
+		)
+	} else {
+		err = extractCompressedArchiveFile(
+			ctx,
+			prepared.decompressor,
+			prepared.readStream,
+			m.state.FileName,
+			prepared.format.Extension(),
+			dst,
+			&m.state.ProcessedCursor,
+			m.state.FileMask,
+			countProgress,
+			m.l,
+			uploadFile,
+		)
+	}
 
 	if err != nil {
 		return task.StatusError, fmt.Errorf("failed to extract archive: %w", err)
