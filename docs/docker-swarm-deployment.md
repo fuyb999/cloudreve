@@ -3,6 +3,7 @@
 本文档对应仓库中的以下文件：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
 - `.env.swarm.example`
@@ -55,6 +56,15 @@
 - `kafka`：Kafka 内部 bootstrap 入口
 - `kafka-ui`：Kafka 集群管理界面
 - `tika`：文档解析
+- `onlyoffice`：OnlyOffice 8 文档协作服务，默认关闭
+
+现在 5 组 Swarm YML 的职责是：
+
+- `docker-compose.swarm.yml`：只放 `cloudreve` 主从与入口代理
+- `docker-compose.swarm.foundation.yml`：放 `PG / Redis / Tika / OnlyOffice`，以及单节点 `MinIO / Elasticsearch` 兼容形态
+- `docker-compose.swarm.cluster.yml`：放 `MinIO / Kafka / Elasticsearch / Kafka UI` 集群形态
+- `docker-compose.swarm.auth.yml`：放 `authverse-web + authverse-backend`
+- `docker-compose.swarm.registry.yml`：只放 `registry:2`
 
 默认设计目标：
 
@@ -105,6 +115,7 @@
 
 - 这些默认值现在都和 Docker Hub 上实际可直接 `pull` 的仓库名与 tag 保持一致
 - 不再依赖本地 retag 成 `bitnami/*`
+- 截至 `2026-04-11`，已用 `docker manifest inspect` 复核，上述固定版本 tag 仍以 `bitnamilegacy/*` 可拉取为准
 - `TIKA_IMAGE` 是自定义镜像，不在 Docker Hub 公共仓库里，生产里应先推到固定私有仓库，再让其它节点远程拉取
 - 所以生产里建议先在每台节点执行：
 

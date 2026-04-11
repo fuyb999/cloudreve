@@ -3,6 +3,7 @@
 这份清单对应当前仓库里的生产默认值：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
 - `.env.swarm.example`
@@ -47,8 +48,17 @@
 - 默认 `S3` 指向栈内 `MinIO`，并由 `minio-init` 持续确保 `cloudreve` bucket 存在
 - `SWARM_WITH_CLUSTER=yes` 时，会切成 4 节点 MinIO + 3 节点 Elasticsearch + 3 节点 Kafka
 - Kafka UI 会一起挂上，默认对外端口 `18089`
+- OnlyOffice 8 已并入基础中间件文件，默认 `ONLYOFFICE_REPLICAS=0`
 - 自定义镜像现在建议统一放到单点 `registry:2` 仓库栈，其它节点远程拉取
 - `cloudreve-master` 仍建议先保持 `1` 副本
+
+当前文件分组：
+
+- `docker-compose.swarm.yml`：Cloudreve 主从
+- `docker-compose.swarm.foundation.yml`：PG / Redis / Tika / OnlyOffice
+- `docker-compose.swarm.cluster.yml`：MinIO / Kafka / ES / Kafka UI 集群
+- `docker-compose.swarm.auth.yml`：Authverse 前后端
+- `docker-compose.swarm.registry.yml`：私有仓库
 
 ## 2. 上线前准备
 

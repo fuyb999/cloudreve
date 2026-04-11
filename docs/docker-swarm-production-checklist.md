@@ -13,6 +13,7 @@
 - [`.env.swarm.prod-4x128g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x128g.example)
 - [`docker-compose.swarm.registry.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.registry.yml)
 - [`docker-compose.swarm.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.yml)
+- [`docker-compose.swarm.foundation.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.foundation.yml)
 - [`docker-compose.swarm.cluster.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.cluster.yml)
 - [`docker-compose.swarm.auth.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.auth.yml)
 - [`docker/swarm/deploy-private-registry.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/deploy-private-registry.sh)

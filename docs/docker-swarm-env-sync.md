@@ -13,13 +13,17 @@
 原因很简单：
 
 1. 部署脚本会先在本地 `source .env.swarm`
-2. 然后把 `docker-compose.swarm.yml` 渲染成最终 stack 配置
+2. 然后把 `docker-compose.swarm.yml + docker-compose.swarm.foundation.yml`
+   渲染成最终 stack 配置；如果启用了 `SWARM_WITH_CLUSTER=yes`，再额外叠加
+   `docker-compose.swarm.cluster.yml`
 3. 最后把渲染后的 service spec 提交给 Swarm
 
 所以：
 
 - `.env.swarm` 不会自动同步到其他节点
 - 但它渲染出来的变量值会被固化进最终部署配置
+- `authverse` 栈也是同理，只是它单独由 `docker/swarm/deploy-auth-stack.sh`
+  渲染 `docker-compose.swarm.auth.yml`
 
 ## 2. 哪些节点需要 `.env.swarm`
 
@@ -240,11 +244,14 @@ docker node update --label-add cloudreve.registry=true <node-name>
 
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.cluster.yml`
+- `docker-compose.swarm.auth.yml`
 - `.env.swarm.example`
 - `.env.swarm.prod-4x128g.example`
 - `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
+- `docker/swarm/deploy-auth-stack.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`

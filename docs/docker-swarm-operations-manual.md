@@ -5,6 +5,7 @@
 对应文件：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
 - `.env.swarm.example`
@@ -40,6 +41,7 @@
 - Elasticsearch
 - Kafka
 - Tika
+- OnlyOffice 8
 
 并且满足下面这些约束：
 
@@ -75,18 +77,24 @@
 
 ### 2.2 `docker-compose.swarm.yml`
 
-这是基础模板，包含：
+这是 Cloudreve 业务层模板，只包含：
 
 - `cloudreve-master`
 - `cloudreve-master-proxy`
 - `cloudreve-slave`
 - `cloudreve-slave-proxy`
+
+### 2.3 `docker-compose.swarm.foundation.yml`
+
+这是基础中间件模板，包含：
+
 - `postgresql-1/2/3`
 - `pgpool`
 - `redis-1/2/3`
 - `redis-sentinel`
 - `redis-proxy`
 - `tika`
+- `onlyoffice`
 - 单节点 `minio`
 - 单节点 `elasticsearch`
 
@@ -98,7 +106,7 @@
 - PostgreSQL / Redis 默认就是 `bind`
 - 其他运行目录默认 `volume`，但可以切换成 `bind`
 
-### 2.3 `docker-compose.swarm.cluster.yml`
+### 2.4 `docker-compose.swarm.cluster.yml`
 
 这是集群覆盖文件，只在下面两种情况生效：
 
@@ -121,12 +129,14 @@
 - Kafka KRaft 固定节点不适合走 Swarm VIP
 - 控制面必须尽量直接点到点
 
-### 2.4 为什么不再保留 `docker-compose.swarm.bind.yml`
+### 2.5 为什么不再保留 `docker-compose.swarm.bind.yml`
 
 这个覆盖文件已经废弃，原因很直接：
 
-- `docker-compose.swarm.yml` 自己就已经统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
-- PostgreSQL / Redis / Cloudreve 运行目录 / MinIO / Elasticsearch / Tika 字体都不再需要额外叠加 compose
+- `docker-compose.swarm.yml`、`docker-compose.swarm.foundation.yml`、`docker-compose.swarm.auth.yml`
+  都已经统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
+- PostgreSQL / Redis / Cloudreve 运行目录 / MinIO / Elasticsearch / Tika 字体 / authverse OIDC 密钥
+  都不再需要额外叠加 compose
 - 继续保留一个只服务单点场景的小覆盖文件，只会让部署顺序和文档变复杂
 
 现在如果你要切到宿主机绝对路径，直接改 `.env.swarm` 即可，例如：
@@ -293,7 +303,8 @@ docker node inspect cr-prod-wkr-1 --format '{{json .Spec.Labels}}'
 
 需要明确说明：
 
-- 截至 `2026-04-06`，Docker Hub 上 PostgreSQL Repmgr / Pgpool / MinIO / Redis 这些 Bitnami 版本化镜像，实际仍应以 `bitnamilegacy/*` 为准
+- 截至 `2026-04-11`，已用 `docker manifest inspect` 复核，
+  Docker Hub 上 PostgreSQL Repmgr / Pgpool / MinIO / Redis 这些固定版本 tag 仍应以 `bitnamilegacy/*` 为准
 - `bitnami/*` 公开可直接 `pull` 的对应固定版本 tag 并不完整
 - 所以当前模板没有用 `latest`
 - 也没有依赖“本地临时 retag 成 `bitnami/*`”

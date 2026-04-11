@@ -7,7 +7,8 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 STACK_NAME="${STACK_NAME:-cloudreve}"
 RESOLVED_DIR="${RESOLVED_DIR:-$ROOT_DIR/.tmp}"
 WITH_CLUSTER="${WITH_CLUSTER:-}"
-COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.yml"
+APP_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.yml"
+FOUNDATION_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.foundation.yml"
 CLUSTER_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.cluster.yml"
 
 usage() {
@@ -104,8 +105,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$COMPOSE_FILE" ]]; then
-  echo "找不到 Compose 文件: $COMPOSE_FILE" >&2
+if [[ ! -f "$APP_COMPOSE_FILE" ]]; then
+  echo "找不到 Cloudreve Compose 文件: $APP_COMPOSE_FILE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$FOUNDATION_COMPOSE_FILE" ]]; then
+  echo "找不到基础中间件 Compose 文件: $FOUNDATION_COMPOSE_FILE" >&2
   exit 1
 fi
 
@@ -150,8 +156,8 @@ if [[ -n "${TIKA_CUSTOM_FONTS_HOST_PATH:-}" && -z "${TIKA_CUSTOM_FONTS_MOUNT_SOU
   export TIKA_CUSTOM_FONTS_MOUNT_SOURCE="$TIKA_CUSTOM_FONTS_HOST_PATH"
 fi
 
-compose_args=(-c "$COMPOSE_FILE")
-render_base_compose_file="$COMPOSE_FILE"
+compose_args=(-c "$APP_COMPOSE_FILE" -c "$FOUNDATION_COMPOSE_FILE")
+render_base_compose_file="$FOUNDATION_COMPOSE_FILE"
 
 case "$WITH_CLUSTER" in
   yes)
@@ -160,8 +166,8 @@ case "$WITH_CLUSTER" in
       exit 1
     fi
     render_base_compose_file="$RESOLVED_DIR/${STACK_NAME}-cluster-base.yaml"
-    strip_single_node_services "$COMPOSE_FILE" "$render_base_compose_file"
-    compose_args=(-c "$render_base_compose_file")
+    strip_single_node_services "$FOUNDATION_COMPOSE_FILE" "$render_base_compose_file"
+    compose_args=(-c "$APP_COMPOSE_FILE" -c "$render_base_compose_file")
     compose_args+=(-c "$CLUSTER_COMPOSE_FILE")
     ;;
   no)

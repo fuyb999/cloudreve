@@ -2,6 +2,9 @@
 
 本文档对应这次新增的统一认证 Swarm 交付，覆盖：
 
+- `docker-compose.swarm.yml`
+- `docker-compose.swarm.foundation.yml`
+- `docker-compose.swarm.cluster.yml`
 - `docker-compose.swarm.auth.yml`
 - `docker/swarm/build-auth-images.sh`
 - `docker/swarm/init-authverse-db.sh`
@@ -22,6 +25,10 @@
 这次统一认证不建议直接硬塞进 `cloudreve` 主业务栈，而是采用：
 
 - `cloudreve` 主栈继续承载网盘、PG、Redis、MinIO、ES、Kafka、Tika
+- `cloudreve` 主栈本身已经拆成 3 组 Swarm YML：
+  - `docker-compose.swarm.yml`：Cloudreve 主从与入口代理
+  - `docker-compose.swarm.foundation.yml`：PG / Redis / Tika / OnlyOffice，以及单节点 MinIO / ES 兼容形态
+  - `docker-compose.swarm.cluster.yml`：MinIO / Kafka / ES / Kafka UI 集群形态
 - `authverse` 前端 + `authverse-backend` 后端独立成一个 `authverse` 栈
 - 两个栈通过同一条 overlay 网络互通
 - 统一认证直接复用 `cloudreve` 主栈里的：
@@ -36,6 +43,7 @@
 这样做的原因：
 
 - 边界清晰，统一认证可以独立发布、扩容、回滚
+- `cloudreve` 与 `authverse` 的职责分层清楚，Swarm YML 不会再回到一个大杂烩文件
 - 不额外再起一套 PG / Redis / ES，避免资源浪费
 - 外部负载均衡继续由 Swarm ingress + service VIP 控制，不引入第三方 LB
 - authverse 前端本身依赖 Cloudreve 的 `/api/v4`、`/s/`、`/f/` 路由，单独做一个网关最稳

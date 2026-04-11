@@ -24,13 +24,13 @@ usage() {
   --check               只检查，不改动
   --apply               执行创建和修正，默认就是 apply
   --services LIST       只处理指定服务，逗号分隔
-                        可选：all,pg,redis,cloudreve,minio,elasticsearch,kafka,tika,registry,authverse
+                        可选：all,pg,redis,cloudreve,minio,elasticsearch,kafka,tika,onlyoffice,registry,authverse
   -h, --help            显示帮助
 
 示例：
   sudo docker/swarm/prepare-bind-paths.sh --check
   sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
-  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika,registry,authverse
+  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika,onlyoffice,registry,authverse
 EOF
 }
 
@@ -230,6 +230,24 @@ collect_entries() {
 
   if service_enabled tika && [[ "${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-volume}" == "bind" ]]; then
     add_entry "TIKA_CUSTOM_FONTS_MOUNT_SOURCE" "${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-}" "" "0755" "readable_recursive"
+  fi
+
+  if service_enabled onlyoffice; then
+    if [[ "${ONLYOFFICE_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "ONLYOFFICE_DATA_MOUNT_SOURCE" "${ONLYOFFICE_DATA_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+    fi
+    if [[ "${ONLYOFFICE_LIB_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "ONLYOFFICE_LIB_MOUNT_SOURCE" "${ONLYOFFICE_LIB_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+    fi
+    if [[ "${ONLYOFFICE_LOG_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "ONLYOFFICE_LOG_MOUNT_SOURCE" "${ONLYOFFICE_LOG_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+    fi
+    if [[ "${ONLYOFFICE_DB_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "ONLYOFFICE_DB_MOUNT_SOURCE" "${ONLYOFFICE_DB_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+    fi
+    if [[ "${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "ONLYOFFICE_RABBITMQ_MOUNT_SOURCE" "${ONLYOFFICE_RABBITMQ_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+    fi
   fi
 
   if service_enabled registry && [[ "${PRIVATE_REGISTRY_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
