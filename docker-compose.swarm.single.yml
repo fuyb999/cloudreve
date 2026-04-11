@@ -1,7 +1,7 @@
 # Cloudreve Swarm 单节点全量模板。
 #
 # 包含：
-# - Cloudreve 主站 / 从站 / 入口代理
+# - Cloudreve 主站 / 入口代理
 # - PostgreSQL 单节点 + Pgpool 单节点
 # - Redis 单节点 + Redis Proxy 单节点
 # - MinIO 单节点 + MinIO 初始化
@@ -136,109 +136,6 @@ services:
         limits:
           cpus: "${CLOUDREVE_MASTER_PROXY_CPU_LIMIT:-1.0}"
           memory: "${CLOUDREVE_MASTER_PROXY_MEM_LIMIT:-512M}"
-
-  cloudreve-slave:
-    image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:4.15.0}
-    hostname: "{{.Node.Hostname}}-cr-slave-{{.Task.Slot}}"
-    environment:
-      CR_CONF_System.Mode: slave
-      CR_CONF_System.Listen: ":5212"
-      CR_CONF_System.ProxyHeader: X-Forwarded-For
-      CR_CONF_Slave.Secret: ${CLOUDREVE_SLAVE_SECRET:?set CLOUDREVE_SLAVE_SECRET}
-      CR_CONF_CORS.AllowOrigins: "*"
-      CR_CONF_CORS.AllowMethods: OPTIONS,GET,POST
-      CR_CONF_CORS.AllowHeaders: "*"
-      CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
-      CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
-      CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
-      CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
-      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
-    volumes:
-      - type: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_TYPE:-volume}
-        source: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_SOURCE:-cloudreve_slave_runtime}
-        target: /cloudreve/data
-    networks:
-      - cloudreve_backend
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - --post-data='{}' http://127.0.0.1:5212/api/v4/slave/ping >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
-    deploy:
-      replicas: 1
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
-      placement:
-        constraints:
-          - ${CLOUDREVE_SLAVE_NODE_CONSTRAINT:-node.platform.os==linux}
-      resources:
-        reservations:
-          cpus: "${CLOUDREVE_SLAVE_CPU_RESERVATION:-0.5}"
-          memory: "${CLOUDREVE_SLAVE_MEM_RESERVATION:-1G}"
-        limits:
-          cpus: "${CLOUDREVE_SLAVE_CPU_LIMIT:-1.5}"
-          memory: "${CLOUDREVE_SLAVE_MEM_LIMIT:-2G}"
-
-  cloudreve-slave-proxy:
-    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
-    hostname: "{{.Node.Hostname}}-cr-slave-proxy-{{.Task.Slot}}"
-    environment:
-      SERVER_NAME: ${CLOUDREVE_SLAVE_SERVER_NAME:-_}
-      UPSTREAM_SERVICE: cloudreve-slave:5212
-      CLIENT_MAX_BODY_SIZE: ${CLOUDREVE_SLAVE_CLIENT_MAX_BODY_SIZE:-0}
-      PROXY_READ_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_READ_TIMEOUT:-3600s}
-      PROXY_SEND_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_SEND_TIMEOUT:-3600s}
-    configs:
-      - source: cloudreve_proxy_template_v2
-        target: /etc/nginx/templates/default.conf.template
-        mode: 0444
-    ports:
-      - target: 80
-        published: ${CLOUDREVE_SLAVE_HTTP_PORT:-5213}
-        protocol: tcp
-        mode: ingress
-    networks:
-      - cloudreve_backend
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 15s
-    deploy:
-      replicas: 1
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
-      placement:
-        constraints:
-          - ${CLOUDREVE_SLAVE_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
-      resources:
-        reservations:
-          cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_RESERVATION:-0.25}"
-          memory: "${CLOUDREVE_SLAVE_PROXY_MEM_RESERVATION:-256M}"
-        limits:
-          cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_LIMIT:-1.0}"
-          memory: "${CLOUDREVE_SLAVE_PROXY_MEM_LIMIT:-512M}"
 
   postgresql-1:
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
@@ -764,7 +661,6 @@ networks:
 
 volumes:
   cloudreve_master_runtime:
-  cloudreve_slave_runtime:
   postgresql_1_data:
   redis_1_data:
   minio_data:

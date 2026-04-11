@@ -52,8 +52,6 @@
 
 - `cloudreve-master`
 - `cloudreve-master-proxy`
-- `cloudreve-slave`
-- `cloudreve-slave-proxy`
 - `postgresql-1 + pgpool`
 - `redis-1 + redis-proxy`
 - `minio + minio-init`
@@ -119,7 +117,7 @@
 同时要注意：
 
 - `PG / Redis` 仍然强制使用宿主机物理路径
-- `cloudreve-master` / `cloudreve-slave` / `minio` / `elasticsearch` / `tika` 字体目录默认使用命名卷
+- `cloudreve-master` / `minio` / `elasticsearch` / `tika` 字体目录默认使用命名卷
 - 上面这些服务如果你要切换到宿主机绝对路径，可以通过 `*_MOUNT_TYPE=bind` 和 `*_MOUNT_SOURCE=/absolute/path` 切换
 
 ## 3. 关于镜像默认值
@@ -312,7 +310,6 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 当前默认对外端口如下：
 
 - `cloudreve-master-proxy`: `80`
-- `cloudreve-slave-proxy`: `5213`
 - `pgpool`: `15432`
 - `redis-proxy`: `16379`
 - `minio api`: `9000`
@@ -730,7 +727,7 @@ docker service logs -f cloudreve_cloudreve-master
 - 数据库不是首次初始化
 - `CR_INIT_DEFAULT_STORAGE` / `CR_INIT_S3_*` 没有在第一次初始化前生效
 
-## 15. 注册从节点
+## 15. 多节点模式下注册从节点
 
 在主站后台执行：
 
@@ -741,7 +738,7 @@ docker service logs -f cloudreve_cloudreve-master
 5. 重新发布：
 
 ```bash
-docker/swarm/deploy-stack.sh
+docker/swarm/deploy-stack.sh --with-cluster
 ```
 
 如果你要使用非默认栈名，例如联调用的 `cloudreve-debug`：
@@ -755,12 +752,15 @@ STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh
 可以直接横向扩的服务：
 
 - `cloudreve-master-proxy`
-- `cloudreve-slave`
-- `cloudreve-slave-proxy`
 - `tika`
 - `pgpool`
 - `redis-sentinel`
 - `redis-proxy`
+
+如果启用了多节点 Cloudreve 从站，也可以继续扩：
+
+- `cloudreve-slave`
+- `cloudreve-slave-proxy`
 
 不要直接扩容的服务：
 

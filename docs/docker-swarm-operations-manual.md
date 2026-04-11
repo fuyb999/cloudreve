@@ -85,8 +85,6 @@
 
 - `cloudreve-master`
 - `cloudreve-master-proxy`
-- `cloudreve-slave`
-- `cloudreve-slave-proxy`
 - `postgresql-1`
 - `pgpool`
 - `redis-1`
@@ -674,6 +672,8 @@ http(s)://<master-domain-or-ip>/admin
 - bucket 创建者：`minio-init`
 
 ### 13.2 回填 Slave Secret
+
+只有在多节点 Cloudreve 模式下才需要这一步。
 
 1. 进入后台创建从节点
 2. 复制 `Slave Key`

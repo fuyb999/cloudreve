@@ -43,7 +43,7 @@
 - `pgpool` 默认对外发布 `15432`
 - `redis-proxy` 默认对外发布 `16379`
 - Cloudreve 不再默认把用户文件落到宿主机目录
-- `cloudreve-master` / `cloudreve-slave` / `minio` / `elasticsearch` / `tika` 字体目录现在同时支持命名卷和宿主机绝对路径两种挂载模式
+- `cloudreve-master` / `minio` / `elasticsearch` / `tika` 字体目录现在同时支持命名卷和宿主机绝对路径两种挂载模式
 - `PG / Redis` 默认仍是 `bind`，但变量名也统一成了 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
 - Cloudreve 首次初始化时，默认存储策略会直接创建成 `S3` 兼容存储
 - 默认 `S3` 指向栈内 `MinIO`，并由 `minio-init` 持续确保 `cloudreve` bucket 存在
@@ -165,7 +165,7 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 - 如果你要改成外部 S3 / MinIO，而不是用栈内 `minio`，就在第一次部署前改掉 `CR_INIT_S3_*`
 - 如果数据库已经初始化过，默认存储策略 `ID=1` 不会被自动重建
 - `PG / Redis` 仍然必须使用宿主机物理路径
-- `cloudreve-master` / `cloudreve-slave` / `minio` / `elasticsearch` / `tika` 字体目录默认走命名卷
+- `cloudreve-master` / `minio` / `elasticsearch` / `tika` 字体目录默认走命名卷
 - 如果你确实要改成宿主机绝对路径，就把对应的 `*_MOUNT_TYPE=bind`，并把 `*_MOUNT_SOURCE` 改成真实绝对路径
 - 如果是多 manager / 多机器部署，再看 `docs/docker-swarm-env-sync.md`
 - PostgreSQL / Redis / MinIO 默认镜像现在就是 Docker Hub 可直接 pull 的名字与 tag
@@ -189,7 +189,6 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 首次部署建议：
 
 - `CLOUDREVE_MASTER_REPLICAS=1`
-- `CLOUDREVE_SLAVE_SECRET` 先保留占位值
 - 先确认 `docker/swarm/deploy-private-registry.sh` 和 `docker/swarm/publish-private-images.sh` 已经执行完成
 
 执行主业务栈：
@@ -259,23 +258,24 @@ docker service logs -f cloudreve_cloudreve-master
 - 第三方抽取器如果也在 Swarm 内部网络，Kafka brokers 也填 `kafka:9092`
 - Kafka UI 也直接连 `kafka:9092`
 
-## 6. 回填从节点密钥
+## 6. 多节点模式才需要回填从节点密钥
 
 1. 在后台进入 `管理面板 -> 节点 -> 新建节点`
 2. 创建 slave node
 3. 复制生成的从节点密钥（`Slave Key`）
 4. 把 `.env.swarm` 中的 `CLOUDREVE_SLAVE_SECRET` 替换成真实值
-5. 重新执行一次 `docker/swarm/deploy-stack.sh`
+5. 重新执行一次 `docker/swarm/deploy-stack.sh --with-cluster`
 
 如果你不是用默认栈名，也可以直接：
 
 ```bash
-STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh
+STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh --with-cluster
 ```
 
 ## 7. 扩容原则
 
-- 可以直接扩：`cloudreve-master-proxy`、`cloudreve-slave`、`cloudreve-slave-proxy`、`tika`、`pgpool`、`redis-sentinel`、`redis-proxy`
+- 可以直接扩：`cloudreve-master-proxy`、`tika`、`pgpool`、`redis-sentinel`、`redis-proxy`
+- 如果启用了多节点 Cloudreve 从站，再扩：`cloudreve-slave`、`cloudreve-slave-proxy`
 - 不要直接扩：`postgresql-1/2/3`、`redis-1/2/3`
 - 如果 `cloudreve-master` 还是单机命名卷或单机 bind 运行目录，就不要直接扩到多个副本
 
