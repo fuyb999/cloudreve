@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	enttask "github.com/cloudreve/Cloudreve/v4/ent/task"
+	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
@@ -339,6 +340,8 @@ func (t *FullTextIndexTask) retryOrFallbackExternal(
 	job *ent.FTSExternalJob,
 	reason string,
 ) (enttask.Status, error) {
+	appendExternalExtractionFailureHistory(t, job, reason)
+
 	cfg := fm.settings.FTSExternalExtractor(ctx)
 	item, ok := state.Current()
 	if !ok {
@@ -365,6 +368,76 @@ func (t *FullTextIndexTask) retryOrFallbackExternal(
 
 	state.CompleteActive()
 	return t.persistAndContinue(state)
+}
+
+func appendExternalExtractionFailureHistory(t *FullTextIndexTask, job *ent.FTSExternalJob, reason string) {
+	if t == nil || t.DBTask == nil || t.Task == nil {
+		return
+	}
+
+	message := formatExternalExtractionFailureHistory(job, reason)
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+
+	t.Lock()
+	defer t.Unlock()
+
+	if t.Task.PublicState == nil {
+		t.Task.PublicState = &inventorytypes.TaskPublicState{}
+	}
+
+	history := t.Task.PublicState.ErrorHistory
+	if len(history) > 0 && history[len(history)-1] == message {
+		return
+	}
+
+	t.Task.PublicState.ErrorHistory = append(history, message)
+}
+
+func formatExternalExtractionFailureHistory(job *ent.FTSExternalJob, reason string) string {
+	metadata := make([]string, 0, 3)
+	if job != nil && strings.TrimSpace(job.RequestID) != "" {
+		metadata = append(metadata, "request_id="+strings.TrimSpace(job.RequestID))
+	}
+
+	message := ""
+	detail := ""
+	if job != nil && strings.TrimSpace(job.ErrorPayload) != "" {
+		if payload, err := parseFTSExternalErrorPayload(job.ErrorPayload); err == nil && payload != nil {
+			if stage := strings.TrimSpace(payload.Stage); stage != "" {
+				metadata = append(metadata, "stage="+stage)
+			}
+			if code := strings.TrimSpace(payload.Code); code != "" {
+				metadata = append(metadata, "code="+code)
+			}
+			message = strings.TrimSpace(payload.Message)
+			detail = strings.TrimSpace(payload.Detail)
+		} else {
+			detail = strings.TrimSpace(job.ErrorPayload)
+		}
+	}
+
+	prefix := "external fts extraction failed"
+	if len(metadata) > 0 {
+		prefix = fmt.Sprintf("%s [%s]", prefix, strings.Join(metadata, ", "))
+	}
+
+	parts := []string{prefix}
+	if message != "" {
+		parts = append(parts, message)
+	}
+	if detail != "" && detail != message {
+		parts = append(parts, detail)
+	}
+
+	reason = strings.TrimSpace(reason)
+	combined := strings.ToLower(strings.Join(parts, " "))
+	if reason != "" && !strings.Contains(combined, strings.ToLower(reason)) {
+		parts = append(parts, "fallback="+reason)
+	}
+
+	return strings.Join(parts, ": ")
 }
 
 func finalizeExternalIndexedFile(ctx context.Context, fm *manager, fileID int, job *ent.FTSExternalJob) (enttask.Status, error) {

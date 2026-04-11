@@ -3,8 +3,11 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -13,18 +16,24 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	taskModel "github.com/cloudreve/Cloudreve/v4/ent/task"
+	entuser "github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/encrypt"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/eventhub"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
+	fsmime "github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/mime"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/lock"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/mediameta"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
+	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
@@ -47,6 +56,18 @@ func (t testTextExtractor) Exts() []string {
 
 func (t testTextExtractor) MaxFileSize() int64 {
 	return t.maxFileSize
+}
+
+type failingTextExtractor struct {
+	testTextExtractor
+	err error
+}
+
+func (t failingTextExtractor) Extract(ctx context.Context, reader io.Reader) (string, error) {
+	if t.err != nil {
+		return "", t.err
+	}
+	return "", errors.New("extract failed")
 }
 
 func TestFullTextIndexTaskStateUpsertRemoveAndNormalize(t *testing.T) {
@@ -1081,6 +1102,138 @@ func TestPerformIndexingSkipsFoldersWhenFolderSyncDisabled(t *testing.T) {
 	}
 	if indexer.upserted != 0 {
 		t.Fatalf("expected no upsert when folder sync is disabled, got %d", indexer.upserted)
+	}
+}
+
+func TestPerformIndexingUpsertsLatestVersionWhenTextExtractionFails(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "broken.txt")
+	if err := os.WriteFile(tempFile, []byte("broken payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("broken payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	fileModel := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "broken.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  1,
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: failingTextExtractor{
+			testTextExtractor: testTextExtractor{
+				exts:        []string{"txt"},
+				maxFileSize: 1024,
+			},
+			err: errors.New("extract failed"),
+		},
+		fileClient: &testFileClient{
+			fileByID: map[int]*ent.File{
+				fileModel.ID: fileModel,
+			},
+			rootByOwner: map[int]*ent.File{
+				owner.ID: rootModel,
+			},
+			ancestorByID: map[int][]*ent.File{
+				fileModel.ID: {rootModel, fileModel},
+			},
+			childByParentName: map[int]map[string]*ent.File{
+				rootModel.ID: {
+					fileModel.Name: fileModel,
+				},
+			},
+			entityByID: map[int]*ent.Entity{
+				entityModel.ID: entityModel,
+			},
+		},
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if indexer.upserted != 1 {
+		t.Fatalf("expected one upsert, got %d", indexer.upserted)
+	}
+	if indexer.lastDoc == nil {
+		t.Fatal("expected indexed document to be captured")
+	}
+	if got := indexer.lastDoc.Content; got != "" {
+		t.Fatalf("expected empty content after extraction failure, got %q", got)
+	}
+	if indexer.lastDoc.LatestVersion == nil {
+		t.Fatal("expected latest_version to be preserved when extraction fails")
+	}
+	if got, want := indexer.lastDoc.LatestVersion.EntityID, entityModel.ID; got != want {
+		t.Fatalf("unexpected latest version entity id: got %d want %d", got, want)
+	}
+	if got, want := indexer.lastDoc.LatestVersion.Source, tempFile; got != want {
+		t.Fatalf("unexpected latest version source: got %q want %q", got, want)
+	}
+	if got, want := indexer.lastDoc.LatestVersion.Size, entityModel.Size; got != want {
+		t.Fatalf("unexpected latest version size: got %d want %d", got, want)
+	}
+	if len(backend.patches) != 1 {
+		t.Fatalf("expected metadata patch after successful upsert, got %+v", backend.patches)
+	}
+	if backend.patches[0].Key != dbfs.FullTextIndexKey {
+		t.Fatalf("unexpected metadata patch key: %+v", backend.patches[0])
 	}
 }
 
@@ -2124,6 +2277,10 @@ func (s testSettingProvider) MediaMetaGeocodingEnabled(ctx context.Context) bool
 	return false
 }
 
+func (s testSettingProvider) DBFS(ctx context.Context) *setting.DBFS {
+	return &setting.DBFS{}
+}
+
 type testDep struct {
 	dependency.Dep
 	settings      setting.Provider
@@ -2138,6 +2295,7 @@ type testDep struct {
 	policyClient  inventory.StoragePolicyClient
 	userClient    inventory.UserClient
 	nodePool      cluster.NodePool
+	hasher        hashid.Encoder
 	textExtractor searcher.TextExtractor
 	mediaMetaExt  mediameta.Extractor
 	thumbGen      thumb.Generator
@@ -2177,6 +2335,10 @@ func (d testDep) ConfigProvider() conf.ConfigProvider {
 	return d.config
 }
 
+func (d testDep) DBClient() *ent.Client {
+	return nil
+}
+
 func (d testDep) SearchIndexer(ctx context.Context) searcher.SearchIndexer {
 	return d.searchIndexer
 }
@@ -2205,11 +2367,43 @@ func (d testDep) KV() cache.Driver {
 	return nil
 }
 
+func (d testDep) NavigatorStateKV() cache.Driver {
+	return nil
+}
+
 func (d testDep) GeneralAuth() auth.Auth {
 	return nil
 }
 
 func (d testDep) HashIDEncoder() hashid.Encoder {
+	return d.hasher
+}
+
+func (d testDep) LockSystem() lock.LockSystem {
+	return nil
+}
+
+func (d testDep) ShareClient() inventory.ShareClient {
+	return nil
+}
+
+func (d testDep) DirectLinkClient() inventory.DirectLinkClient {
+	return nil
+}
+
+func (d testDep) RequestClient(opts ...request.Option) request.Client {
+	return nil
+}
+
+func (d testDep) MimeDetector(ctx context.Context) fsmime.MimeDetector {
+	return fsmime.NewMimeDetector(ctx, nil, logging.NewConsoleLogger(logging.LevelError))
+}
+
+func (d testDep) EncryptorFactory(ctx context.Context) encrypt.CryptorFactory {
+	return nil
+}
+
+func (d testDep) EventHub() eventhub.EventHub {
 	return nil
 }
 
@@ -2266,15 +2460,20 @@ type testSearchIndexer struct {
 	searcher.SearchIndexer
 	deleted  []int
 	upserted int
+	lastDoc  *searcher.SearchFileDocument
 }
 
 func (s *testSearchIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
 	s.upserted++
+	s.lastDoc = doc
 	return nil
 }
 
 func (s *testSearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*searcher.SearchFileDocument) error {
 	s.upserted += len(docs)
+	if len(docs) > 0 {
+		s.lastDoc = docs[len(docs)-1]
+	}
 	return nil
 }
 
@@ -2305,8 +2504,11 @@ func (s *testSearchIndexer) Close() error {
 
 type testFileClient struct {
 	inventory.FileClient
-	fileByID     map[int]*ent.File
-	ancestorByID map[int][]*ent.File
+	fileByID          map[int]*ent.File
+	rootByOwner       map[int]*ent.File
+	ancestorByID      map[int][]*ent.File
+	childByParentName map[int]map[string]*ent.File
+	entityByID        map[int]*ent.Entity
 }
 
 func (c *testFileClient) GetByID(ctx context.Context, id int) (*ent.File, error) {
@@ -2323,6 +2525,56 @@ func (c *testFileClient) GetAncestorFiles(ctx context.Context, target *ent.File)
 		}
 	}
 	return nil, inventory.ErrTreePathQueryUnavailable
+}
+
+func (c *testFileClient) GetEntitiesByIDs(ctx context.Context, ids []int, page int) ([]*ent.Entity, int, error) {
+	if len(ids) == 0 {
+		return nil, 0, nil
+	}
+
+	entities := make([]*ent.Entity, 0, len(ids))
+	for _, id := range ids {
+		if entity, ok := c.entityByID[id]; ok {
+			entities = append(entities, entity)
+		}
+	}
+
+	return entities, len(entities), nil
+}
+
+func (c *testFileClient) Root(ctx context.Context, user *ent.User) (*ent.File, error) {
+	if user != nil && c.rootByOwner != nil {
+		if root, ok := c.rootByOwner[user.ID]; ok {
+			return root, nil
+		}
+	}
+
+	return nil, &ent.NotFoundError{}
+}
+
+func (c *testFileClient) GetChildFile(ctx context.Context, root *ent.File, ownerID int, child string, eagerLoading bool) (*ent.File, error) {
+	if root != nil && c.childByParentName != nil {
+		if children, ok := c.childByParentName[root.ID]; ok {
+			if file, ok := children[child]; ok {
+				return file, nil
+			}
+		}
+	}
+
+	return nil, &ent.NotFoundError{}
+}
+
+type testUserClient struct {
+	inventory.UserClient
+	userByID map[int]*ent.User
+}
+
+func (c *testUserClient) GetByID(ctx context.Context, id int) (*ent.User, error) {
+	if user, ok := c.userByID[id]; ok {
+		return user, nil
+	}
+
+	return nil, &ent.NotFoundError{}
 }
 
 type testSettingClient struct {

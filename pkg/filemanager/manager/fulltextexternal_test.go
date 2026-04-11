@@ -710,6 +710,13 @@ func TestRetryOrFallbackExternalFallsBackToLocalWhenRetryBudgetExhausted(t *test
 	if taskModel.State() == "" {
 		t.Fatal("expected task private state to be persisted after fallback")
 	}
+	if taskModel.Model().PublicState == nil || len(taskModel.Model().PublicState.ErrorHistory) != 1 {
+		t.Fatalf("expected timeout failure to be recorded in task history, got %+v", taskModel.Model().PublicState)
+	}
+	if !strings.Contains(taskModel.Model().PublicState.ErrorHistory[0], "external fts extraction failed") ||
+		!strings.Contains(taskModel.Model().PublicState.ErrorHistory[0], "external job timed out") {
+		t.Fatalf("unexpected timeout history entry: %q", taskModel.Model().PublicState.ErrorHistory[0])
+	}
 
 	reloaded, err := client.FTSExternalJob.Query().Where(ftsexternaljob.RequestIDEQ("req-timeout")).Only(ctx)
 	if err != nil {
@@ -730,6 +737,59 @@ func TestRetryOrFallbackExternalFallsBackToLocalWhenRetryBudgetExhausted(t *test
 	}
 	if parsed.Code != "timeout" || parsed.Stage != "orchestrate" {
 		t.Fatalf("unexpected fallback error payload: %+v", parsed)
+	}
+}
+
+func TestRetryOrFallbackExternalRecordsProviderErrorDetailsInTaskHistory(t *testing.T) {
+	original := fullTextPerformIndexing
+	defer func() { fullTextPerformIndexing = original }()
+
+	fullTextPerformIndexing = func(ctx context.Context, fm *manager, fileID int) (enttask.Status, error) {
+		if fileID != 101 {
+			t.Fatalf("unexpected fallback file id: %d", fileID)
+		}
+		return enttask.StatusCompleted, nil
+	}
+
+	taskState := &FullTextIndexTaskState{}
+	taskState.Upsert(FullTextIndexTaskItem{FileID: 101})
+	if !taskState.ActivateNext() {
+		t.Fatal("expected active task item")
+	}
+
+	taskModel := &FullTextIndexTask{
+		DBTask: &queue.DBTask{Task: &ent.Task{PublicState: &inventorytypes.TaskPublicState{}}},
+	}
+	fm := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{externalCfg: &setting.FTSExternalExtractorSetting{Enabled: true, RetryMax: 0}},
+		dep:      testDep{},
+	}
+
+	job := &ent.FTSExternalJob{
+		RequestID:    "req-provider-error",
+		Attempt:      1,
+		ErrorPayload: `{"version":1,"request_id":"req-provider-error","status":"error","stage":"extract","code":"provider_error","message":"remote parser failed","detail":"third party extractor returned 500"}`,
+	}
+
+	status, err := taskModel.retryOrFallbackExternal(context.Background(), fm, taskState, job, "external job reported error")
+	if err != nil {
+		t.Fatalf("expected provider error to fall back locally, got error: %v", err)
+	}
+	if status != enttask.StatusProcessing {
+		t.Fatalf("unexpected status after provider error fallback: got %s want %s", status, enttask.StatusProcessing)
+	}
+	if taskModel.Model().PublicState == nil || len(taskModel.Model().PublicState.ErrorHistory) != 1 {
+		t.Fatalf("expected provider error to be recorded in task history, got %+v", taskModel.Model().PublicState)
+	}
+
+	history := taskModel.Model().PublicState.ErrorHistory[0]
+	if !strings.Contains(history, "req-provider-error") ||
+		!strings.Contains(history, "stage=extract") ||
+		!strings.Contains(history, "code=provider_error") ||
+		!strings.Contains(history, "remote parser failed") ||
+		!strings.Contains(history, "third party extractor returned 500") {
+		t.Fatalf("unexpected provider error history entry: %q", history)
 	}
 }
 
