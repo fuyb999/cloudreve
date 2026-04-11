@@ -5,6 +5,7 @@
 对应文件：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.single.yml`
 - `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
@@ -75,7 +76,30 @@
 - 首次上线前必须先 push 到私有仓库
 - 如果把私有仓库和主业务栈绑死在一起，首发顺序会更容易出错
 
-### 2.2 `docker-compose.swarm.yml`
+### 2.2 `docker-compose.swarm.single.yml`
+
+这是默认单节点全量模板。
+
+`docker/swarm/deploy-stack.sh` 在未启用 `SWARM_WITH_CLUSTER=yes` 时会直接使用它，
+一次起整套单节点服务：
+
+- `cloudreve-master`
+- `cloudreve-master-proxy`
+- `cloudreve-slave`
+- `cloudreve-slave-proxy`
+- `postgresql-1`
+- `pgpool`
+- `redis-1`
+- `redis-proxy`
+- `minio`
+- `minio-init`
+- `elasticsearch`
+- `kafka`
+- `kafka-ui`
+- `tika`
+- `onlyoffice`
+
+### 2.3 `docker-compose.swarm.yml`
 
 这是 Cloudreve 业务层模板，只包含：
 
@@ -84,9 +108,9 @@
 - `cloudreve-slave`
 - `cloudreve-slave-proxy`
 
-### 2.3 `docker-compose.swarm.foundation.yml`
+### 2.4 `docker-compose.swarm.foundation.yml`
 
-这是基础中间件模板，包含：
+这是多节点模式下共用的基础中间件模板，包含：
 
 - `postgresql-1/2/3`
 - `pgpool`
@@ -95,8 +119,6 @@
 - `redis-proxy`
 - `tika`
 - `onlyoffice`
-- 单节点 `minio`
-- 单节点 `elasticsearch`
 
 这个文件里最重要的设计点：
 
@@ -106,14 +128,14 @@
 - PostgreSQL / Redis 默认就是 `bind`
 - 其他运行目录默认 `volume`，但可以切换成 `bind`
 
-### 2.4 `docker-compose.swarm.cluster.yml`
+### 2.5 `docker-compose.swarm.cluster.yml`
 
 这是集群覆盖文件，只在下面两种情况生效：
 
 - `.env.swarm` 里设置了 `SWARM_WITH_CLUSTER=yes`
 - 或部署时执行 `docker/swarm/deploy-stack.sh --with-cluster`
 
-它会把基础模板里的单节点 `minio` / `elasticsearch` 覆盖为：
+它会在 `docker-compose.swarm.yml + docker-compose.swarm.foundation.yml` 的基础上再叠加：
 
 - `minio-1/2/3/4` + `minio` 代理入口
 - `elasticsearch-1/2/3` + `elasticsearch` 代理入口
@@ -129,7 +151,7 @@
 - Kafka KRaft 固定节点不适合走 Swarm VIP
 - 控制面必须尽量直接点到点
 
-### 2.5 为什么不再保留 `docker-compose.swarm.bind.yml`
+### 2.6 为什么不再保留 `docker-compose.swarm.bind.yml`
 
 这个覆盖文件已经废弃，原因很直接：
 

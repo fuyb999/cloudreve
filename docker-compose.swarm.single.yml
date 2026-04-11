@@ -1,0 +1,790 @@
+# Cloudreve Swarm 单节点全量模板。
+#
+# 包含：
+# - Cloudreve 主站 / 从站 / 入口代理
+# - PostgreSQL 单节点 + Pgpool 单节点
+# - Redis 单节点 + Redis Proxy 单节点
+# - MinIO 单节点 + MinIO 初始化
+# - Elasticsearch 单节点
+# - Kafka 单节点 + Kafka UI
+# - Tika
+# - OnlyOffice 8
+#
+# 说明：
+# - `docker/swarm/deploy-stack.sh` 默认在未启用 `SWARM_WITH_CLUSTER=yes`
+#   时使用这个文件。
+# - 为了让 Cloudreve / Authverse / 运维脚本尽量复用现有连接关系，
+#   这里保留了 `pgpool`、`redis-proxy`、`postgresql-1`、`kafka` 这些服务名。
+
+services:
+  cloudreve-master:
+    image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:4.15.0}
+    hostname: "{{.Node.Hostname}}-cr-master-{{.Task.Slot}}"
+    environment:
+      CR_CONF_System.Mode: master
+      CR_CONF_System.Listen: ":5212"
+      CR_CONF_System.ProxyHeader: X-Forwarded-For
+      CR_CONF_System.SessionSecret: ${CLOUDREVE_SESSION_SECRET:?set CLOUDREVE_SESSION_SECRET}
+      CR_CONF_Database.Type: postgres
+      CR_CONF_Database.Host: pgpool
+      CR_CONF_Database.Port: "5432"
+      CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
+      CR_CONF_Database.Password: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+      CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
+      CR_CONF_Redis.Server: redis-proxy:6379
+      CR_CONF_Redis.Password: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+      CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
+      CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
+      CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
+      CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:?set CLOUDREVE_SITE_URL}
+      CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
+      CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-http://minio:9000}
+      CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
+      CR_INIT_S3_ACCESS_KEY: ${CR_INIT_S3_ACCESS_KEY:-minio}
+      CR_INIT_S3_SECRET_KEY: ${CR_INIT_S3_SECRET_KEY:?set CR_INIT_S3_SECRET_KEY}
+      CR_INIT_S3_REGION: ${CR_INIT_S3_REGION:-us-east-1}
+      CR_INIT_S3_FORCE_PATH_STYLE: ${CR_INIT_S3_FORCE_PATH_STYLE:-true}
+      CR_INIT_S3_RELAY: ${CR_INIT_S3_RELAY:-true}
+      CR_INIT_S3_INTERNAL_PROXY: ${CR_INIT_S3_INTERNAL_PROXY:-true}
+      CR_INIT_S3_IS_PRIVATE: ${CR_INIT_S3_IS_PRIVATE:-true}
+      CR_INIT_S3_CHUNK_SIZE: ${CR_INIT_S3_CHUNK_SIZE:-26214400}
+    volumes:
+      - type: ${CLOUDREVE_MASTER_RUNTIME_MOUNT_TYPE:-volume}
+        source: ${CLOUDREVE_MASTER_RUNTIME_MOUNT_SOURCE:-cloudreve_master_runtime}
+        target: /cloudreve/data
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:5212/api/v4/site/ping >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 2m
+      placement:
+        constraints:
+          - ${CLOUDREVE_MASTER_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${CLOUDREVE_MASTER_CPU_RESERVATION:-1.0}"
+          memory: "${CLOUDREVE_MASTER_MEM_RESERVATION:-2G}"
+        limits:
+          cpus: "${CLOUDREVE_MASTER_CPU_LIMIT:-2.0}"
+          memory: "${CLOUDREVE_MASTER_MEM_LIMIT:-4G}"
+
+  cloudreve-master-proxy:
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-cr-master-proxy-{{.Task.Slot}}"
+    environment:
+      SERVER_NAME: ${CLOUDREVE_MASTER_SERVER_NAME:-_}
+      UPSTREAM_SERVICE: cloudreve-master:5212
+      CLIENT_MAX_BODY_SIZE: ${CLOUDREVE_MASTER_CLIENT_MAX_BODY_SIZE:-0}
+      PROXY_READ_TIMEOUT: ${CLOUDREVE_MASTER_PROXY_READ_TIMEOUT:-3600s}
+      PROXY_SEND_TIMEOUT: ${CLOUDREVE_MASTER_PROXY_SEND_TIMEOUT:-3600s}
+    configs:
+      - source: cloudreve_proxy_template_v2
+        target: /etc/nginx/templates/default.conf.template
+        mode: 0444
+    ports:
+      - target: 80
+        published: ${CLOUDREVE_MASTER_HTTP_PORT:-80}
+        protocol: tcp
+        mode: ingress
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 2m
+      placement:
+        constraints:
+          - ${CLOUDREVE_MASTER_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${CLOUDREVE_MASTER_PROXY_CPU_RESERVATION:-0.25}"
+          memory: "${CLOUDREVE_MASTER_PROXY_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${CLOUDREVE_MASTER_PROXY_CPU_LIMIT:-1.0}"
+          memory: "${CLOUDREVE_MASTER_PROXY_MEM_LIMIT:-512M}"
+
+  cloudreve-slave:
+    image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:4.15.0}
+    hostname: "{{.Node.Hostname}}-cr-slave-{{.Task.Slot}}"
+    environment:
+      CR_CONF_System.Mode: slave
+      CR_CONF_System.Listen: ":5212"
+      CR_CONF_System.ProxyHeader: X-Forwarded-For
+      CR_CONF_Slave.Secret: ${CLOUDREVE_SLAVE_SECRET:?set CLOUDREVE_SLAVE_SECRET}
+      CR_CONF_CORS.AllowOrigins: "*"
+      CR_CONF_CORS.AllowMethods: OPTIONS,GET,POST
+      CR_CONF_CORS.AllowHeaders: "*"
+      CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
+      CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
+      CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
+      CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+    volumes:
+      - type: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_TYPE:-volume}
+        source: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_SOURCE:-cloudreve_slave_runtime}
+        target: /cloudreve/data
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - --post-data='{}' http://127.0.0.1:5212/api/v4/slave/ping >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 2m
+      placement:
+        constraints:
+          - ${CLOUDREVE_SLAVE_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${CLOUDREVE_SLAVE_CPU_RESERVATION:-0.5}"
+          memory: "${CLOUDREVE_SLAVE_MEM_RESERVATION:-1G}"
+        limits:
+          cpus: "${CLOUDREVE_SLAVE_CPU_LIMIT:-1.5}"
+          memory: "${CLOUDREVE_SLAVE_MEM_LIMIT:-2G}"
+
+  cloudreve-slave-proxy:
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-cr-slave-proxy-{{.Task.Slot}}"
+    environment:
+      SERVER_NAME: ${CLOUDREVE_SLAVE_SERVER_NAME:-_}
+      UPSTREAM_SERVICE: cloudreve-slave:5212
+      CLIENT_MAX_BODY_SIZE: ${CLOUDREVE_SLAVE_CLIENT_MAX_BODY_SIZE:-0}
+      PROXY_READ_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_READ_TIMEOUT:-3600s}
+      PROXY_SEND_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_SEND_TIMEOUT:-3600s}
+    configs:
+      - source: cloudreve_proxy_template_v2
+        target: /etc/nginx/templates/default.conf.template
+        mode: 0444
+    ports:
+      - target: 80
+        published: ${CLOUDREVE_SLAVE_HTTP_PORT:-5213}
+        protocol: tcp
+        mode: ingress
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 2m
+      placement:
+        constraints:
+          - ${CLOUDREVE_SLAVE_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_RESERVATION:-0.25}"
+          memory: "${CLOUDREVE_SLAVE_PROXY_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${CLOUDREVE_SLAVE_PROXY_CPU_LIMIT:-1.0}"
+          memory: "${CLOUDREVE_SLAVE_PROXY_MEM_LIMIT:-512M}"
+
+  postgresql-1:
+    image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
+    hostname: "{{.Node.Hostname}}-pg1"
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
+      POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
+      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+      POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
+      POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_SINGLE_NODE_NUM_SYNCHRONOUS_REPLICAS:-0}
+      REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
+      REPMGR_PRIMARY_HOST: postgresql-1
+      REPMGR_PARTNER_NODES: ${REPMGR_SINGLE_NODE_PARTNER_NODES:-postgresql-1}
+      REPMGR_NODE_NAME: postgresql-1
+      REPMGR_NODE_NETWORK_NAME: postgresql-1
+      REPMGR_ADVERTISE_HOST: postgresql-1
+      REPMGR_NODE_ID: "1"
+      REPMGR_LOG_LEVEL: NOTICE
+    configs:
+      - source: postgresql_repmgr_run_v4
+        target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
+        mode: 0555
+    volumes:
+      - type: ${PG_1_DATA_MOUNT_TYPE:-bind}
+        source: ${PG_1_DATA_MOUNT_SOURCE:?set PG_1_DATA_MOUNT_SOURCE}
+        target: /bitnami/postgresql
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRESQL_USERNAME:-cloudreve} -d ${POSTGRESQL_DATABASE:-cloudreve} || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 2m
+    deploy:
+      replicas: 1
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 2m
+      placement:
+        constraints:
+          - ${PG_NODE_1_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${POSTGRESQL_CPU_RESERVATION:-2.0}"
+          memory: "${POSTGRESQL_MEM_RESERVATION:-4G}"
+        limits:
+          cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
+          memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
+
+  pgpool:
+    image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-pgpool"
+    environment:
+      PGPOOL_BACKEND_NODES: ${PGPOOL_SINGLE_NODE_BACKEND_NODES:-0:postgresql-1:5432}
+      PGPOOL_POSTGRES_USERNAME: postgres
+      PGPOOL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
+      PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
+      PGPOOL_SR_CHECK_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+      PGPOOL_ENABLE_LOAD_BALANCING: "no"
+      PGPOOL_ENABLE_POOL_HBA: "yes"
+      PGPOOL_ADMIN_USERNAME: ${PGPOOL_ADMIN_USERNAME:-admin}
+      PGPOOL_ADMIN_PASSWORD: ${PGPOOL_ADMIN_PASSWORD:?set PGPOOL_ADMIN_PASSWORD}
+      PGPOOL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
+      PGPOOL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+    ports:
+      - target: 5432
+        published: ${PGPOOL_PUBLIC_PORT:-15432}
+        protocol: tcp
+        mode: ingress
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 2m
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 2m
+      placement:
+        constraints:
+          - ${PGPOOL_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${PGPOOL_CPU_RESERVATION:-0.5}"
+          memory: "${PGPOOL_MEM_RESERVATION:-512M}"
+        limits:
+          cpus: "${PGPOOL_CPU_LIMIT:-2.0}"
+          memory: "${PGPOOL_MEM_LIMIT:-2G}"
+
+  redis-1:
+    image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-redis1"
+    environment:
+      ALLOW_EMPTY_PASSWORD: "no"
+      REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
+      REDIS_REPLICATION_MODE: master
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    volumes:
+      - type: ${REDIS_1_DATA_MOUNT_TYPE:-bind}
+        source: ${REDIS_1_DATA_MOUNT_SOURCE:?set REDIS_1_DATA_MOUNT_SOURCE}
+        target: /bitnami/redis/data
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:?set REDIS_PASSWORD} ping | grep PONG >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    deploy:
+      replicas: 1
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+        window: 2m
+      placement:
+        constraints:
+          - ${REDIS_NODE_1_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${REDIS_CPU_RESERVATION:-1.0}"
+          memory: "${REDIS_MEM_RESERVATION:-2G}"
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-2.0}"
+          memory: "${REDIS_MEM_LIMIT:-4G}"
+
+  redis-proxy:
+    image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-redis-proxy"
+    environment:
+      REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
+      REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
+      REDIS_SENTINEL_ENABLED: "no"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    entrypoint: ["/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
+    configs:
+      - source: redis_proxy_bootstrap_v8
+        target: /usr/local/bin/redis-proxy-bootstrap.sh
+        mode: 0555
+    ports:
+      - target: 6379
+        published: ${REDIS_PROXY_PUBLIC_PORT:-16379}
+        protocol: tcp
+        mode: ingress
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+        window: 2m
+      placement:
+        constraints:
+          - ${REDIS_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${REDIS_PROXY_CPU_RESERVATION:-0.25}"
+          memory: "${REDIS_PROXY_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${REDIS_PROXY_CPU_LIMIT:-1.0}"
+          memory: "${REDIS_PROXY_MEM_LIMIT:-512M}"
+
+  minio:
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-minio"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "no"
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    configs:
+      - source: minio_swarm_entrypoint_v1
+        target: /usr/local/bin/minio-swarm-entrypoint.sh
+        mode: 0555
+    ports:
+      - target: 9000
+        published: ${MINIO_API_PORT:-9000}
+        protocol: tcp
+        mode: ingress
+      - target: 9001
+        published: ${MINIO_CONSOLE_PORT:-9001}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${MINIO_DATA_MOUNT_TYPE:-volume}
+        source: ${MINIO_DATA_MOUNT_SOURCE:-minio_data}
+        target: /bitnami/minio/data
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${MINIO_CPU_RESERVATION:-1.0}"
+          memory: "${MINIO_MEM_RESERVATION:-2G}"
+        limits:
+          cpus: "${MINIO_CPU_LIMIT:-2.0}"
+          memory: "${MINIO_MEM_LIMIT:-4G}"
+
+  minio-init:
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-minio-init"
+    environment:
+      MINIO_ENDPOINT: ${MINIO_INIT_ENDPOINT:-http://minio:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_INIT_INTERVAL_SECONDS: ${MINIO_INIT_INTERVAL_SECONDS:-30}
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-init.sh"]
+    configs:
+      - source: minio_init_v1
+        target: /usr/local/bin/minio-init.sh
+        mode: 0555
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${MINIO_INIT_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${MINIO_INIT_CPU_RESERVATION:-0.05}"
+          memory: "${MINIO_INIT_MEM_RESERVATION:-64M}"
+        limits:
+          cpus: "${MINIO_INIT_CPU_LIMIT:-0.25}"
+          memory: "${MINIO_INIT_MEM_LIMIT:-128M}"
+
+  elasticsearch:
+    image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
+    hostname: "{{.Node.Hostname}}-elasticsearch"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_JAVA_OPTS:--Xms4g -Xmx4g}"
+    ports:
+      - target: 9200
+        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
+        protocol: tcp
+        mode: ingress
+      - target: 9300
+        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${ELASTICSEARCH_DATA_MOUNT_TYPE:-volume}
+        source: ${ELASTICSEARCH_DATA_MOUNT_SOURCE:-elasticsearch_data}
+        target: /usr/share/elasticsearch/data
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200 >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${ELASTICSEARCH_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_CPU_RESERVATION:-2.0}"
+          memory: "${ELASTICSEARCH_MEM_RESERVATION:-4G}"
+        limits:
+          cpus: "${ELASTICSEARCH_CPU_LIMIT:-4.0}"
+          memory: "${ELASTICSEARCH_MEM_LIMIT:-8G}"
+
+  kafka:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
+    hostname: "{{.Node.Hostname}}-kafka"
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_SINGLE_NODE_ADVERTISED_LISTENER:-kafka:9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_SINGLE_NODE_CONTROLLER_QUORUM_VOTERS:-1@kafka:9093}
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "${KAFKA_SINGLE_NODE_JVM_HEAP_OPTS:--Xms512m -Xmx512m}"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}"
+      KAFKA_NUM_PARTITIONS: "${KAFKA_SINGLE_NODE_NUM_PARTITIONS:-1}"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "${KAFKA_SINGLE_NODE_DEFAULT_REPLICATION_FACTOR:-1}"
+      KAFKA_MIN_INSYNC_REPLICAS: "${KAFKA_SINGLE_NODE_MIN_INSYNC_REPLICAS:-1}"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "${KAFKA_SINGLE_NODE_OFFSETS_TOPIC_REPLICATION_FACTOR:-1}"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "${KAFKA_SINGLE_NODE_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-1}"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_SINGLE_NODE_TRANSACTION_STATE_LOG_MIN_ISR:-1}"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_SINGLE_NODE_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - type: ${KAFKA_DATA_MOUNT_TYPE:-volume}
+        source: ${KAFKA_DATA_MOUNT_SOURCE:-kafka_data}
+        target: /var/lib/kafka/data
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${KAFKA_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${KAFKA_CPU_RESERVATION:-0.5}"
+          memory: "${KAFKA_MEM_RESERVATION:-1G}"
+        limits:
+          cpus: "${KAFKA_CPU_LIMIT:-1.0}"
+          memory: "${KAFKA_MEM_LIMIT:-2G}"
+
+  kafka-ui:
+    image: ${KAFKA_UI_IMAGE:-provectuslabs/kafka-ui:v0.7.2}
+    hostname: "{{.Node.Hostname}}-kafka-ui"
+    environment:
+      SERVER_PORT: "8080"
+      DYNAMIC_CONFIG_ENABLED: "${KAFKA_UI_DYNAMIC_CONFIG_ENABLED:-false}"
+      KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTER_NAME:-cloudreve-kafka}
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_UI_BOOTSTRAP_SERVERS:-kafka:9092}
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-PLAINTEXT}
+    ports:
+      - target: 8080
+        published: ${KAFKA_UI_HTTP_PORT:-18089}
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/actuator/health >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - ${KAFKA_UI_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${KAFKA_UI_CPU_RESERVATION:-0.25}"
+          memory: "${KAFKA_UI_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${KAFKA_UI_CPU_LIMIT:-1.0}"
+          memory: "${KAFKA_UI_MEM_LIMIT:-1G}"
+
+  tika:
+    image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
+    hostname: "{{.Node.Hostname}}-tika"
+    environment:
+      TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
+      TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
+    ports:
+      - target: 9998
+        published: ${TIKA_HTTP_PORT:-9998}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-volume}
+        source: ${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-tika_custom_fonts}
+        target: /tika-fonts/custom
+        read_only: true
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+        window: 2m
+      placement:
+        constraints:
+          - ${TIKA_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${TIKA_CPU_RESERVATION:-0.5}"
+          memory: "${TIKA_MEM_RESERVATION:-1G}"
+        limits:
+          cpus: "${TIKA_CPU_LIMIT:-2.0}"
+          memory: "${TIKA_MEM_LIMIT:-2G}"
+
+  onlyoffice:
+    image: ${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:8.2.2}
+    hostname: "{{.Node.Hostname}}-onlyoffice"
+    environment:
+      JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-replace-with-strong-onlyoffice-jwt-secret}
+    ports:
+      - target: 80
+        published: ${ONLYOFFICE_HTTP_PORT:-18090}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: ${ONLYOFFICE_DATA_MOUNT_TYPE:-volume}
+        source: ${ONLYOFFICE_DATA_MOUNT_SOURCE:-onlyoffice_data}
+        target: /var/www/onlyoffice/Data
+      - type: ${ONLYOFFICE_LIB_MOUNT_TYPE:-volume}
+        source: ${ONLYOFFICE_LIB_MOUNT_SOURCE:-onlyoffice_lib}
+        target: /var/lib/onlyoffice
+      - type: ${ONLYOFFICE_LOG_MOUNT_TYPE:-volume}
+        source: ${ONLYOFFICE_LOG_MOUNT_SOURCE:-onlyoffice_log}
+        target: /var/log/onlyoffice
+      - type: ${ONLYOFFICE_DB_MOUNT_TYPE:-volume}
+        source: ${ONLYOFFICE_DB_MOUNT_SOURCE:-onlyoffice_db}
+        target: /var/lib/postgresql
+      - type: ${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}
+        source: ${ONLYOFFICE_RABBITMQ_MOUNT_SOURCE:-onlyoffice_rabbitmq}
+        target: /var/lib/rabbitmq
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/healthcheck >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 2m
+    deploy:
+      replicas: ${ONLYOFFICE_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: ${SWARM_ROLLING_ORDER:-start-first}
+        failure_action: rollback
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 10
+        window: 3m
+      placement:
+        constraints:
+          - ${ONLYOFFICE_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${ONLYOFFICE_CPU_RESERVATION:-1.0}"
+          memory: "${ONLYOFFICE_MEM_RESERVATION:-2G}"
+        limits:
+          cpus: "${ONLYOFFICE_CPU_LIMIT:-4.0}"
+          memory: "${ONLYOFFICE_MEM_LIMIT:-4G}"
+
+networks:
+  cloudreve_backend:
+    driver: overlay
+    attachable: true
+    ipam:
+      config:
+        - subnet: ${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}
+
+volumes:
+  cloudreve_master_runtime:
+  cloudreve_slave_runtime:
+  postgresql_1_data:
+  redis_1_data:
+  minio_data:
+  elasticsearch_data:
+  kafka_data:
+  tika_custom_fonts:
+  onlyoffice_data:
+  onlyoffice_lib:
+  onlyoffice_log:
+  onlyoffice_db:
+  onlyoffice_rabbitmq:
+
+configs:
+  cloudreve_proxy_template_v2:
+    file: ./docker/swarm/nginx/cloudreve-proxy.conf.template
+  postgresql_repmgr_run_v4:
+    file: ./docker/swarm/postgresql-repmgr-run.sh
+  redis_proxy_bootstrap_v8:
+    file: ./docker/swarm/redis-proxy-bootstrap.sh
+  minio_swarm_entrypoint_v1:
+    file: ./docker/swarm/minio-swarm-entrypoint.sh
+  minio_init_v1:
+    file: ./docker/swarm/minio-init.sh

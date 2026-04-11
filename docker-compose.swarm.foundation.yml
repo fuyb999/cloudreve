@@ -3,14 +3,13 @@
 # 包含：
 # - PostgreSQL 3 节点 + Pgpool
 # - Redis 3 节点 + Sentinel + Proxy
-# - 单节点 MinIO / Elasticsearch 兼容形态
 # - Tika
 # - OnlyOffice 8
 #
 # 说明：
-# - `docker/swarm/deploy-stack.sh` 默认会把这个文件和 `docker-compose.swarm.yml` 一起渲染。
-# - 如果启用 `SWARM_WITH_CLUSTER=yes`，这里的单节点 `minio` / `elasticsearch`
-#   会被部署脚本剔除，再叠加 `docker-compose.swarm.cluster.yml`。
+# - 这个文件只在 `docker/swarm/deploy-stack.sh --with-cluster`
+#   或 `SWARM_WITH_CLUSTER=yes` 时参与主栈渲染。
+# - 默认单节点联调走 `docker-compose.swarm.single.yml`。
 # - `onlyoffice` 默认 `replicas=0`，只是先把生产级参数和挂载方式收进 Swarm 体系里，需要时再开启。
 
 services:
@@ -398,7 +397,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     entrypoint: ["/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
-      - source: redis_proxy_bootstrap_v7
+      - source: redis_proxy_bootstrap_v8
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
     ports:
@@ -434,61 +433,6 @@ services:
           cpus: "${REDIS_PROXY_CPU_LIMIT:-1.0}"
           memory: "${REDIS_PROXY_MEM_LIMIT:-512M}"
 
-  # swarm 集群模式开启时，这段单节点 MinIO 会被部署脚本剔除，
-  # 再由 `docker-compose.swarm.cluster.yml` 提供同名代理入口和多节点后端。
-  # swarm-cluster-strip:minio:begin
-  minio:
-    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
-    hostname: "{{.Node.Hostname}}-minio"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
-      MINIO_DISTRIBUTED_MODE_ENABLED: "no"
-      MINIO_DATA_DIR: /bitnami/minio/data
-      MINIO_API_PORT_NUMBER: "9000"
-      MINIO_CONSOLE_PORT_NUMBER: "9001"
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
-    configs:
-      - source: minio_swarm_entrypoint_v1
-        target: /usr/local/bin/minio-swarm-entrypoint.sh
-        mode: 0555
-    ports:
-      - target: 9000
-        published: ${MINIO_API_PORT:-9000}
-        protocol: tcp
-        mode: ingress
-      - target: 9001
-        published: ${MINIO_CONSOLE_PORT:-9001}
-        protocol: tcp
-        mode: ingress
-    volumes:
-      - type: ${MINIO_DATA_MOUNT_TYPE:-volume}
-        source: ${MINIO_DATA_MOUNT_SOURCE:-minio_data}
-        target: /bitnami/minio/data
-    networks:
-      - cloudreve_backend
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
-      interval: 20s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-      placement:
-        constraints:
-          - ${MINIO_NODE_CONSTRAINT:-node.platform.os==linux}
-      resources:
-        reservations:
-          cpus: "${MINIO_CPU_RESERVATION:-1.0}"
-          memory: "${MINIO_MEM_RESERVATION:-2G}"
-        limits:
-          cpus: "${MINIO_CPU_LIMIT:-2.0}"
-          memory: "${MINIO_MEM_LIMIT:-4G}"
-  # swarm-cluster-strip:minio:end
-
   minio-init:
     image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
     hostname: "{{.Node.Hostname}}-minio-init-{{.Task.Slot}}"
@@ -520,47 +464,6 @@ services:
         limits:
           cpus: "${MINIO_INIT_CPU_LIMIT:-0.25}"
           memory: "${MINIO_INIT_MEM_LIMIT:-128M}"
-
-  # swarm 集群模式开启时，这段单节点 Elasticsearch 会被部署脚本剔除，
-  # 再由 `docker-compose.swarm.cluster.yml` 提供同名代理入口和多节点后端。
-  # swarm-cluster-strip:elasticsearch:begin
-  elasticsearch:
-    image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
-    hostname: "{{.Node.Hostname}}-elasticsearch"
-    environment:
-      discovery.type: single-node
-      xpack.security.enabled: "false"
-      ES_JAVA_OPTS: "${ELASTICSEARCH_JAVA_OPTS:--Xms4g -Xmx4g}"
-    ports:
-      - target: 9200
-        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
-        protocol: tcp
-        mode: ingress
-      - target: 9300
-        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
-        protocol: tcp
-        mode: ingress
-    volumes:
-      - type: ${ELASTICSEARCH_DATA_MOUNT_TYPE:-volume}
-        source: ${ELASTICSEARCH_DATA_MOUNT_SOURCE:-elasticsearch_data}
-        target: /usr/share/elasticsearch/data
-    networks:
-      - cloudreve_backend
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-      placement:
-        constraints:
-          - ${ELASTICSEARCH_NODE_CONSTRAINT:-node.platform.os==linux}
-      resources:
-        reservations:
-          cpus: "${ELASTICSEARCH_CPU_RESERVATION:-2.0}"
-          memory: "${ELASTICSEARCH_MEM_RESERVATION:-4G}"
-        limits:
-          cpus: "${ELASTICSEARCH_CPU_LIMIT:-4.0}"
-          memory: "${ELASTICSEARCH_MEM_LIMIT:-8G}"
-  # swarm-cluster-strip:elasticsearch:end
 
   tika:
     image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
@@ -676,8 +579,6 @@ volumes:
   redis_1_data:
   redis_2_data:
   redis_3_data:
-  minio_data:
-  elasticsearch_data:
   tika_custom_fonts:
   onlyoffice_data:
   onlyoffice_lib:
@@ -688,7 +589,7 @@ volumes:
 configs:
   postgresql_repmgr_run_v4:
     file: ./docker/swarm/postgresql-repmgr-run.sh
-  redis_proxy_bootstrap_v7:
+  redis_proxy_bootstrap_v8:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
   minio_swarm_entrypoint_v1:
     file: ./docker/swarm/minio-swarm-entrypoint.sh

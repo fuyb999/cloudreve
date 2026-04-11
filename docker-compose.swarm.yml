@@ -6,8 +6,9 @@
 # 4. 如果某个从节点参与存储策略，它的访问地址也必须能被终端用户访问到。
 #
 # 重要说明：
+# - 默认单节点全量联调模板在 `docker-compose.swarm.single.yml`。
 # - 这个文件只承载 Cloudreve 主站 / 从站 / 入口代理。
-# - PostgreSQL / Redis / Tika / OnlyOffice / 单节点 MinIO / 单节点 Elasticsearch
+# - PostgreSQL / Redis / Tika / OnlyOffice
 #   已经拆到 `docker-compose.swarm.foundation.yml`。
 # - MinIO / Elasticsearch / Kafka / Kafka UI 集群形态在 `docker-compose.swarm.cluster.yml`。
 # - Cloudreve 运行目录仍统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`。

@@ -3,6 +3,7 @@
 这份清单对应当前仓库里的生产默认值：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.single.yml`
 - `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
@@ -46,14 +47,16 @@
 - `PG / Redis` 默认仍是 `bind`，但变量名也统一成了 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
 - Cloudreve 首次初始化时，默认存储策略会直接创建成 `S3` 兼容存储
 - 默认 `S3` 指向栈内 `MinIO`，并由 `minio-init` 持续确保 `cloudreve` bucket 存在
+- 默认 `docker/swarm/deploy-stack.sh` 会直接使用单节点全量模板
 - `SWARM_WITH_CLUSTER=yes` 时，会切成 4 节点 MinIO + 3 节点 Elasticsearch + 3 节点 Kafka
 - Kafka UI 会一起挂上，默认对外端口 `18089`
-- OnlyOffice 8 已并入基础中间件文件，默认 `ONLYOFFICE_REPLICAS=0`
+- 默认单节点模板里 OnlyOffice 8 也会一起起来；生产样例仍可通过 `ONLYOFFICE_REPLICAS=0` 关闭
 - 自定义镜像现在建议统一放到单点 `registry:2` 仓库栈，其它节点远程拉取
 - `cloudreve-master` 仍建议先保持 `1` 副本
 
 当前文件分组：
 
+- `docker-compose.swarm.single.yml`：默认单节点全量栈
 - `docker-compose.swarm.yml`：Cloudreve 主从
 - `docker-compose.swarm.foundation.yml`：PG / Redis / Tika / OnlyOffice
 - `docker-compose.swarm.cluster.yml`：MinIO / Kafka / ES / Kafka UI 集群

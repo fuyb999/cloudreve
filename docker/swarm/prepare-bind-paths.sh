@@ -16,7 +16,7 @@ usage() {
 说明：
   这个脚本用于在宿主机上预创建 Swarm bind 路径，并修正常见权限。
   它不会替你执行 `docker stack deploy`，只负责准备宿主机目录。
-  如果 `.env.swarm` 里设置了 `SWARM_WITH_CLUSTER=yes`，`minio` / `elasticsearch`
+  如果 `.env.swarm` 里设置了 `SWARM_WITH_CLUSTER=yes`，`minio` / `elasticsearch` / `kafka`
   会自动切换为处理各自集群节点的路径。
 
 参数：
@@ -225,6 +225,8 @@ collect_entries() {
       if [[ "${KAFKA_3_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
         add_entry "KAFKA_3_DATA_MOUNT_SOURCE" "${KAFKA_3_DATA_MOUNT_SOURCE:-}" "1000:1000" "0775" "chown_recursive"
       fi
+    elif [[ "${KAFKA_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "KAFKA_DATA_MOUNT_SOURCE" "${KAFKA_DATA_MOUNT_SOURCE:-}" "1000:1000" "0775" "chown_recursive"
     fi
   fi
 

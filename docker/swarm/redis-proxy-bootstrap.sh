@@ -7,6 +7,7 @@ redis_master_port="${REDIS_MASTER_PORT_NUMBER:-6379}"
 redis_sentinel_host="${REDIS_SENTINEL_HOST:-redis-sentinel}"
 redis_sentinel_port="${REDIS_SENTINEL_PORT_NUMBER:-26379}"
 redis_master_set="${REDIS_MASTER_SET:-${REDIS_SENTINEL_MASTER_SET:-mymaster}}"
+redis_sentinel_enabled="${REDIS_SENTINEL_ENABLED:-yes}"
 redis_password="${REDIS_PASSWORD:-}"
 sentinel_lookup_retries="${REDIS_SENTINEL_LOOKUP_RETRIES:-60}"
 sentinel_lookup_interval="${REDIS_SENTINEL_LOOKUP_INTERVAL:-2}"
@@ -76,7 +77,14 @@ discover_master_from_sentinel() {
   return 1
 }
 
-discover_master_from_sentinel || true
+case "$redis_sentinel_enabled" in
+  yes|true|1|on)
+    discover_master_from_sentinel || true
+    ;;
+  *)
+    echo "[redis-proxy-bootstrap] 已关闭 Sentinel 探测，直接使用 REDIS_MASTER_HOST=${redis_master_host}:${redis_master_port}" >&2
+    ;;
+esac
 
 cat >"$cfg_file" <<EOF
 global

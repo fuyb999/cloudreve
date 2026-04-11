@@ -7,6 +7,7 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 STACK_NAME="${STACK_NAME:-cloudreve}"
 RESOLVED_DIR="${RESOLVED_DIR:-$ROOT_DIR/.tmp}"
 WITH_CLUSTER="${WITH_CLUSTER:-}"
+SINGLE_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.single.yml"
 APP_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.yml"
 FOUNDATION_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.foundation.yml"
 CLUSTER_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.cluster.yml"
@@ -19,8 +20,8 @@ usage() {
 参数：
   --stack-name NAME   Swarm 栈名称，默认是 cloudreve
   --env-file FILE     要读取的环境变量文件，默认是 .env.swarm
-  --with-cluster      启用 MinIO / Elasticsearch / Kafka 集群覆盖文件
-  --without-cluster   强制关闭 MinIO / Elasticsearch / Kafka 集群覆盖文件
+  --with-cluster      启用集群模式，使用 app + foundation + cluster 三组 YML
+  --without-cluster   强制关闭集群模式，使用单节点全量 YML
   --render-only       只渲染 stack 配置，不执行部署
   -h, --help          显示帮助
 
@@ -30,16 +31,6 @@ EOF
 }
 
 RENDER_ONLY=0
-
-strip_single_node_services() {
-  local src="$1"
-  local dst="$2"
-
-  sed \
-    -e '/^[[:space:]]*# swarm-cluster-strip:minio:begin$/,/^[[:space:]]*# swarm-cluster-strip:minio:end$/d' \
-    -e '/^[[:space:]]*# swarm-cluster-strip:elasticsearch:begin$/,/^[[:space:]]*# swarm-cluster-strip:elasticsearch:end$/d' \
-    "$src" >"$dst"
-}
 
 rewrite_relative_config_paths() {
   local src="$1"
@@ -105,13 +96,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$APP_COMPOSE_FILE" ]]; then
-  echo "找不到 Cloudreve Compose 文件: $APP_COMPOSE_FILE" >&2
-  exit 1
-fi
-
-if [[ ! -f "$FOUNDATION_COMPOSE_FILE" ]]; then
-  echo "找不到基础中间件 Compose 文件: $FOUNDATION_COMPOSE_FILE" >&2
+if [[ ! -f "$SINGLE_COMPOSE_FILE" ]]; then
+  echo "找不到单节点 Compose 文件: $SINGLE_COMPOSE_FILE" >&2
   exit 1
 fi
 
@@ -156,19 +142,23 @@ if [[ -n "${TIKA_CUSTOM_FONTS_HOST_PATH:-}" && -z "${TIKA_CUSTOM_FONTS_MOUNT_SOU
   export TIKA_CUSTOM_FONTS_MOUNT_SOURCE="$TIKA_CUSTOM_FONTS_HOST_PATH"
 fi
 
-compose_args=(-c "$APP_COMPOSE_FILE" -c "$FOUNDATION_COMPOSE_FILE")
-render_base_compose_file="$FOUNDATION_COMPOSE_FILE"
+compose_args=(-c "$SINGLE_COMPOSE_FILE")
 
 case "$WITH_CLUSTER" in
   yes)
+    if [[ ! -f "$APP_COMPOSE_FILE" ]]; then
+      echo "找不到 Cloudreve Compose 文件: $APP_COMPOSE_FILE" >&2
+      exit 1
+    fi
+    if [[ ! -f "$FOUNDATION_COMPOSE_FILE" ]]; then
+      echo "找不到基础中间件 Compose 文件: $FOUNDATION_COMPOSE_FILE" >&2
+      exit 1
+    fi
     if [[ ! -f "$CLUSTER_COMPOSE_FILE" ]]; then
       echo "找不到 cluster compose 文件: $CLUSTER_COMPOSE_FILE" >&2
       exit 1
     fi
-    render_base_compose_file="$RESOLVED_DIR/${STACK_NAME}-cluster-base.yaml"
-    strip_single_node_services "$FOUNDATION_COMPOSE_FILE" "$render_base_compose_file"
-    compose_args=(-c "$APP_COMPOSE_FILE" -c "$render_base_compose_file")
-    compose_args+=(-c "$CLUSTER_COMPOSE_FILE")
+    compose_args=(-c "$APP_COMPOSE_FILE" -c "$FOUNDATION_COMPOSE_FILE" -c "$CLUSTER_COMPOSE_FILE")
     ;;
   no)
     :
@@ -185,6 +175,8 @@ resolved_raw_file="$RESOLVED_DIR/${STACK_NAME}-resolved.raw.yaml"
 echo "正在渲染 stack 配置到: $resolved_file"
 if [[ "$WITH_CLUSTER" == "yes" ]]; then
   echo "已启用 MinIO / Elasticsearch / Kafka 集群覆盖文件。"
+else
+  echo "已使用单节点全量 Compose 文件。"
 fi
 docker stack config "${compose_args[@]}" >"$resolved_raw_file"
 rewrite_relative_config_paths "$resolved_raw_file" "$resolved_file"

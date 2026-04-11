@@ -3,6 +3,7 @@
 本文档对应仓库中的以下文件：
 
 - `docker-compose.swarm.yml`
+- `docker-compose.swarm.single.yml`
 - `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
 - `docker-compose.swarm.cluster.yml`
@@ -42,7 +43,26 @@
 
 ## 1. 当前默认架构
 
-当前 Swarm 栈采用如下拓扑：
+当前 Swarm 栈默认采用如下拓扑：
+
+- 默认模式：`docker-compose.swarm.single.yml` 单节点全量栈
+- 集群模式：`docker-compose.swarm.yml + docker-compose.swarm.foundation.yml + docker-compose.swarm.cluster.yml`
+
+默认单节点全量栈包含：
+
+- `cloudreve-master`
+- `cloudreve-master-proxy`
+- `cloudreve-slave`
+- `cloudreve-slave-proxy`
+- `postgresql-1 + pgpool`
+- `redis-1 + redis-proxy`
+- `minio + minio-init`
+- `elasticsearch`
+- `kafka + kafka-ui`
+- `tika`
+- `onlyoffice`
+
+集群模式下采用如下拓扑：
 
 - `registry`：单独的自定义镜像私有仓库栈
 - `cloudreve-master`：Cloudreve 主站
@@ -58,10 +78,11 @@
 - `tika`：文档解析
 - `onlyoffice`：OnlyOffice 8 文档协作服务，默认关闭
 
-现在 5 组 Swarm YML 的职责是：
+现在 6 组 Swarm YML 的职责是：
 
+- `docker-compose.swarm.single.yml`：默认单节点全量栈
 - `docker-compose.swarm.yml`：只放 `cloudreve` 主从与入口代理
-- `docker-compose.swarm.foundation.yml`：放 `PG / Redis / Tika / OnlyOffice`，以及单节点 `MinIO / Elasticsearch` 兼容形态
+- `docker-compose.swarm.foundation.yml`：放多节点模式下共用的 `PG / Redis / Tika / OnlyOffice`
 - `docker-compose.swarm.cluster.yml`：放 `MinIO / Kafka / Elasticsearch / Kafka UI` 集群形态
 - `docker-compose.swarm.auth.yml`：放 `authverse-web + authverse-backend`
 - `docker-compose.swarm.registry.yml`：只放 `registry:2`
@@ -83,9 +104,10 @@
 - Redis：不要共享运行数据目录
 - PostgreSQL / Redis：每个副本一个独立宿主机目录
 - Cloudreve 文件：默认就是 S3 兼容对象存储
-- 栈内默认 S3 实现是单副本 `minio`
+- 栈内默认 S3 实现是单节点 `minio`
 - `cloudreve-master`：默认还是建议 `1` 副本
-- `SWARM_WITH_CLUSTER=yes` 时，会把单节点 `minio` / `elasticsearch` 切换成多节点集群，并额外启用 3 节点 Kafka 集群
+- 默认 `docker/swarm/deploy-stack.sh` 直接走单节点全量模板
+- `SWARM_WITH_CLUSTER=yes` 时，会切到多节点组合，并额外启用 3 节点 Kafka 集群
 
 这套模板不是“让数据库共享卷跑起来”，而是：
 
