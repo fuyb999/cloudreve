@@ -130,18 +130,23 @@ services:
     hostname: minio-1
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
       MINIO_CONSOLE_PORT_NUMBER: "9001"
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_swarm_entrypoint_v1
         target: /usr/local/bin/minio-swarm-entrypoint.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
       interval: 20s
@@ -177,18 +182,23 @@ services:
     hostname: minio-2
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
       MINIO_CONSOLE_PORT_NUMBER: "9001"
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_swarm_entrypoint_v1
         target: /usr/local/bin/minio-swarm-entrypoint.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
       interval: 20s
@@ -224,18 +234,23 @@ services:
     hostname: minio-3
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
       MINIO_CONSOLE_PORT_NUMBER: "9001"
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_swarm_entrypoint_v1
         target: /usr/local/bin/minio-swarm-entrypoint.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
       interval: 20s
@@ -271,18 +286,23 @@ services:
     hostname: minio-4
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
       MINIO_CONSOLE_PORT_NUMBER: "9001"
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_swarm_entrypoint_v1
         target: /usr/local/bin/minio-swarm-entrypoint.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
       interval: 20s
@@ -318,17 +338,22 @@ services:
     hostname: "{{.Node.Hostname}}-minio-init-{{.Task.Slot}}"
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ENDPOINT: ${MINIO_INIT_ENDPOINT:-https://minio:9000}
       MINIO_CA_FILE: ${MINIO_INIT_CA_FILE:-/run/swarm-pki/ca/ca.crt}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
       MINIO_INIT_INTERVAL_SECONDS: ${MINIO_INIT_INTERVAL_SECONDS:-30}
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-init.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-init.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_init_v1
         target: /usr/local/bin/minio-init.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -836,6 +861,8 @@ services:
           memory: "${KAFKA_UI_PUBLIC_MEM_LIMIT:-512M}"
 
 configs:
+  swarm_secret_wrap_v1:
+    file: ./docker/swarm/swarm-secret-wrap.sh
   minio_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/minio-cluster.cfg
   minio_public_tls_cfg_v2:
@@ -844,6 +871,11 @@ configs:
     file: ./docker/swarm/minio-swarm-entrypoint.sh
   minio_init_v1:
     file: ./docker/swarm/minio-init.sh
+
+secrets:
+  minio_root_password:
+    external: true
+    name: ${SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME:?set SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME}
   elasticsearch_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/elasticsearch-cluster.cfg
   elasticsearch_public_tls_cfg_v2:

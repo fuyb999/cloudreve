@@ -13,6 +13,7 @@ CLOUDREVE_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.cloudreve.yml"
 FOUNDATION_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.foundation.yml"
 INFRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.infra.yml"
 RENDER_ONLY=0
+STACK_SECRET_NAMES=()
 
 usage() {
   cat <<'EOF'
@@ -255,11 +256,233 @@ prepare_auth_common_env() {
   export AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL
 }
 
+prepare_secret_value_env() {
+  CR_INIT_S3_SECRET_KEY="${CR_INIT_S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}"
+  ONLYOFFICE_DB_PASSWORD="${ONLYOFFICE_DB_PASSWORD:-${POSTGRESQL_PASSWORD:-}}"
+  ONLYOFFICE_REDIS_PASSWORD="${ONLYOFFICE_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
+  AUTHVERSE_DB_ADMIN_PASSWORD="${AUTHVERSE_DB_ADMIN_PASSWORD:-${POSTGRESQL_POSTGRES_PASSWORD:-}}"
+
+  export CR_INIT_S3_SECRET_KEY
+  export ONLYOFFICE_DB_PASSWORD
+  export ONLYOFFICE_REDIS_PASSWORD
+  export AUTHVERSE_DB_ADMIN_PASSWORD
+}
+
+sha256_string() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+build_onlyoffice_amqp_uri() {
+  local user="${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}"
+  local password="${ONLYOFFICE_RABBITMQ_PASSWORD:-}"
+  local host="${ONLYOFFICE_RABBITMQ_HOST:-onlyoffice-rabbitmq}"
+  local port="${ONLYOFFICE_RABBITMQ_PORT:-5672}"
+  local vhost="${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}"
+
+  if [[ -z "$password" ]]; then
+    echo "缺少 ONLYOFFICE_RABBITMQ_PASSWORD，无法生成 OnlyOffice AMQP secret。" >&2
+    exit 1
+  fi
+
+  printf 'amqp://%s:%s@%s:%s/%s' "$user" "$password" "$host" "$port" "$vhost"
+}
+
+build_authverse_backend_args() {
+  local db_master_url
+  local db_slave_url
+  local redis_host
+  local redis_port
+  local elasticsearch_uri
+
+  if [[ "$COMPOSE_KIND" == "single" ]]; then
+    db_master_url="${AUTHVERSE_SINGLE_DB_MASTER_URL:?set AUTHVERSE_SINGLE_DB_MASTER_URL}"
+    db_slave_url="${AUTHVERSE_SINGLE_DB_SLAVE_URL:?set AUTHVERSE_SINGLE_DB_SLAVE_URL}"
+    redis_host="${AUTHVERSE_SINGLE_REDIS_HOST:?set AUTHVERSE_SINGLE_REDIS_HOST}"
+    redis_port="${AUTHVERSE_SINGLE_REDIS_PORT:-6379}"
+    elasticsearch_uri="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:?set AUTHVERSE_SINGLE_ELASTICSEARCH_URI}"
+  else
+    db_master_url="${AUTHVERSE_DB_MASTER_URL:?set AUTHVERSE_DB_MASTER_URL}"
+    db_slave_url="${AUTHVERSE_DB_SLAVE_URL:?set AUTHVERSE_DB_SLAVE_URL}"
+    redis_host="${AUTHVERSE_REDIS_HOST:?set AUTHVERSE_REDIS_HOST}"
+    redis_port="${AUTHVERSE_REDIS_PORT:-6379}"
+    elasticsearch_uri="${AUTHVERSE_ELASTICSEARCH_URI:?set AUTHVERSE_ELASTICSEARCH_URI}"
+  fi
+
+  printf '%s' "\
+--server.port=48080 \
+--server.forward-headers-strategy=framework \
+--spring.datasource.dynamic.datasource.master.url=${db_master_url} \
+--spring.datasource.dynamic.datasource.master.username=${AUTHVERSE_DB_USERNAME:?set AUTHVERSE_DB_USERNAME} \
+--spring.datasource.dynamic.datasource.master.password=${AUTHVERSE_DB_PASSWORD:?set AUTHVERSE_DB_PASSWORD} \
+--spring.datasource.dynamic.datasource.slave.url=${db_slave_url} \
+--spring.datasource.dynamic.datasource.slave.username=${AUTHVERSE_DB_SLAVE_USERNAME:?set AUTHVERSE_DB_SLAVE_USERNAME} \
+--spring.datasource.dynamic.datasource.slave.password=${AUTHVERSE_DB_SLAVE_PASSWORD:?set AUTHVERSE_DB_SLAVE_PASSWORD} \
+--spring.data.redis.host=${redis_host} \
+--spring.data.redis.port=${redis_port} \
+--spring.data.redis.password=${AUTHVERSE_REDIS_PASSWORD:?set AUTHVERSE_REDIS_PASSWORD} \
+--spring.data.redis.database=${AUTHVERSE_REDIS_DATABASE:-0} \
+--spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true} \
+--spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB} \
+--spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB} \
+--yudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
+--yudao.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+--yudao.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
+--yudao.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
+--yudao.search.elasticsearch.uris[0]=${elasticsearch_uri} \
+--yudao.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
+--yudao.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
+--yudao.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
+--yudao.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
+--yudao.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+--yudao.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
+--yudao.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
+--yudao.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
+--yudao.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
+--yudao.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
+--yudao.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
+--yudao.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
+--yudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
+--yudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
+}
+
+build_stack_secret_name() {
+  local stack_name="$1"
+  local secret_key="$2"
+  local secret_hash="$3"
+  local secret_name
+  local stack_token
+  local secret_key_limit
+
+  secret_name="${stack_name}_secret_${secret_key}_${secret_hash}"
+  if [[ "${#secret_name}" -le 64 ]]; then
+    printf '%s' "$secret_name"
+    return 0
+  fi
+
+  stack_token="$(printf '%s' "$stack_name" | sha256_string | cut -c1-8)"
+  secret_key_limit=$((64 - ${#stack_token} - ${#secret_hash} - 4))
+  if [[ "$secret_key_limit" -lt 8 ]]; then
+    secret_key_limit=8
+  fi
+
+  printf '%s' "s_${stack_token}_${secret_key:0:$secret_key_limit}_${secret_hash}"
+}
+
+register_stack_secret() {
+  local export_var="$1"
+  local secret_key="$2"
+  local secret_value="$3"
+  local required="${4:-1}"
+  local secret_hash secret_name
+
+  if [[ -z "$secret_value" ]]; then
+    if [[ "$required" == "1" ]]; then
+      echo "缺少 secret 值：$secret_key" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  secret_hash="$(printf '%s' "$secret_value" | sha256_string | cut -c1-12)"
+  secret_name="$(build_stack_secret_name "$STACK_NAME" "$secret_key" "$secret_hash")"
+
+  printf -v "$export_var" '%s' "$secret_name"
+  export "$export_var"
+  STACK_SECRET_NAMES+=("$secret_name")
+
+  if [[ "$RENDER_ONLY" -eq 0 ]] && ! docker secret inspect "$secret_name" >/dev/null 2>&1; then
+    printf '%s' "$secret_value" | docker secret create "$secret_name" -
+  fi
+}
+
+prepare_stack_secrets() {
+  STACK_SECRET_NAMES=()
+
+  case "$COMPOSE_KIND" in
+    cloudreve)
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME" "cloudreve_session_secret" "${CLOUDREVE_SESSION_SECRET:-}" 1
+      register_stack_secret "SWARM_SECRET_POSTGRESQL_PASSWORD_NAME" "postgresql_password" "${POSTGRESQL_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_REDIS_PASSWORD_NAME" "redis_password" "${REDIS_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME" "cloudreve_s3_secret_key" "${CR_INIT_S3_SECRET_KEY:-}" 1
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_SLAVE_SECRET_NAME" "cloudreve_slave_secret" "${CLOUDREVE_SLAVE_SECRET:-}" 1
+      ;;
+    foundation)
+      register_stack_secret "SWARM_SECRET_POSTGRESQL_POSTGRES_PASSWORD_NAME" "postgresql_postgres_password" "${POSTGRESQL_POSTGRES_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_POSTGRESQL_PASSWORD_NAME" "postgresql_password" "${POSTGRESQL_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_REPMGR_PASSWORD_NAME" "repmgr_password" "${REPMGR_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME" "pgpool_admin_password" "${PGPOOL_ADMIN_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_REDIS_PASSWORD_NAME" "redis_password" "${REDIS_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME" "onlyoffice_db_password" "${ONLYOFFICE_DB_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME" "onlyoffice_redis_password" "${ONLYOFFICE_REDIS_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME" "onlyoffice_rabbitmq_password" "${ONLYOFFICE_RABBITMQ_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME" "onlyoffice_jwt_secret" "${ONLYOFFICE_JWT_SECRET:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME" "onlyoffice_amqp_uri" "$(build_onlyoffice_amqp_uri)" 1
+      ;;
+    infra)
+      register_stack_secret "SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME" "minio_root_password" "${MINIO_ROOT_PASSWORD:-}" 1
+      ;;
+    auth)
+      register_stack_secret "SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME" "authverse_backend_args" "$(build_authverse_backend_args)" 1
+      ;;
+    single)
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME" "cloudreve_session_secret" "${CLOUDREVE_SESSION_SECRET:-}" 1
+      register_stack_secret "SWARM_SECRET_POSTGRESQL_POSTGRES_PASSWORD_NAME" "postgresql_postgres_password" "${POSTGRESQL_POSTGRES_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_POSTGRESQL_PASSWORD_NAME" "postgresql_password" "${POSTGRESQL_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_REPMGR_PASSWORD_NAME" "repmgr_password" "${REPMGR_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME" "pgpool_admin_password" "${PGPOOL_ADMIN_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_REDIS_PASSWORD_NAME" "redis_password" "${REDIS_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME" "minio_root_password" "${MINIO_ROOT_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME" "cloudreve_s3_secret_key" "${CR_INIT_S3_SECRET_KEY:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME" "onlyoffice_db_password" "${ONLYOFFICE_DB_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME" "onlyoffice_redis_password" "${ONLYOFFICE_REDIS_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME" "onlyoffice_rabbitmq_password" "${ONLYOFFICE_RABBITMQ_PASSWORD:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME" "onlyoffice_jwt_secret" "${ONLYOFFICE_JWT_SECRET:-}" 1
+      register_stack_secret "SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME" "onlyoffice_amqp_uri" "$(build_onlyoffice_amqp_uri)" 1
+      register_stack_secret "SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME" "authverse_backend_args" "$(build_authverse_backend_args)" 1
+      ;;
+    *)
+      ;;
+  esac
+}
+
+cleanup_old_stack_secrets() {
+  local prefix="${STACK_NAME}_secret_"
+  local used_secrets_file all_secrets_file secret_name
+
+  [[ "$RENDER_ONLY" -eq 0 ]] || return 0
+
+  used_secrets_file="$(mktemp)"
+  all_secrets_file="$(mktemp)"
+  trap 'rm -f "$used_secrets_file" "$all_secrets_file"' RETURN
+
+  docker stack services "$STACK_NAME" -q \
+    | while read -r service_id; do
+        [[ -n "$service_id" ]] || continue
+        docker service inspect "$service_id" \
+          --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+      done \
+    | sed '/^$/d' \
+    | sort -u >"$used_secrets_file"
+
+  docker secret ls --format '{{.Name}}' | sed -n "/^${prefix}/p" >"$all_secrets_file"
+
+  while read -r secret_name; do
+    [[ -n "$secret_name" ]] || continue
+    if ! grep -qx "$secret_name" "$used_secrets_file"; then
+      docker secret rm "$secret_name" >/dev/null 2>&1 || true
+    fi
+  done <"$all_secrets_file"
+}
+
 prepare_single_auth_env() {
   AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM="${AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM:-cloudreve-master:5212}"
   AUTHVERSE_SINGLE_POSTGRES_HOST="${AUTHVERSE_SINGLE_POSTGRES_HOST:-pgpool-internal}"
   AUTHVERSE_SINGLE_POSTGRES_PORT="${AUTHVERSE_SINGLE_POSTGRES_PORT:-5432}"
-  AUTHVERSE_SINGLE_REDIS_HOST="${AUTHVERSE_SINGLE_REDIS_HOST:-redis-proxy}"
+  AUTHVERSE_SINGLE_REDIS_HOST="${AUTHVERSE_SINGLE_REDIS_HOST:-redis-1}"
   AUTHVERSE_SINGLE_REDIS_PORT="${AUTHVERSE_SINGLE_REDIS_PORT:-6379}"
   AUTHVERSE_SINGLE_ELASTICSEARCH_URI="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:-https://elasticsearch:9200}"
   AUTHVERSE_SINGLE_DB_MASTER_URL="${AUTHVERSE_SINGLE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_SINGLE_POSTGRES_HOST}:${AUTHVERSE_SINGLE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}}"
@@ -301,6 +524,9 @@ prepare_external_auth_env() {
   export AUTHVERSE_ELASTICSEARCH_URI
   export AUTHVERSE_DB_MASTER_URL
   export AUTHVERSE_DB_SLAVE_URL
+
+  AUTHVERSE_REDIS_SSL_ENABLED="${AUTHVERSE_REDIS_SSL_ENABLED:-false}"
+  export AUTHVERSE_REDIS_SSL_ENABLED
 
   if [[ "$RENDER_ONLY" -eq 0 ]] && ! docker network inspect "$AUTHVERSE_SHARED_NETWORK" >/dev/null 2>&1; then
     echo "共享 overlay 网络不存在：$AUTHVERSE_SHARED_NETWORK" >&2
@@ -397,6 +623,7 @@ set +a
 prepare_common_mount_env
 prepare_image_source_env
 prepare_auth_common_env
+prepare_secret_value_env
 
 COMPOSE_KIND=""
 COMPOSE_LABEL=""
@@ -456,6 +683,8 @@ case "$COMPOSE_KIND" in
     ;;
 esac
 
+prepare_stack_secrets
+
 resolved_file="$RESOLVED_DIR/${STACK_NAME}-resolved.yaml"
 resolved_raw_file="$RESOLVED_DIR/${STACK_NAME}-resolved.raw.yaml"
 
@@ -475,6 +704,7 @@ echo "正在部署 stack: $STACK_NAME"
 docker stack deploy --resolve-image "${SWARM_RESOLVE_IMAGE_MODE:-never}" -c "$resolved_file" "$STACK_NAME"
 
 maybe_init_authverse_single_db
+cleanup_old_stack_secrets
 
 echo
 echo "当前服务状态："

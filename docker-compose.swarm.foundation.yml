@@ -58,7 +58,7 @@ x-default-rollback-config: &default-rollback-config
   order: stop-first
 
 x-default-restart-policy: &default-restart-policy
-  condition: on-failure
+  condition: any
   delay: 5s
   window: 2m
 
@@ -67,7 +67,7 @@ x-restart-policy-with-attempts: &restart-policy-with-attempts
   max_attempts: 10
 
 x-onlyoffice-restart-policy: &onlyoffice-restart-policy
-  condition: on-failure
+  condition: any
   delay: 10s
   max_attempts: 10
   window: 3m
@@ -77,14 +77,14 @@ services:
     <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg1"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
     environment:
       <<: *default-env
-      POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
+      SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
-      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
       REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
       REPMGR_NODE_NAME: postgresql-1
@@ -93,9 +93,16 @@ services:
       REPMGR_NODE_ID: "1"
       REPMGR_LOG_LEVEL: NOTICE
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: postgresql_repmgr_run_v4
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - repmgr_password
     volumes:
       - *localtime-volume
       - type: ${PG_1_DATA_MOUNT_TYPE:-bind}
@@ -128,14 +135,14 @@ services:
     <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg2"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
     environment:
       <<: *default-env
-      POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
+      SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
-      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
       REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
       REPMGR_NODE_NAME: postgresql-2
@@ -144,9 +151,16 @@ services:
       REPMGR_NODE_ID: "2"
       REPMGR_LOG_LEVEL: NOTICE
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: postgresql_repmgr_run_v4
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - repmgr_password
     volumes:
       - *localtime-volume
       - type: ${PG_2_DATA_MOUNT_TYPE:-bind}
@@ -179,14 +193,14 @@ services:
     <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg3"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
     environment:
       <<: *default-env
-      POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
+      SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
-      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
       REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
       REPMGR_NODE_NAME: postgresql-3
@@ -195,9 +209,16 @@ services:
       REPMGR_NODE_ID: "3"
       REPMGR_LOG_LEVEL: NOTICE
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: postgresql_repmgr_run_v4
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - repmgr_password
     volumes:
       - *localtime-volume
       - type: ${PG_3_DATA_MOUNT_TYPE:-bind}
@@ -230,19 +251,26 @@ services:
     <<: *service-base
     image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
     hostname: "{{.Node.Hostname}}-pgpool-internal-{{.Task.Slot}}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/pgpool/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: PGPOOL_POSTGRES_PASSWORD=postgresql_postgres_password,PGPOOL_SR_CHECK_PASSWORD=postgresql_password,PGPOOL_ADMIN_PASSWORD=pgpool_admin_password,PGPOOL_PASSWORD=postgresql_password
       PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
-      PGPOOL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
-      PGPOOL_SR_CHECK_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       PGPOOL_ENABLE_LOAD_BALANCING: "no"
       PGPOOL_ENABLE_POOL_HBA: "yes"
       PGPOOL_ADMIN_USERNAME: ${PGPOOL_ADMIN_USERNAME:-admin}
-      PGPOOL_ADMIN_PASSWORD: ${PGPOOL_ADMIN_PASSWORD:?set PGPOOL_ADMIN_PASSWORD}
       PGPOOL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
-      PGPOOL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - pgpool_admin_password
     volumes:
       - *localtime-volume
     networks:
@@ -310,12 +338,20 @@ services:
     <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis1"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/redis/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/redis/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_PASSWORD=redis_password
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: master
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
       - type: ${REDIS_1_DATA_MOUNT_TYPE:-bind}
@@ -324,7 +360,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:?set REDIS_PASSWORD} ping | grep PONG >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -348,15 +384,22 @@ services:
     <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis2"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/redis/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/redis/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_MASTER_PASSWORD=redis_password,REDIS_PASSWORD=redis_password
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
-      REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
       - type: ${REDIS_2_DATA_MOUNT_TYPE:-bind}
@@ -365,7 +408,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:?set REDIS_PASSWORD} ping | grep PONG >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -389,15 +432,22 @@ services:
     <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis3"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/redis/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/redis/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_MASTER_PASSWORD=redis_password,REDIS_PASSWORD=redis_password
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
-      REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
       - type: ${REDIS_3_DATA_MOUNT_TYPE:-bind}
@@ -406,7 +456,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:?set REDIS_PASSWORD} ping | grep PONG >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -430,15 +480,23 @@ services:
     <<: *service-base
     image: ${REDIS_SENTINEL_IMAGE:-bitnamilegacy/redis-sentinel:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis-sentinel-{{.Task.Slot}}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/redis-sentinel/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/redis-sentinel/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_MASTER_PASSWORD=redis_password
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
       REDIS_MASTER_SET: ${REDIS_SENTINEL_MASTER_SET:-mymaster}
-      REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
       REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS: ${REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS:-5000}
       REDIS_SENTINEL_FAILOVER_TIMEOUT: ${REDIS_SENTINEL_FAILOVER_TIMEOUT:-10000}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
     networks:
@@ -465,17 +523,22 @@ services:
     hostname: "{{.Node.Hostname}}-redis-proxy-internal-{{.Task.Slot}}"
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_PASSWORD=redis_password
       REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
       REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
       REDIS_SENTINEL_HOST: ${REDIS_SENTINEL_HOST:-redis-sentinel}
       REDIS_SENTINEL_PORT_NUMBER: ${REDIS_SENTINEL_PORT_NUMBER:-26379}
       REDIS_MASTER_SET: ${REDIS_SENTINEL_MASTER_SET:-mymaster}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-    entrypoint: ["/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: redis_proxy_bootstrap_v8
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
     networks:
@@ -621,11 +684,19 @@ services:
     <<: *service-base
     image: ${ONLYOFFICE_RABBITMQ_IMAGE:-rabbitmq:3.13.7-alpine}
     hostname: "{{.Node.Hostname}}-onlyoffice-rmq"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "docker-entrypoint.sh"]
+    command: ["rabbitmq-server"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: RABBITMQ_DEFAULT_PASS=onlyoffice_rabbitmq_password
       RABBITMQ_DEFAULT_USER: ${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}
-      RABBITMQ_DEFAULT_PASS: ${ONLYOFFICE_RABBITMQ_PASSWORD:?set ONLYOFFICE_RABBITMQ_PASSWORD}
       RABBITMQ_DEFAULT_VHOST: ${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - onlyoffice_rabbitmq_password
     volumes:
       - *localtime-volume
       - type: ${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}
@@ -659,29 +730,34 @@ services:
     <<: *service-base
     image: ${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:8.2.2}
     hostname: "{{.Node.Hostname}}-onlyoffice-{{.Task.Slot}}"
-    entrypoint: ["/bin/bash", "/usr/local/bin/onlyoffice-font-bootstrap.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/onlyoffice-font-bootstrap.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: DB_PWD=onlyoffice_db_password,REDIS_SERVER_PASS=onlyoffice_redis_password,JWT_SECRET=onlyoffice_jwt_secret,AMQP_URI=onlyoffice_amqp_uri
       DB_TYPE: postgres
       DB_HOST: ${ONLYOFFICE_DB_HOST:-pgpool-internal}
       DB_PORT: ${ONLYOFFICE_DB_PORT:-5432}
       DB_NAME: ${ONLYOFFICE_DB_NAME:?set ONLYOFFICE_DB_NAME}
       DB_USER: ${ONLYOFFICE_DB_USER:?set ONLYOFFICE_DB_USER}
-      DB_PWD: ${ONLYOFFICE_DB_PASSWORD:?set ONLYOFFICE_DB_PASSWORD}
       DB_SCHEMA: ${ONLYOFFICE_DB_SCHEMA:-onlyoffice}
       AMQP_TYPE: rabbitmq
-      AMQP_URI: amqp://${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}:${ONLYOFFICE_RABBITMQ_PASSWORD:?set ONLYOFFICE_RABBITMQ_PASSWORD}@onlyoffice-rabbitmq:${ONLYOFFICE_RABBITMQ_PORT:-5672}/${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}
       REDIS_SERVER_HOST: ${ONLYOFFICE_REDIS_HOST:-redis-proxy-internal}
       REDIS_SERVER_PORT: ${ONLYOFFICE_REDIS_PORT:-6379}
-      REDIS_SERVER_PASS: ${ONLYOFFICE_REDIS_PASSWORD:?set ONLYOFFICE_REDIS_PASSWORD}
       REDIS_SERVER_DB: ${ONLYOFFICE_REDIS_DB:-1}
       ALLOW_PRIVATE_IP_ADDRESS: "${ONLYOFFICE_ALLOW_PRIVATE_IP_ADDRESS:-true}"
       JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
-      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-replace-with-strong-onlyoffice-jwt-secret}
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: onlyoffice_font_bootstrap_v1
         target: /usr/local/bin/onlyoffice-font-bootstrap.sh
         mode: 0555
+    secrets:
+      - onlyoffice_db_password
+      - onlyoffice_redis_password
+      - onlyoffice_jwt_secret
+      - onlyoffice_amqp_uri
     volumes:
       - *localtime-volume
       - type: ${ONLYOFFICE_DATA_MOUNT_TYPE:-volume}
@@ -788,6 +864,8 @@ volumes:
   onlyoffice_rabbitmq:
 
 configs:
+  swarm_secret_wrap_v1:
+    file: ./docker/swarm/swarm-secret-wrap.sh
   postgresql_repmgr_run_v4:
     file: ./docker/swarm/postgresql-repmgr-run.sh
   redis_proxy_bootstrap_v8:
@@ -800,3 +878,35 @@ configs:
     file: ./docker/swarm/nginx/http-tls-proxy.conf.template
   onlyoffice_font_bootstrap_v1:
     file: ./docker/swarm/onlyoffice-font-bootstrap.sh
+
+secrets:
+  postgresql_postgres_password:
+    external: true
+    name: ${SWARM_SECRET_POSTGRESQL_POSTGRES_PASSWORD_NAME:?set SWARM_SECRET_POSTGRESQL_POSTGRES_PASSWORD_NAME}
+  postgresql_password:
+    external: true
+    name: ${SWARM_SECRET_POSTGRESQL_PASSWORD_NAME:?set SWARM_SECRET_POSTGRESQL_PASSWORD_NAME}
+  repmgr_password:
+    external: true
+    name: ${SWARM_SECRET_REPMGR_PASSWORD_NAME:?set SWARM_SECRET_REPMGR_PASSWORD_NAME}
+  pgpool_admin_password:
+    external: true
+    name: ${SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME:?set SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME}
+  redis_password:
+    external: true
+    name: ${SWARM_SECRET_REDIS_PASSWORD_NAME:?set SWARM_SECRET_REDIS_PASSWORD_NAME}
+  onlyoffice_db_password:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME}
+  onlyoffice_redis_password:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME}
+  onlyoffice_rabbitmq_password:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME}
+  onlyoffice_jwt_secret:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME:?set SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME}
+  onlyoffice_amqp_uri:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME:?set SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME}

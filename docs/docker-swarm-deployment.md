@@ -626,6 +626,15 @@ docker node update --label-add cloudreve.kafka-ui=true <node-kafka-ui>
 - `cr-prod-wkr-12`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg1`, `cloudreve.redis1`, `cloudreve.redis-sentinel`, `cloudreve.es1`, `cloudreve.kafka1`, `cloudreve.minio2`
 - `cr-prod-wkr-13`：`cloudreve.slave`, `cloudreve.pg2`, `cloudreve.redis2`, `cloudreve.redis-sentinel`, `cloudreve.es2`, `cloudreve.kafka2`, `cloudreve.minio3`
 - `cr-prod-wkr-14`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg3`, `cloudreve.redis3`, `cloudreve.redis-sentinel`, `cloudreve.es3`, `cloudreve.kafka3`, `cloudreve.minio4`, `cloudreve.tika`
+- 默认 `OnlyOffice` 也复用这 3 台 `edge` 节点；如果你改成 `bind` 绝对路径挂载，先把目录在这 3 台都准备好
+- 如果你不想让 `OnlyOffice` 在 `edge` 池里漂移，再额外给 `cr-prod-mgr-11` / `cr-prod-wkr-14` 打 `cloudreve.onlyoffice=true`，并给 `cr-prod-mgr-11` 打 `cloudreve.onlyoffice-rabbitmq=true`
+- 同时把 `.env.swarm` 改成：
+
+```bash
+ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==true
+```
 
 这样做的目的不是把机器吃满，而是：
 
@@ -675,6 +684,12 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 - `CR_INIT_S3_SECRET_KEY`
 - `PRIVATE_REGISTRY_ADDR`
 - `TIKA_REMOTE_IMAGE`
+
+补充：
+
+- 这些敏感值仍然维护在 `.env.swarm` 中
+- 正式部署时 `deploy-stack.sh` 会自动把它们注册成 `${STACK_NAME}_secret_<secret-key>_<hash>` 形式的 Docker `secret`
+- `--render-only` 只渲染 secret 引用，不会真的创建 `docker secret`
 
 如果你要用外部对象存储，再改：
 
@@ -746,6 +761,7 @@ docker/swarm/deploy-stack.sh infra --stack-name cloudreve
 docker stack services cloudreve
 docker stack ps cloudreve
 docker service logs -f cloudreve_cloudreve-master
+docker secret ls | grep '^cloudreve.*_secret_'
 ```
 
 ## 14. 主站初始化

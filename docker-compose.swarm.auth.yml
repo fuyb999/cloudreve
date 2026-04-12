@@ -55,7 +55,7 @@ x-default-rollback-config: &default-rollback-config
   order: stop-first
 
 x-default-restart-policy: &default-restart-policy
-  condition: on-failure
+  condition: any
   delay: 5s
   window: 2m
 
@@ -73,9 +73,9 @@ services:
       PROXY_READ_TIMEOUT: ${AUTHVERSE_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${AUTHVERSE_PROXY_SEND_TIMEOUT:-3600s}
       UPSTREAM_AUTHVERSE_BACKEND: ${AUTHVERSE_BACKEND_UPSTREAM:-authverse-backend:48080}
-      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$host}
+      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$$$host}
       UPSTREAM_CLOUDREVE: ${AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM:?set AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM}
-      UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$host}
+      UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$$$host}
     configs:
       - source: authverse_proxy_template_v1
         target: /etc/nginx/templates/default.conf.template
@@ -117,46 +117,20 @@ services:
     <<: *service-base
     image: ${AUTHVERSE_BACKEND_IMAGE:?set AUTHVERSE_BACKEND_IMAGE}
     hostname: "{{.Node.Hostname}}-authverse-backend-{{.Task.Slot}}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/__cacert_entrypoint.sh"]
+    command: ["sh", "-c", "exec java $$$$JAVA_OPTS -jar app.jar $$$$ARGS"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: ARGS=authverse_backend_args
       SPRING_PROFILES_ACTIVE: local
       JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}
       JAVA_TOOL_OPTIONS: ${AUTHVERSE_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
-      ARGS: >-
-        --server.port=48080
-        --server.forward-headers-strategy=framework
-        --spring.datasource.dynamic.datasource.master.url=${AUTHVERSE_DB_MASTER_URL:?set AUTHVERSE_DB_MASTER_URL}
-        --spring.datasource.dynamic.datasource.master.username=${AUTHVERSE_DB_USERNAME:?set AUTHVERSE_DB_USERNAME}
-        --spring.datasource.dynamic.datasource.master.password=${AUTHVERSE_DB_PASSWORD:?set AUTHVERSE_DB_PASSWORD}
-        --spring.datasource.dynamic.datasource.slave.url=${AUTHVERSE_DB_SLAVE_URL:?set AUTHVERSE_DB_SLAVE_URL}
-        --spring.datasource.dynamic.datasource.slave.username=${AUTHVERSE_DB_SLAVE_USERNAME:?set AUTHVERSE_DB_SLAVE_USERNAME}
-        --spring.datasource.dynamic.datasource.slave.password=${AUTHVERSE_DB_SLAVE_PASSWORD:?set AUTHVERSE_DB_SLAVE_PASSWORD}
-        --spring.data.redis.host=${AUTHVERSE_REDIS_HOST:?set AUTHVERSE_REDIS_HOST}
-        --spring.data.redis.port=${AUTHVERSE_REDIS_PORT:-6379}
-        --spring.data.redis.password=${AUTHVERSE_REDIS_PASSWORD:?set AUTHVERSE_REDIS_PASSWORD}
-        --spring.data.redis.database=${AUTHVERSE_REDIS_DATABASE:-0}
-        --spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true}
-        --spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB}
-        --spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB}
-        --yudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false}
-        --yudao.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL}
-        --yudao.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL}
-        --yudao.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true}
-        --yudao.search.elasticsearch.uris[0]=${AUTHVERSE_ELASTICSEARCH_URI:?set AUTHVERSE_ELASTICSEARCH_URI}
-        --yudao.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s}
-        --yudao.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s}
-        --yudao.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s}
-        --yudao.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true}
-        --yudao.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL}
-        --yudao.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false}
-        --yudao.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem}
-        --yudao.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem}
-        --yudao.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod}
-        --yudao.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true}
-        --yudao.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000}
-        --yudao.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3}
-        --yudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000}
-        --yudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - authverse_backend_args
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -167,7 +141,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:48080/actuator/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -sS -o /dev/null http://127.0.0.1:48080/ || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -198,5 +172,12 @@ volumes:
   authverse_oidc_keys:
 
 configs:
+  swarm_secret_wrap_v1:
+    file: ./docker/swarm/swarm-secret-wrap.sh
   authverse_proxy_template_v1:
     file: ./docker/swarm/nginx/authverse-proxy.conf.template
+
+secrets:
+  authverse_backend_args:
+    external: true
+    name: ${SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME:?set SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME}

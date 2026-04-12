@@ -15,7 +15,8 @@
 # - `docker/swarm/deploy-stack.sh` 不传模板名时默认使用这个文件。
 # - 为了让 Cloudreve / Authverse / 运维脚本尽量复用现有连接关系，
 #   这里保留了 `pgpool`、`redis-proxy`、`postgresql-1`、`kafka` 这些服务名。
-# - `onlyoffice` 同样走外置 `pgpool + redis-proxy + onlyoffice-rabbitmq`，保证和多节点模板一致。
+# - `onlyoffice` 仍走外置 `pgpool + onlyoffice-rabbitmq`，Redis 在单节点默认直连 `redis-1`，
+#   这样本地联调不依赖额外 TLS 代理链。
 
 x-default-env: &default-env
   TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
@@ -59,7 +60,7 @@ x-default-rollback-config: &default-rollback-config
   order: stop-first
 
 x-default-restart-policy: &default-restart-policy
-  condition: on-failure
+  condition: any
   delay: 5s
   window: 2m
 
@@ -68,7 +69,7 @@ x-restart-policy-with-attempts: &restart-policy-with-attempts
   max_attempts: 10
 
 x-onlyoffice-restart-policy: &onlyoffice-restart-policy
-  condition: on-failure
+  condition: any
   delay: 10s
   max_attempts: 10
   window: 3m
@@ -78,24 +79,23 @@ services:
     <<: *service-base
     image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     hostname: "{{.Node.Hostname}}-cr-master-{{.Task.Slot}}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/cloudreve-entrypoint.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: CR_CONF_System.SessionSecret=cloudreve_session_secret,CR_CONF_Database.Password=postgresql_password,CR_CONF_Redis.Password=redis_password,CR_INIT_S3_SECRET_KEY=cloudreve_s3_secret_key
       SSL_CERT_FILE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       SSL_CERT_DIR: ${CLOUDREVE_CA_CERT_DIR:-/run/swarm-pki/ca}
       CURL_CA_BUNDLE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       CR_CONF_System.Mode: master
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
-      CR_CONF_System.SessionSecret: ${CLOUDREVE_SESSION_SECRET:?set CLOUDREVE_SESSION_SECRET}
       CR_CONF_Database.Type: postgres
       CR_CONF_Database.Host: pgpool-internal
       CR_CONF_Database.Port: "5432"
       CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
-      CR_CONF_Database.Password: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
-      CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-proxy:6379}
-      CR_CONF_Redis.Password: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-      CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-true}
+      CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-1:6379}
+      CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-false}
       CR_CONF_Redis.TLSSkipVerify: ${CLOUDREVE_REDIS_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
@@ -110,13 +110,24 @@ services:
       CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-https://minio:9000}
       CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
       CR_INIT_S3_ACCESS_KEY: ${CR_INIT_S3_ACCESS_KEY:-minio}
-      CR_INIT_S3_SECRET_KEY: ${CR_INIT_S3_SECRET_KEY:?set CR_INIT_S3_SECRET_KEY}
       CR_INIT_S3_REGION: ${CR_INIT_S3_REGION:-us-east-1}
       CR_INIT_S3_FORCE_PATH_STYLE: ${CR_INIT_S3_FORCE_PATH_STYLE:-true}
       CR_INIT_S3_RELAY: ${CR_INIT_S3_RELAY:-true}
       CR_INIT_S3_INTERNAL_PROXY: ${CR_INIT_S3_INTERNAL_PROXY:-true}
       CR_INIT_S3_IS_PRIVATE: ${CR_INIT_S3_IS_PRIVATE:-true}
       CR_INIT_S3_CHUNK_SIZE: ${CR_INIT_S3_CHUNK_SIZE:-26214400}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+      - source: cloudreve_entrypoint_v1
+        target: /usr/local/bin/cloudreve-entrypoint.sh
+        mode: 0555
+    secrets:
+      - cloudreve_session_secret
+      - postgresql_password
+      - redis_password
+      - cloudreve_s3_secret_key
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -200,14 +211,14 @@ services:
     <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg1"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
     environment:
       <<: *default-env
-      POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
+      SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
-      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_SINGLE_NODE_NUM_SYNCHRONOUS_REPLICAS:-0}
-      REPMGR_PASSWORD: ${REPMGR_PASSWORD:?set REPMGR_PASSWORD}
       REPMGR_PRIMARY_HOST: postgresql-1
       REPMGR_PARTNER_NODES: ${REPMGR_SINGLE_NODE_PARTNER_NODES:-postgresql-1}
       REPMGR_NODE_NAME: postgresql-1
@@ -216,9 +227,16 @@ services:
       REPMGR_NODE_ID: "1"
       REPMGR_LOG_LEVEL: NOTICE
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: postgresql_repmgr_run_v4
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - repmgr_password
     volumes:
       - *localtime-volume
       - type: ${PG_1_DATA_MOUNT_TYPE:-bind}
@@ -251,19 +269,26 @@ services:
     <<: *service-base
     image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
     hostname: "{{.Node.Hostname}}-pgpool-internal"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/pgpool/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: PGPOOL_POSTGRES_PASSWORD=postgresql_postgres_password,PGPOOL_SR_CHECK_PASSWORD=postgresql_password,PGPOOL_ADMIN_PASSWORD=pgpool_admin_password,PGPOOL_PASSWORD=postgresql_password
       PGPOOL_BACKEND_NODES: ${PGPOOL_SINGLE_NODE_BACKEND_NODES:-0:postgresql-1:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
-      PGPOOL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
-      PGPOOL_SR_CHECK_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       PGPOOL_ENABLE_LOAD_BALANCING: "no"
       PGPOOL_ENABLE_POOL_HBA: "yes"
       PGPOOL_ADMIN_USERNAME: ${PGPOOL_ADMIN_USERNAME:-admin}
-      PGPOOL_ADMIN_PASSWORD: ${PGPOOL_ADMIN_PASSWORD:?set PGPOOL_ADMIN_PASSWORD}
       PGPOOL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
-      PGPOOL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - pgpool_admin_password
     volumes:
       - *localtime-volume
     networks:
@@ -329,12 +354,20 @@ services:
     <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis1"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/redis/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/redis/run.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_PASSWORD=redis_password
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: master
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
       - type: ${REDIS_1_DATA_MOUNT_TYPE:-bind}
@@ -343,7 +376,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:?set REDIS_PASSWORD} ping | grep PONG >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -369,15 +402,20 @@ services:
     hostname: "{{.Node.Hostname}}-redis-proxy-internal"
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: REDIS_PASSWORD=redis_password
       REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
       REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
       REDIS_SENTINEL_ENABLED: "no"
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-    entrypoint: ["/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: redis_proxy_bootstrap_v8
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
+    secrets:
+      - redis_password
     volumes:
       - *localtime-volume
     networks:
@@ -439,17 +477,22 @@ services:
     hostname: "{{.Node.Hostname}}-minio-internal"
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "no"
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
       MINIO_CONSOLE_PORT_NUMBER: "9001"
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-swarm-entrypoint.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_swarm_entrypoint_v1
         target: /usr/local/bin/minio-swarm-entrypoint.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     volumes:
       - *localtime-volume
       - type: ${MINIO_DATA_MOUNT_TYPE:-volume}
@@ -522,17 +565,22 @@ services:
     hostname: "{{.Node.Hostname}}-minio-init"
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ENDPOINT: ${MINIO_INIT_ENDPOINT:-https://minio:9000}
       MINIO_CA_FILE: ${MINIO_INIT_CA_FILE:-/run/swarm-pki/ca/ca.crt}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
       MINIO_INIT_INTERVAL_SECONDS: ${MINIO_INIT_INTERVAL_SECONDS:-30}
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-init.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/minio-init.sh"]
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: minio_init_v1
         target: /usr/local/bin/minio-init.sh
         mode: 0555
+    secrets:
+      - minio_root_password
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -888,11 +936,19 @@ services:
     <<: *service-base
     image: ${ONLYOFFICE_RABBITMQ_IMAGE:-rabbitmq:3.13.7-alpine}
     hostname: "{{.Node.Hostname}}-onlyoffice-rmq"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "docker-entrypoint.sh"]
+    command: ["rabbitmq-server"]
     environment:
       <<: *default-env
       RABBITMQ_DEFAULT_USER: ${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}
-      RABBITMQ_DEFAULT_PASS: ${ONLYOFFICE_RABBITMQ_PASSWORD:?set ONLYOFFICE_RABBITMQ_PASSWORD}
+      SWARM_SECRET_ENV_MAPPINGS: RABBITMQ_DEFAULT_PASS=onlyoffice_rabbitmq_password
       RABBITMQ_DEFAULT_VHOST: ${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - onlyoffice_rabbitmq_password
     volumes:
       - *localtime-volume
       - type: ${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}
@@ -925,29 +981,34 @@ services:
     <<: *service-base
     image: ${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:8.2.2}
     hostname: "{{.Node.Hostname}}-onlyoffice"
-    entrypoint: ["/bin/bash", "/usr/local/bin/onlyoffice-font-bootstrap.sh"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/bash", "/usr/local/bin/onlyoffice-font-bootstrap.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: DB_PWD=onlyoffice_db_password,REDIS_SERVER_PASS=onlyoffice_redis_password,JWT_SECRET=onlyoffice_jwt_secret,AMQP_URI=onlyoffice_amqp_uri
       DB_TYPE: postgres
       DB_HOST: ${ONLYOFFICE_DB_HOST:-pgpool-internal}
       DB_PORT: ${ONLYOFFICE_DB_PORT:-5432}
       DB_NAME: ${ONLYOFFICE_DB_NAME:?set ONLYOFFICE_DB_NAME}
       DB_USER: ${ONLYOFFICE_DB_USER:?set ONLYOFFICE_DB_USER}
-      DB_PWD: ${ONLYOFFICE_DB_PASSWORD:?set ONLYOFFICE_DB_PASSWORD}
       DB_SCHEMA: ${ONLYOFFICE_DB_SCHEMA:-onlyoffice}
       AMQP_TYPE: rabbitmq
-      AMQP_URI: amqp://${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}:${ONLYOFFICE_RABBITMQ_PASSWORD:?set ONLYOFFICE_RABBITMQ_PASSWORD}@onlyoffice-rabbitmq:${ONLYOFFICE_RABBITMQ_PORT:-5672}/${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}
-      REDIS_SERVER_HOST: ${ONLYOFFICE_REDIS_HOST:-redis-proxy-internal}
+      REDIS_SERVER_HOST: ${ONLYOFFICE_REDIS_HOST:-redis-1}
       REDIS_SERVER_PORT: ${ONLYOFFICE_REDIS_PORT:-6379}
-      REDIS_SERVER_PASS: ${ONLYOFFICE_REDIS_PASSWORD:?set ONLYOFFICE_REDIS_PASSWORD}
       REDIS_SERVER_DB: ${ONLYOFFICE_REDIS_DB:-1}
       ALLOW_PRIVATE_IP_ADDRESS: "${ONLYOFFICE_ALLOW_PRIVATE_IP_ADDRESS:-true}"
       JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
-      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-replace-with-strong-onlyoffice-jwt-secret}
     configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
       - source: onlyoffice_font_bootstrap_v1
         target: /usr/local/bin/onlyoffice-font-bootstrap.sh
         mode: 0555
+    secrets:
+      - onlyoffice_db_password
+      - onlyoffice_redis_password
+      - onlyoffice_jwt_secret
+      - onlyoffice_amqp_uri
     volumes:
       - *localtime-volume
       - type: ${ONLYOFFICE_DATA_MOUNT_TYPE:-volume}
@@ -1050,9 +1111,9 @@ services:
       PROXY_READ_TIMEOUT: ${AUTHVERSE_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${AUTHVERSE_PROXY_SEND_TIMEOUT:-3600s}
       UPSTREAM_AUTHVERSE_BACKEND: ${AUTHVERSE_BACKEND_UPSTREAM:-authverse-backend:48080}
-      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$host}
+      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$$$host}
       UPSTREAM_CLOUDREVE: ${AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM:?set AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM}
-      UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$host}
+      UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$$$host}
     configs:
       - source: authverse_proxy_template_v1
         target: /etc/nginx/templates/default.conf.template
@@ -1093,46 +1154,20 @@ services:
     <<: *service-base
     image: ${AUTHVERSE_BACKEND_IMAGE:?set AUTHVERSE_BACKEND_IMAGE}
     hostname: "{{.Node.Hostname}}-authverse-backend"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/__cacert_entrypoint.sh"]
+    command: ["sh", "-c", "exec java $$$$JAVA_OPTS -jar app.jar $$$$ARGS"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: ARGS=authverse_backend_args
       SPRING_PROFILES_ACTIVE: local
       JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}
       JAVA_TOOL_OPTIONS: ${AUTHVERSE_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
-      ARGS: >-
-        --server.port=48080
-        --server.forward-headers-strategy=framework
-        --spring.datasource.dynamic.datasource.master.url=${AUTHVERSE_SINGLE_DB_MASTER_URL:?set AUTHVERSE_SINGLE_DB_MASTER_URL}
-        --spring.datasource.dynamic.datasource.master.username=${AUTHVERSE_DB_USERNAME:?set AUTHVERSE_DB_USERNAME}
-        --spring.datasource.dynamic.datasource.master.password=${AUTHVERSE_DB_PASSWORD:?set AUTHVERSE_DB_PASSWORD}
-        --spring.datasource.dynamic.datasource.slave.url=${AUTHVERSE_SINGLE_DB_SLAVE_URL:?set AUTHVERSE_SINGLE_DB_SLAVE_URL}
-        --spring.datasource.dynamic.datasource.slave.username=${AUTHVERSE_DB_SLAVE_USERNAME:?set AUTHVERSE_DB_SLAVE_USERNAME}
-        --spring.datasource.dynamic.datasource.slave.password=${AUTHVERSE_DB_SLAVE_PASSWORD:?set AUTHVERSE_DB_SLAVE_PASSWORD}
-        --spring.data.redis.host=${AUTHVERSE_SINGLE_REDIS_HOST:?set AUTHVERSE_SINGLE_REDIS_HOST}
-        --spring.data.redis.port=${AUTHVERSE_SINGLE_REDIS_PORT:-6379}
-        --spring.data.redis.password=${AUTHVERSE_REDIS_PASSWORD:?set AUTHVERSE_REDIS_PASSWORD}
-        --spring.data.redis.database=${AUTHVERSE_REDIS_DATABASE:-0}
-        --spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true}
-        --spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB}
-        --spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB}
-        --yudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false}
-        --yudao.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL}
-        --yudao.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL}
-        --yudao.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true}
-        --yudao.search.elasticsearch.uris[0]=${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:?set AUTHVERSE_SINGLE_ELASTICSEARCH_URI}
-        --yudao.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s}
-        --yudao.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s}
-        --yudao.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s}
-        --yudao.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true}
-        --yudao.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL}
-        --yudao.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false}
-        --yudao.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem}
-        --yudao.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem}
-        --yudao.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod}
-        --yudao.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true}
-        --yudao.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000}
-        --yudao.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3}
-        --yudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000}
-        --yudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - authverse_backend_args
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -1143,7 +1178,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:48080/actuator/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -sS -o /dev/null http://127.0.0.1:48080/ || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -1189,6 +1224,10 @@ volumes:
   authverse_oidc_keys:
 
 configs:
+  swarm_secret_wrap_v1:
+    file: ./docker/swarm/swarm-secret-wrap.sh
+  cloudreve_entrypoint_v1:
+    file: ./docker/swarm/cloudreve-entrypoint.sh
   cloudreve_proxy_template_v3:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template
   authverse_proxy_template_v1:
@@ -1215,3 +1254,47 @@ configs:
     file: ./docker/swarm/minio-swarm-entrypoint.sh
   minio_init_v1:
     file: ./docker/swarm/minio-init.sh
+
+secrets:
+  cloudreve_session_secret:
+    external: true
+    name: ${SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME:?set SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME}
+  postgresql_postgres_password:
+    external: true
+    name: ${SWARM_SECRET_POSTGRESQL_POSTGRES_PASSWORD_NAME:?set SWARM_SECRET_POSTGRESQL_POSTGRES_PASSWORD_NAME}
+  postgresql_password:
+    external: true
+    name: ${SWARM_SECRET_POSTGRESQL_PASSWORD_NAME:?set SWARM_SECRET_POSTGRESQL_PASSWORD_NAME}
+  repmgr_password:
+    external: true
+    name: ${SWARM_SECRET_REPMGR_PASSWORD_NAME:?set SWARM_SECRET_REPMGR_PASSWORD_NAME}
+  pgpool_admin_password:
+    external: true
+    name: ${SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME:?set SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME}
+  redis_password:
+    external: true
+    name: ${SWARM_SECRET_REDIS_PASSWORD_NAME:?set SWARM_SECRET_REDIS_PASSWORD_NAME}
+  minio_root_password:
+    external: true
+    name: ${SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME:?set SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME}
+  cloudreve_s3_secret_key:
+    external: true
+    name: ${SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME:?set SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME}
+  onlyoffice_db_password:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME}
+  onlyoffice_redis_password:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME}
+  onlyoffice_rabbitmq_password:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME}
+  onlyoffice_jwt_secret:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME:?set SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME}
+  onlyoffice_amqp_uri:
+    external: true
+    name: ${SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME:?set SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME}
+  authverse_backend_args:
+    external: true
+    name: ${SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME:?set SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME}

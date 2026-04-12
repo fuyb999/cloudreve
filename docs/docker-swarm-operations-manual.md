@@ -321,6 +321,27 @@ docker node update --label-add cloudreve.minio4=true cr-prod-wkr-14
 docker node update --label-add cloudreve.tika=true cr-prod-wkr-14
 ```
 
+说明：
+
+- 默认 `OnlyOffice` 直接复用 `cloudreve.edge`
+- 在这套示例里，`edge` 节点就是 `cr-prod-mgr-11`、`cr-prod-wkr-12`、`cr-prod-wkr-14`
+- 如果 `OnlyOffice` 仍然用默认 `volume`，继续复用 `edge` 池即可
+- 如果 `OnlyOffice` 改成宿主机绝对路径挂载，或者你想让调度位置完全可预期，就在打标签时额外补上：
+
+```bash
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-mgr-11
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-wkr-14
+docker node update --label-add cloudreve.onlyoffice-rabbitmq=true cr-prod-mgr-11
+```
+
+- 同时把 `.env.swarm` 里的约束改成：
+
+```bash
+ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==true
+```
+
 查看标签：
 
 ```bash
@@ -582,6 +603,64 @@ sudo sysctl --system
 - `sops + age`
 - `vault`
 
+### 9.1 现在的 Docker Secret 是怎么生效的
+
+当前这套模板里，敏感值已经不再直接写进 Swarm service 的 `environment:`。
+
+部署时的行为是：
+
+1. `deploy-stack.sh` 先读取本地 `.env.swarm`
+2. 把敏感值按 `stack-name + secret-key + value-hash` 生成真正的 Docker `secret`
+3. Compose 模板只引用 secret 名，不再直接携带密码明文
+4. 容器启动时再从 `/run/secrets/*` 读入环境变量
+
+例如当栈名是 `cloudreve-prod` 时，实际 secret 名会类似：
+
+- `cloudreve-prod_secret_postgresql_password_<hash>`
+- `cloudreve-prod_secret_redis_password_<hash>`
+- `cloudreve-prod_secret_cloudreve_session_secret_<hash>`
+
+这套方式的目的很直接：
+
+- 兼容 Swarm secret “不能原地改值”的限制
+- 密码变更时，不需要手工删除旧 secret 再重建
+- 让 `cloudreve`、`foundation`、`infra`、`auth` 四套模板都能沿用同一套发布脚本
+
+注意：
+
+- `--render-only` 只渲染最终 YAML，不会真的创建 secret
+- 正式部署时才会自动创建 / 复用 secret
+- 旧 secret 会在部署后按“当前 stack 是否仍引用”做 best-effort 清理
+- 如果旧 task 还没退出，旧 secret 删除失败是正常现象，下次部署会继续清理
+
+### 9.2 常用 Secret 查看命令
+
+查看某个栈下当前有哪些 secret：
+
+```bash
+docker secret ls | grep '^cloudreve-prod_secret_'
+docker secret ls | grep '^authverse-prod_secret_'
+```
+
+查看某个服务实际挂了哪些 secret：
+
+```bash
+docker service inspect cloudreve-prod_cloudreve-master \
+  --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+
+docker service inspect cloudreve-prod_onlyoffice \
+  --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+
+docker service inspect authverse-prod_authverse-backend \
+  --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+```
+
+查看某个 secret 的元信息：
+
+```bash
+docker secret inspect <secret-name>
+```
+
 ## 10. 用脚本准备物理路径
 
 ### 10.1 检查模式
@@ -744,6 +823,7 @@ docker/swarm/deploy-stack.sh --render-only
 docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod --render-only
 docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod --render-only
 docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod --render-only
+docker/swarm/deploy-stack.sh auth --stack-name authverse-prod --render-only
 ```
 
 渲染文件默认在：
@@ -751,6 +831,11 @@ docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod --render-only
 ```bash
 .tmp/<stack-name>-resolved.yaml
 ```
+
+补充：
+
+- 现在渲染结果里应当只看到 secret 名引用，不应再看到 `POSTGRESQL_PASSWORD`、`REDIS_PASSWORD`、`JWT_SECRET` 这类敏感值明文
+- `--render-only` 不会创建 Docker `secret`
 
 ### 12.3 正式部署
 
@@ -767,6 +852,18 @@ docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudr
 docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod
 docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod
 ```
+
+统一认证独立部署：
+
+```bash
+docker/swarm/init-authverse-db.sh --env-file .env.swarm
+docker/swarm/deploy-stack.sh auth --env-file .env.swarm --stack-name authverse-prod
+```
+
+补充：
+
+- 正式部署时 `deploy-stack.sh` 会先处理 stack 级 Docker `secret`，再执行 `docker stack deploy`
+- 密码轮换时，只需要更新 `.env.swarm` 并重新执行对应模板的部署命令
 
 ### 12.4 首次部署后检查
 
@@ -862,6 +959,17 @@ docker config ls
 docker config inspect <config-name>
 ```
 
+### 14.6 Secret
+
+```bash
+docker secret ls
+docker secret ls | grep '^cloudreve-prod_secret_'
+docker secret inspect <secret-name>
+
+docker service inspect cloudreve-prod_cloudreve-master \
+  --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+```
+
 ## 15. 对外健康检查命令
 
 下面这些命令很适合做上线后巡检：
@@ -895,6 +1003,12 @@ docker run --rm redis:8.6.2 redis-cli \
 ```bash
 docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
 ```
+
+如果这次改的是密码、JWT、Session Secret、OnlyOffice AMQP 之类的敏感值，流程也一样：
+
+1. 改 `.env.swarm`
+2. 重新执行对应 `deploy-stack.sh`
+3. 确认新 task 已切到新的 secret 名
 
 ### 16.2 只重启某个服务
 

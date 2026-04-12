@@ -195,6 +195,9 @@ CLOUDREVE_MASTER_PROXY_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 PGPOOL_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 REDIS_PROXY_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 REDIS_SENTINEL_NODE_CONSTRAINT=node.labels.cloudreve.redis-sentinel==true
+ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
+ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
+ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 ```
 
 对应节点先打标签：
@@ -204,6 +207,16 @@ docker node update --label-add cloudreve.master=true <node-name>
 docker node update --label-add cloudreve.minio=true <node-name>
 docker node update --label-add cloudreve.edge=true <node-name>
 docker node update --label-add cloudreve.redis-sentinel=true <node-name>
+docker node update --label-add cloudreve.onlyoffice=true <node-name>
+docker node update --label-add cloudreve.onlyoffice-rabbitmq=true <node-name>
+```
+
+- 默认情况下，OnlyOffice 直接复用 `cloudreve.edge`；如果你补了上面两条专用标签，再把环境变量改成：
+
+```bash
+ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==true
 ```
 
 如果是集群模式，再补：

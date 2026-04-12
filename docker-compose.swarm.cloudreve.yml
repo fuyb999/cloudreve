@@ -55,7 +55,7 @@ x-default-rollback-config: &default-rollback-config
   order: stop-first
 
 x-default-restart-policy: &default-restart-policy
-  condition: on-failure
+  condition: any
   delay: 5s
   window: 2m
 
@@ -64,23 +64,22 @@ services:
     <<: *service-base
     image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     hostname: "{{.Node.Hostname}}-cr-master-{{.Task.Slot}}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/cloudreve-entrypoint.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: CR_CONF_System.SessionSecret=cloudreve_session_secret,CR_CONF_Database.Password=postgresql_password,CR_CONF_Redis.Password=redis_password,CR_INIT_S3_SECRET_KEY=cloudreve_s3_secret_key
       SSL_CERT_FILE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       SSL_CERT_DIR: ${CLOUDREVE_CA_CERT_DIR:-/run/swarm-pki/ca}
       CURL_CA_BUNDLE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       CR_CONF_System.Mode: master
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
-      CR_CONF_System.SessionSecret: ${CLOUDREVE_SESSION_SECRET:?set CLOUDREVE_SESSION_SECRET}
       CR_CONF_Database.Type: postgres
       CR_CONF_Database.Host: pgpool-internal
       CR_CONF_Database.Port: "5432"
       CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
-      CR_CONF_Database.Password: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
       CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-proxy:6379}
-      CR_CONF_Redis.Password: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-true}
       CR_CONF_Redis.TLSSkipVerify: ${CLOUDREVE_REDIS_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
@@ -96,13 +95,24 @@ services:
       CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-https://minio:9000}
       CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
       CR_INIT_S3_ACCESS_KEY: ${CR_INIT_S3_ACCESS_KEY:-minio}
-      CR_INIT_S3_SECRET_KEY: ${CR_INIT_S3_SECRET_KEY:?set CR_INIT_S3_SECRET_KEY}
       CR_INIT_S3_REGION: ${CR_INIT_S3_REGION:-us-east-1}
       CR_INIT_S3_FORCE_PATH_STYLE: ${CR_INIT_S3_FORCE_PATH_STYLE:-true}
       CR_INIT_S3_RELAY: ${CR_INIT_S3_RELAY:-true}
       CR_INIT_S3_INTERNAL_PROXY: ${CR_INIT_S3_INTERNAL_PROXY:-true}
       CR_INIT_S3_IS_PRIVATE: ${CR_INIT_S3_IS_PRIVATE:-true}
       CR_INIT_S3_CHUNK_SIZE: ${CR_INIT_S3_CHUNK_SIZE:-26214400}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+      - source: cloudreve_entrypoint_v1
+        target: /usr/local/bin/cloudreve-entrypoint.sh
+        mode: 0555
+    secrets:
+      - cloudreve_session_secret
+      - postgresql_password
+      - redis_password
+      - cloudreve_s3_secret_key
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -188,15 +198,16 @@ services:
     <<: *service-base
     image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     hostname: "{{.Node.Hostname}}-cr-slave-{{.Task.Slot}}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "sh", "./entrypoint.sh"]
     environment:
       <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: CR_CONF_Slave.Secret=cloudreve_slave_secret
       SSL_CERT_FILE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       SSL_CERT_DIR: ${CLOUDREVE_CA_CERT_DIR:-/run/swarm-pki/ca}
       CURL_CA_BUNDLE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       CR_CONF_System.Mode: slave
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
-      CR_CONF_Slave.Secret: ${CLOUDREVE_SLAVE_SECRET:?set CLOUDREVE_SLAVE_SECRET}
       CR_CONF_CORS.AllowOrigins: "*"
       CR_CONF_CORS.AllowMethods: OPTIONS,GET,POST
       CR_CONF_CORS.AllowHeaders: "*"
@@ -208,6 +219,12 @@ services:
       CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
       CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
+    configs:
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - cloudreve_slave_secret
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -304,5 +321,26 @@ volumes:
   cloudreve_slave_runtime:
 
 configs:
+  swarm_secret_wrap_v1:
+    file: ./docker/swarm/swarm-secret-wrap.sh
+  cloudreve_entrypoint_v1:
+    file: ./docker/swarm/cloudreve-entrypoint.sh
   cloudreve_proxy_template_v3:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template
+
+secrets:
+  cloudreve_session_secret:
+    external: true
+    name: ${SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME:?set SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME}
+  postgresql_password:
+    external: true
+    name: ${SWARM_SECRET_POSTGRESQL_PASSWORD_NAME:?set SWARM_SECRET_POSTGRESQL_PASSWORD_NAME}
+  redis_password:
+    external: true
+    name: ${SWARM_SECRET_REDIS_PASSWORD_NAME:?set SWARM_SECRET_REDIS_PASSWORD_NAME}
+  cloudreve_s3_secret_key:
+    external: true
+    name: ${SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME:?set SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME}
+  cloudreve_slave_secret:
+    external: true
+    name: ${SWARM_SECRET_CLOUDREVE_SLAVE_SECRET_NAME:?set SWARM_SECRET_CLOUDREVE_SLAVE_SECRET_NAME}

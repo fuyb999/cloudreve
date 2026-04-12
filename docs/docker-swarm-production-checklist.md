@@ -47,7 +47,7 @@
 6. 在所有目标节点分别执行目录准备，先把 `PKI / 共享字体 / bind` 目录建好。
 7. 在 manager 部署私有仓库，再构建并推送 `Tika`、`authverse-web`、`authverse-backend`。
 8. 在 manager 按 `cloudreve / foundation / infra` 三个模板分别执行 `render-only`，确认无误后正式部署到同一个 `cloudreve-prod` 栈。
-9. 主栈稳定后执行 `docker/swarm/init-authverse-db.sh`，再部署 `authverse-prod`。
+9. 主栈稳定后执行 `docker/swarm/init-authverse-db.sh`，再对 `authverse-prod` 先 `render-only`，最后正式部署。
 10. 做外部入口、数据库、Redis、MinIO、Elasticsearch、OIDC discovery、`/app-api` 的整体验收。
 11. 首次进入 Cloudreve 后台生成真实 `Slave Key`，回填 `.env.swarm`，最后再滚动部署一次主栈。
 
@@ -158,6 +158,26 @@ docker node update --label-add cloudreve.tika=true cr-prod-wkr-14
 docker node update --label-add cloudreve.auth-web=true cr-prod-wkr-14
 ```
 
+说明：
+
+- 默认 `OnlyOffice` 直接复用 `cloudreve.edge` 标签池，所以这套默认打标签命令里不需要额外 `cloudreve.onlyoffice`
+- 在这份 4 节点清单里，`edge` 节点是 `cr-prod-mgr-11`、`cr-prod-wkr-12`、`cr-prod-wkr-14`，`onlyoffice` / `onlyoffice-public` 会从这 3 台里选 2 台调度
+- 如果 `OnlyOffice` 改成宿主机绝对路径挂载，或者你想让调度位置固定，就在同一轮打标签时额外补上：
+
+```bash
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-mgr-11
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-wkr-14
+docker node update --label-add cloudreve.onlyoffice-rabbitmq=true cr-prod-mgr-11
+```
+
+- 同时把 `.env.swarm` 里的这 3 个约束改掉：
+
+```bash
+ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==true
+```
+
 ## 4. 环境文件
 
 先在固定的部署 manager 上：
@@ -200,6 +220,10 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 - `AUTHVERSE_ELASTICSEARCH_URI` 默认保持 `http://${CLOUDREVE_STACK_NAME}_elasticsearch-internal:9200`
 - 对外发布端口虽然很多变量名还叫 `*_HTTP_PORT`，但现在默认对外都提供 TLS
 - `.env.swarm` 不会自动同步到其它 manager，生产里固定只从一个 manager 部署
+- `deploy-stack.sh` 会把 `.env.swarm` 里的敏感值自动注册成 `${STACK_NAME}_secret_<secret-key>_<hash>` 形式的 Docker `secret`
+- 正式部署时会自动创建 / 复用这些 secret；`--render-only` 只渲染引用关系，不会真的创建 secret
+- 密码变更后不需要手工 `docker secret create`，直接重新执行对应的 `deploy-stack.sh`
+- 旧 secret 的清理是 best-effort；如果某个旧 task 还在引用，脚本会跳过，等滚动完成后下次部署再清
 
 ## 4.1 生成默认 CA 与服务证书
 
@@ -347,6 +371,7 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudreve-prod --render-only
 docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod --render-only
 docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod --render-only
+docker/swarm/deploy-stack.sh auth --env-file .env.swarm --stack-name authverse-prod --render-only
 ```
 
 确认无误后正式上线：
@@ -362,6 +387,16 @@ Cloudreve 主栈起来后，再初始化统一认证数据库并部署统一认�
 ```bash
 docker/swarm/init-authverse-db.sh --env-file .env.swarm
 docker/swarm/deploy-stack.sh auth --env-file .env.swarm --stack-name authverse-prod
+```
+
+部署完成后建议立即确认 secret 引用是否正确：
+
+```bash
+docker secret ls | grep '^cloudreve-prod_secret_'
+docker secret ls | grep '^authverse-prod_secret_'
+docker service inspect cloudreve-prod_cloudreve-master --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+docker service inspect cloudreve-prod_onlyoffice --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+docker service inspect authverse-prod_authverse-backend --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
 ```
 
 ## 8. 验收

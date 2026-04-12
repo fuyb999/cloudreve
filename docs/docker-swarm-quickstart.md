@@ -45,6 +45,7 @@
 - 所有对外入口现在默认启用 TLS，证书统一由一套自签 CA 管理
 - 业务 overlay 网络默认启用跨节点加密，并且不再允许独立容器直接 attach
 - 文本配置、启动脚本、Nginx / HAProxy 模板统一通过 Swarm `configs` 下发
+- `deploy-stack.sh` 会按 stack 名自动创建 / 复用版本化 Docker `secrets`，敏感值不再直接写进 service 环境变量
 - Cloudreve 不再默认把用户文件落到宿主机目录
 - `cloudreve-master` / `minio` / `elasticsearch` / `kafka` / `tika` 字体目录现在同时支持命名卷和宿主机绝对路径两种挂载模式
 - `Tika` 和 `OnlyOffice` 默认共用一套外挂字体目录
@@ -143,6 +144,9 @@ docker/swarm/generate-swarm-pki.sh --env-file .env.swarm --force-certs
 
 - 默认根 CA 会生成到 `PRIVATE_REGISTRY_CA_FILE`
 - 以后如果你要替换成自己的 CA，直接覆盖 `ca.crt + ca.key`，然后重新执行 `generate-swarm-pki.sh --force-ca --force-certs`
+- `.env.swarm` 里的密码 / secret 仍然需要维护，但正式部署时 `deploy-stack.sh` 会把它们转换成 `${STACK_NAME}_secret_<secret-key>_<hash>` 形式的 Docker `secret`
+- 同一个 `stack-name` 下如果密码发生变化，重新执行对应的 `deploy-stack.sh` 即可，脚本会引用新 secret，并尽力清理旧 secret
+- `worker` 节点不需要 `.env.swarm`；只有执行部署的 manager 需要
 
 6. 在所有 Swarm 节点写入私有仓库 `insecure-registries` 并刷新 Docker：
 
@@ -293,6 +297,7 @@ ELASTICSEARCH_DATA_MOUNT_SOURCE=/absolute/path/elasticsearch
 docker stack services cloudreve
 docker stack ps cloudreve
 docker service logs -f cloudreve_cloudreve-master
+docker secret ls | grep '^cloudreve.*_secret_'
 ```
 
 ## 5. 主站初始化
