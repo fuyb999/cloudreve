@@ -10,18 +10,20 @@ HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
 DAEMON_JSON="${DAEMON_JSON:-/etc/docker/daemon.json}"
 
 usage() {
-  cat <<'EOF'
+ cat <<'EOF'
 用法：
   sudo docker/swarm/prepare-private-registry.sh [--env-file 文件] [--check] [--apply] [--restart-docker]
 
 说明：
-  这个脚本用于在每台 Swarm 节点检查或写入 Docker daemon 的 insecure registry 配置，
-  让节点可以从单点部署的 registry:2 私有仓库通过 HTTP 远程拉取镜像。
+  这个脚本用于在每台 Swarm 节点准备私有仓库访问配置：
+  1. `PRIVATE_REGISTRY_SCHEME=http` 时，写入 Docker daemon 的 `insecure-registries`
+  2. `PRIVATE_REGISTRY_SCHEME=https` 时，写入 Docker `certs.d/<registry>/ca.crt`
+  让节点可以从单点部署的 `registry:2` 远程拉取镜像。
 
 参数：
   --env-file FILE       读取的环境变量文件，默认是 .env.swarm
   --check               只检查，不改动
-  --apply               写入 daemon.json
+  --apply               应用私有仓库信任配置
   --restart-docker      apply 后自动重启 docker
   -h, --help            显示帮助
 
@@ -73,6 +75,11 @@ fi
 
 PRIVATE_REGISTRY_SCHEME="${PRIVATE_REGISTRY_SCHEME:-http}"
 PRIVATE_REGISTRY_ADDR="${PRIVATE_REGISTRY_ADDR:-}"
+SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
+PRIVATE_REGISTRY_CA_FILE="${PRIVATE_REGISTRY_CA_FILE:-$SWARM_PKI_MOUNT_SOURCE/ca/ca.crt}"
+DOCKER_CERTS_DIR="${DOCKER_CERTS_DIR:-/etc/docker/certs.d}"
+REGISTRY_CERT_DIR="$DOCKER_CERTS_DIR/$PRIVATE_REGISTRY_ADDR"
+REGISTRY_CA_TARGET="$REGISTRY_CERT_DIR/ca.crt"
 JSON_TOOL=""
 
 if [[ -z "$PRIVATE_REGISTRY_ADDR" ]]; then
@@ -80,18 +87,24 @@ if [[ -z "$PRIVATE_REGISTRY_ADDR" ]]; then
   exit 1
 fi
 
-if [[ "$PRIVATE_REGISTRY_SCHEME" != "http" ]]; then
-  echo "[$HOST_NAME] PRIVATE_REGISTRY_SCHEME=$PRIVATE_REGISTRY_SCHEME，不需要写 insecure-registries。"
-  exit 0
-fi
+case "$PRIVATE_REGISTRY_SCHEME" in
+  http|https)
+    ;;
+  *)
+    echo "[$HOST_NAME] 不支持的 PRIVATE_REGISTRY_SCHEME=$PRIVATE_REGISTRY_SCHEME，只允许 http / https。" >&2
+    exit 1
+    ;;
+esac
 
-if command -v jq >/dev/null 2>&1; then
-  JSON_TOOL="jq"
-elif command -v python3 >/dev/null 2>&1; then
-  JSON_TOOL="python3"
-else
-  echo "[$HOST_NAME] 缺少 jq 或 python3，无法安全修改 $DAEMON_JSON。" >&2
-  exit 1
+if [[ "$PRIVATE_REGISTRY_SCHEME" == "http" ]]; then
+  if command -v jq >/dev/null 2>&1; then
+    JSON_TOOL="jq"
+  elif command -v python3 >/dev/null 2>&1; then
+    JSON_TOOL="python3"
+  else
+    echo "[$HOST_NAME] 缺少 jq 或 python3，无法安全修改 $DAEMON_JSON。" >&2
+    exit 1
+  fi
 fi
 
 has_registry() {
@@ -166,10 +179,23 @@ PY
 }
 
 if [[ "$MODE" == "check" ]]; then
-  if has_registry "$DAEMON_JSON"; then
-    echo "[$HOST_NAME] [OK] Docker daemon 已信任私有仓库：$PRIVATE_REGISTRY_ADDR"
+  if [[ "$PRIVATE_REGISTRY_SCHEME" == "https" ]]; then
+    if [[ ! -f "$PRIVATE_REGISTRY_CA_FILE" ]]; then
+      echo "[$HOST_NAME] [MISSING] 私有仓库 CA 源文件不存在：$PRIVATE_REGISTRY_CA_FILE"
+    elif [[ ! -f "$REGISTRY_CA_TARGET" ]]; then
+      echo "[$HOST_NAME] [MISSING] Docker certs.d 尚未安装私有仓库 CA：$REGISTRY_CA_TARGET"
+    elif cmp -s "$PRIVATE_REGISTRY_CA_FILE" "$REGISTRY_CA_TARGET"; then
+      echo "[$HOST_NAME] [OK] Docker certs.d 已安装私有仓库 CA：$REGISTRY_CA_TARGET"
+    else
+      echo "[$HOST_NAME] [STALE] Docker certs.d 中的 CA 与源文件不一致：$REGISTRY_CA_TARGET"
+      echo "[$HOST_NAME] [NEXT] 请执行 --apply，把新的 CA 重新下发到 Docker certs.d。"
+    fi
   else
-    echo "[$HOST_NAME] [MISSING] Docker daemon 尚未信任私有仓库：$PRIVATE_REGISTRY_ADDR"
+    if has_registry "$DAEMON_JSON"; then
+      echo "[$HOST_NAME] [OK] Docker daemon 已信任私有仓库：$PRIVATE_REGISTRY_ADDR"
+    else
+      echo "[$HOST_NAME] [MISSING] Docker daemon 尚未信任私有仓库：$PRIVATE_REGISTRY_ADDR"
+    fi
   fi
   exit 0
 fi
@@ -179,16 +205,27 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   exit 1
 fi
 
-tmp_json="$(mktemp)"
-cleanup() {
-  rm -f "$tmp_json"
-}
-trap cleanup EXIT
+if [[ "$PRIVATE_REGISTRY_SCHEME" == "https" ]]; then
+  if [[ ! -f "$PRIVATE_REGISTRY_CA_FILE" ]]; then
+    echo "[$HOST_NAME] 找不到私有仓库 CA 文件：$PRIVATE_REGISTRY_CA_FILE" >&2
+    exit 1
+  fi
 
-write_registry_config "$DAEMON_JSON" "$tmp_json"
+  mkdir -p "$REGISTRY_CERT_DIR"
+  install -m 0644 "$PRIVATE_REGISTRY_CA_FILE" "$REGISTRY_CA_TARGET"
+  echo "[$HOST_NAME] [DONE] 已安装私有仓库 CA -> $REGISTRY_CA_TARGET"
+else
+  tmp_json="$(mktemp)"
+  cleanup() {
+    rm -f "$tmp_json"
+  }
+  trap cleanup EXIT
 
-install -m 0644 "$tmp_json" "$DAEMON_JSON"
-echo "[$HOST_NAME] [DONE] 已写入 $DAEMON_JSON -> insecure-registries += $PRIVATE_REGISTRY_ADDR"
+  write_registry_config "$DAEMON_JSON" "$tmp_json"
+
+  install -m 0644 "$tmp_json" "$DAEMON_JSON"
+  echo "[$HOST_NAME] [DONE] 已写入 $DAEMON_JSON -> insecure-registries += $PRIVATE_REGISTRY_ADDR"
+fi
 
 if [[ "$RESTART_DOCKER" == "yes" ]]; then
   if command -v systemctl >/dev/null 2>&1; then

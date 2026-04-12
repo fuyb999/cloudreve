@@ -4,24 +4,24 @@
 
 对应文件：
 
-- `docker-compose.swarm.yml`
+- `docker-compose.swarm.cloudreve.yml`
 - `docker-compose.swarm.single.yml`
 - `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
-- `docker-compose.swarm.cluster.yml`
+- `docker-compose.swarm.infra.yml`
 - `.env.swarm.example`
+- `.env.swarm.user-test.example`
 - `.env.swarm.prod-4x128g.example`
-- `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
 - `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
+- `docker/swarm/sync-swarm-assets.sh`
 - `docker-compose.swarm.auth.yml`
 - `docker/swarm/build-auth-images.sh`
 - `docker/swarm/init-authverse-db.sh`
-- `docker/swarm/deploy-auth-stack.sh`
 
 如果你现在只想先跑起来，再回来看细节：
 
@@ -47,10 +47,12 @@
 并且满足下面这些约束：
 
 - PostgreSQL / Redis 默认使用宿主机物理目录
-- Cloudreve 运行目录、MinIO、Elasticsearch、Tika 字体目录同时支持命名卷和宿主机绝对路径
+- Cloudreve 运行目录、MinIO、Elasticsearch、统一字体目录同时支持命名卷和宿主机绝对路径
 - Cloudreve 默认文件存储使用 S3 兼容对象存储，不再默认写宿主机用户文件目录
-- 支持单节点对象存储/检索模式，也支持 `SWARM_WITH_CLUSTER=yes` 的 MinIO / Elasticsearch / Kafka 集群模式
+- 支持单节点对象存储/检索模式，也支持按 `infra` 模板补齐 MinIO / Elasticsearch / Kafka 集群模式
+- 业务 overlay 网络默认启用跨节点加密，并收紧为 `attachable: false`
 - 所有镜像都固定版本，不使用 `latest`
+- 所有对外入口默认统一启用 TLS，证书由一套 CA 统一签发
 
 如果你的生产环境就是：
 
@@ -60,6 +62,9 @@
 - 每台 `64` 线程
 
 建议直接从 `.env.swarm.prod-4x128g.example` 开始。
+
+如果你现在不是直接上 4 台，而是要先把整套方案裁成 1 台 Linux 做用户测试，
+建议直接从 `.env.swarm.user-test.example` 开始。
 
 ## 2. 这些 YML 文件分别干什么
 
@@ -80,24 +85,39 @@
 
 这是默认单节点全量模板。
 
-`docker/swarm/deploy-stack.sh` 在未启用 `SWARM_WITH_CLUSTER=yes` 时会直接使用它，
+`docker/swarm/deploy-stack.sh` 在不传模板名时会直接使用它，
 一次起整套单节点服务：
 
 - `cloudreve-master`
 - `cloudreve-master-proxy`
 - `postgresql-1`
+- `pgpool-internal`
 - `pgpool`
 - `redis-1`
+- `redis-proxy-internal`
 - `redis-proxy`
+- `minio-internal`
 - `minio`
 - `minio-init`
+- `elasticsearch-internal`
 - `elasticsearch`
 - `kafka`
 - `kafka-ui`
+- `kafka-ui-public`
 - `tika`
+- `tika-proxy`
 - `onlyoffice`
+- `onlyoffice-public`
+- `authverse-web`
+- `authverse-backend`
 
-### 2.3 `docker-compose.swarm.yml`
+补充：
+
+- 单节点默认会在部署后自动执行一次 `docker/swarm/init-authverse-db.sh`
+- `.env.swarm.example` 里 `AUTHVERSE_WEB_IMAGE` / `AUTHVERSE_BACKEND_IMAGE`
+  默认指向本地 tag，方便本机一把起
+
+### 2.3 `docker-compose.swarm.cloudreve.yml`
 
 这是 Cloudreve 业务层模板，只包含：
 
@@ -111,12 +131,16 @@
 这是多节点模式下共用的基础中间件模板，包含：
 
 - `postgresql-1/2/3`
+- `pgpool-internal`
 - `pgpool`
 - `redis-1/2/3`
 - `redis-sentinel`
+- `redis-proxy-internal`
 - `redis-proxy`
 - `tika`
+- `tika-proxy`
 - `onlyoffice`
+- `onlyoffice-public`
 
 这个文件里最重要的设计点：
 
@@ -126,19 +150,22 @@
 - PostgreSQL / Redis 默认就是 `bind`
 - 其他运行目录默认 `volume`，但可以切换成 `bind`
 
-### 2.5 `docker-compose.swarm.cluster.yml`
+### 2.5 `docker-compose.swarm.infra.yml`
 
-这是集群覆盖文件，只在下面两种情况生效：
+这是集群型基础设施模板。
 
-- `.env.swarm` 里设置了 `SWARM_WITH_CLUSTER=yes`
-- 或部署时执行 `docker/swarm/deploy-stack.sh --with-cluster`
+典型用法是对同一个 stack name 分步执行：
 
-它会在 `docker-compose.swarm.yml + docker-compose.swarm.foundation.yml` 的基础上再叠加：
+- `docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod`
+- `docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod`
+- `docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod`
 
-- `minio-1/2/3/4` + `minio` 代理入口
-- `elasticsearch-1/2/3` + `elasticsearch` 代理入口
+这样会把下面这组服务并入同一个 Swarm 栈：
+
+- `minio-1/2/3/4` + `minio-internal` 内部入口 + `minio` TLS 入口 + `minio-init`
+- `elasticsearch-1/2/3` + `elasticsearch-internal` 内部入口 + `elasticsearch` TLS 入口
 - `kafka-1/2/3` + `kafka` 代理入口
-- `kafka-ui`
+- `kafka-ui` + `kafka-ui-public`
 
 其中 Kafka 明确启用了：
 
@@ -153,7 +180,7 @@
 
 这个覆盖文件已经废弃，原因很直接：
 
-- `docker-compose.swarm.yml`、`docker-compose.swarm.foundation.yml`、`docker-compose.swarm.auth.yml`
+- `docker-compose.swarm.cloudreve.yml`、`docker-compose.swarm.foundation.yml`、`docker-compose.swarm.auth.yml`
   都已经统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
 - PostgreSQL / Redis / Cloudreve 运行目录 / MinIO / Elasticsearch / Tika 字体 / authverse OIDC 密钥
   都不再需要额外叠加 compose
@@ -162,8 +189,40 @@
 现在如果你要切到宿主机绝对路径，直接改 `.env.swarm` 即可，例如：
 
 ```env
-TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
-TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/tika-fonts
+SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind
+SHARED_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/shared-fonts
+```
+
+## 2.7 TLS / 证书 / 共享字体
+
+这套模板当前把“配置下发”和“二进制资产下发”拆成两类：
+
+- 文本配置、脚本、HAProxy/Nginx 模板：统一使用 Swarm `configs`
+- 证书私钥、共享字体：统一使用 `SWARM_PKI_MOUNT_SOURCE`、`SHARED_CUSTOM_FONTS_MOUNT_SOURCE`
+
+对应脚本：
+
+- `docker/swarm/generate-swarm-pki.sh`
+- `docker/swarm/prepare-bind-paths.sh`
+
+推荐顺序：
+
+1. 回填 `.env.swarm`
+2. 执行 `docker/swarm/generate-swarm-pki.sh --env-file .env.swarm --force-certs`
+3. 在每台节点执行 `docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker`
+4. 执行 `docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --apply`
+5. 再执行 `docker/swarm/deploy-stack.sh ...`
+
+补充：
+
+- 当前默认 `PRIVATE_REGISTRY_SCHEME=http`
+- `prepare-private-registry.sh` 会把 `PRIVATE_REGISTRY_ADDR` 写入 Docker `insecure-registries`
+- 如果你用了 bind 模式的 `SWARM_PKI_MOUNT_SOURCE` 或 `SHARED_CUSTOM_FONTS_MOUNT_SOURCE`，建议从 manager 执行 `docker/swarm/sync-swarm-assets.sh`
+- 如果后续你要把默认 CA 换成正式 CA，替换 `SWARM_PKI_MOUNT_SOURCE/ca/ca.crt` 与 `ca.key` 后，重新执行：
+
+```bash
+docker/swarm/generate-swarm-pki.sh --env-file .env.swarm --force-ca --force-certs
+sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker
 ```
 
 ## 3. 推荐生产拓扑
@@ -172,10 +231,10 @@ TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/tika-fonts
 
 建议先把主机名定好，再让节点加入 Swarm：
 
-- `cr-prod-mgr-1`
-- `cr-prod-wkr-1`
-- `cr-prod-wkr-2`
-- `cr-prod-wkr-3`
+- `cr-prod-mgr-11`
+- `cr-prod-wkr-12`
+- `cr-prod-wkr-13`
+- `cr-prod-wkr-14`
 
 这样下面这些命令会非常清楚：
 
@@ -189,14 +248,14 @@ docker service ps cloudreve_postgresql-1
 
 `.env.swarm.prod-4x128g.example` 里的默认规划是：
 
-- `cr-prod-mgr-1`
+- `cr-prod-mgr-11`
   - `cloudreve.master=true`
   - `cloudreve.edge=true`
   - `cloudreve.registry=true`
   - `cloudreve.minio1=true`
   - `cloudreve.tika=true`
   - `cloudreve.kafka-ui=true`
-- `cr-prod-wkr-1`
+- `cr-prod-wkr-12`
   - `cloudreve.slave=true`
   - `cloudreve.edge=true`
   - `cloudreve.pg1=true`
@@ -205,7 +264,7 @@ docker service ps cloudreve_postgresql-1
   - `cloudreve.es1=true`
   - `cloudreve.kafka1=true`
   - `cloudreve.minio2=true`
-- `cr-prod-wkr-2`
+- `cr-prod-wkr-13`
   - `cloudreve.slave=true`
   - `cloudreve.pg2=true`
   - `cloudreve.redis2=true`
@@ -213,7 +272,7 @@ docker service ps cloudreve_postgresql-1
   - `cloudreve.es2=true`
   - `cloudreve.kafka2=true`
   - `cloudreve.minio3=true`
-- `cr-prod-wkr-3`
+- `cr-prod-wkr-14`
   - `cloudreve.slave=true`
   - `cloudreve.edge=true`
   - `cloudreve.pg3=true`
@@ -227,45 +286,45 @@ docker service ps cloudreve_postgresql-1
 打标签命令示例：
 
 ```bash
-docker node update --label-add cloudreve.master=true cr-prod-mgr-1
-docker node update --label-add cloudreve.edge=true cr-prod-mgr-1
-docker node update --label-add cloudreve.registry=true cr-prod-mgr-1
-docker node update --label-add cloudreve.minio1=true cr-prod-mgr-1
-docker node update --label-add cloudreve.tika=true cr-prod-mgr-1
-docker node update --label-add cloudreve.kafka-ui=true cr-prod-mgr-1
+docker node update --label-add cloudreve.master=true cr-prod-mgr-11
+docker node update --label-add cloudreve.edge=true cr-prod-mgr-11
+docker node update --label-add cloudreve.registry=true cr-prod-mgr-11
+docker node update --label-add cloudreve.minio1=true cr-prod-mgr-11
+docker node update --label-add cloudreve.tika=true cr-prod-mgr-11
+docker node update --label-add cloudreve.kafka-ui=true cr-prod-mgr-11
 
-docker node update --label-add cloudreve.slave=true cr-prod-wkr-1
-docker node update --label-add cloudreve.edge=true cr-prod-wkr-1
-docker node update --label-add cloudreve.pg1=true cr-prod-wkr-1
-docker node update --label-add cloudreve.redis1=true cr-prod-wkr-1
-docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-1
-docker node update --label-add cloudreve.es1=true cr-prod-wkr-1
-docker node update --label-add cloudreve.kafka1=true cr-prod-wkr-1
-docker node update --label-add cloudreve.minio2=true cr-prod-wkr-1
+docker node update --label-add cloudreve.slave=true cr-prod-wkr-12
+docker node update --label-add cloudreve.edge=true cr-prod-wkr-12
+docker node update --label-add cloudreve.pg1=true cr-prod-wkr-12
+docker node update --label-add cloudreve.redis1=true cr-prod-wkr-12
+docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-12
+docker node update --label-add cloudreve.es1=true cr-prod-wkr-12
+docker node update --label-add cloudreve.kafka1=true cr-prod-wkr-12
+docker node update --label-add cloudreve.minio2=true cr-prod-wkr-12
 
-docker node update --label-add cloudreve.slave=true cr-prod-wkr-2
-docker node update --label-add cloudreve.pg2=true cr-prod-wkr-2
-docker node update --label-add cloudreve.redis2=true cr-prod-wkr-2
-docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-2
-docker node update --label-add cloudreve.es2=true cr-prod-wkr-2
-docker node update --label-add cloudreve.kafka2=true cr-prod-wkr-2
-docker node update --label-add cloudreve.minio3=true cr-prod-wkr-2
+docker node update --label-add cloudreve.slave=true cr-prod-wkr-13
+docker node update --label-add cloudreve.pg2=true cr-prod-wkr-13
+docker node update --label-add cloudreve.redis2=true cr-prod-wkr-13
+docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-13
+docker node update --label-add cloudreve.es2=true cr-prod-wkr-13
+docker node update --label-add cloudreve.kafka2=true cr-prod-wkr-13
+docker node update --label-add cloudreve.minio3=true cr-prod-wkr-13
 
-docker node update --label-add cloudreve.slave=true cr-prod-wkr-3
-docker node update --label-add cloudreve.edge=true cr-prod-wkr-3
-docker node update --label-add cloudreve.pg3=true cr-prod-wkr-3
-docker node update --label-add cloudreve.redis3=true cr-prod-wkr-3
-docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-3
-docker node update --label-add cloudreve.es3=true cr-prod-wkr-3
-docker node update --label-add cloudreve.kafka3=true cr-prod-wkr-3
-docker node update --label-add cloudreve.minio4=true cr-prod-wkr-3
-docker node update --label-add cloudreve.tika=true cr-prod-wkr-3
+docker node update --label-add cloudreve.slave=true cr-prod-wkr-14
+docker node update --label-add cloudreve.edge=true cr-prod-wkr-14
+docker node update --label-add cloudreve.pg3=true cr-prod-wkr-14
+docker node update --label-add cloudreve.redis3=true cr-prod-wkr-14
+docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-14
+docker node update --label-add cloudreve.es3=true cr-prod-wkr-14
+docker node update --label-add cloudreve.kafka3=true cr-prod-wkr-14
+docker node update --label-add cloudreve.minio4=true cr-prod-wkr-14
+docker node update --label-add cloudreve.tika=true cr-prod-wkr-14
 ```
 
 查看标签：
 
 ```bash
-docker node inspect cr-prod-wkr-1 --format '{{json .Spec.Labels}}'
+docker node inspect cr-prod-wkr-12 --format '{{json .Spec.Labels}}'
 ```
 
 ## 4. 资源配置基线
@@ -330,24 +389,33 @@ docker node inspect cr-prod-wkr-1 --format '{{json .Spec.Labels}}'
 - 也没有依赖“本地临时 retag 成 `bitnami/*`”
 - `TIKA_IMAGE` 与 `AUTHVERSE_*_IMAGE` 都是自定义镜像，必须提前推到私有仓库，再让其它节点远程拉取
 
-上线前建议每台节点都执行：
+如果你选择 `SWARM_IMAGE_SOURCE=remote`，上线前建议所有节点先执行：
 
 ```bash
 sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker
-docker/swarm/prepare-bitnami-images.sh --check
-docker/swarm/prepare-bitnami-images.sh
 ```
+
+然后只在固定部署 manager 上准备 local 源镜像：
+
+```bash
+docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --check
+docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
+```
+
+如果你选择 `SWARM_IMAGE_SOURCE=local`，再把上面这组 `prepare-bitnami-images.sh` 命令补到每台目标节点执行。
 
 补充：
 
 - `prepare-private-registry.sh` 会优先用 `jq` 修改 `/etc/docker/daemon.json`
 - 如果节点没有 `jq`，会自动回退到 `python3`
 - 两者都没有时，需要先安装其中一个
+- 当 `PRIVATE_REGISTRY_SCHEME=https` 时，它不会改 `daemon.json`，而是安装 CA 到 Docker `certs.d`
+- `publish-private-images.sh` 会自动读取 `PRIVATE_REGISTRY_CA_FILE`
 
 然后在固定 manager 上执行：
 
 ```bash
-docker/swarm/deploy-private-registry.sh --env-file .env.swarm
+docker/swarm/deploy-stack.sh registry --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
@@ -538,7 +606,7 @@ sudo docker/swarm/prepare-bind-paths.sh --services pg,redis --check
 sudo docker/swarm/prepare-bind-paths.sh --apply
 ```
 
-只处理集群型数据目录：
+只处理 MinIO / Elasticsearch / Kafka 数据目录：
 
 ```bash
 sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka --apply
@@ -571,6 +639,54 @@ docker swarm join-token worker
 
 在 worker 节点执行上面输出的 `docker swarm join ...`
 
+如果你启用了业务 overlay 加密，节点间防火墙 / 安全组还要放通：
+
+- `2377/tcp`
+- `7946/tcp`
+- `7946/udp`
+- `4789/udp`
+- `ESP`，也就是 `IP protocol 50`
+
+如果你用的是 Ubuntu `ufw`，可以直接这样做。
+
+先放行 SSH：
+
+```bash
+sudo ufw allow OpenSSH
+```
+
+假设 4 台节点的内网网段是 `10.10.0.0/24`：
+
+```bash
+NODE_NET="10.10.0.0/24"
+```
+
+manager 上执行：
+
+```bash
+sudo ufw allow proto tcp from $NODE_NET to any port 2377 comment 'docker swarm manager'
+sudo ufw allow proto tcp from $NODE_NET to any port 7946 comment 'docker swarm gossip'
+sudo ufw allow proto udp from $NODE_NET to any port 7946 comment 'docker swarm gossip'
+sudo ufw allow proto udp from $NODE_NET to any port 4789 comment 'docker overlay vxlan'
+sudo ufw allow from $NODE_NET to any proto esp comment 'docker overlay encrypted'
+```
+
+worker 上执行：
+
+```bash
+sudo ufw allow proto tcp from $NODE_NET to any port 7946 comment 'docker swarm gossip'
+sudo ufw allow proto udp from $NODE_NET to any port 7946 comment 'docker swarm gossip'
+sudo ufw allow proto udp from $NODE_NET to any port 4789 comment 'docker overlay vxlan'
+sudo ufw allow from $NODE_NET to any proto esp comment 'docker overlay encrypted'
+```
+
+检查结果：
+
+```bash
+sudo ufw status numbered
+sudo ufw status verbose
+```
+
 ### 11.3 验证
 
 在 manager 上执行：
@@ -587,6 +703,20 @@ docker info --format '{{.Swarm.LocalNodeState}}'
 ```bash
 cp .env.swarm.prod-4x128g.example .env.swarm
 ```
+
+如果你当前是单机用户测试，而不是 4 台生产上线，改用：
+
+```bash
+cp .env.swarm.user-test.example .env.swarm
+```
+
+这份模板默认是：
+
+- 单节点全量栈
+- 本地镜像优先
+- 对外端口全部非默认值
+- TLS / Authverse / MinIO / ES / Kafka / Tika / OnlyOffice 一并打通
+- bind 路径统一落到 `/srv/cloudreve-user-test/...`
 
 至少修改这些变量：
 
@@ -608,10 +738,12 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 docker/swarm/deploy-stack.sh --render-only
 ```
 
-集群模式：
+拆分模板渲染：
 
 ```bash
-docker/swarm/deploy-stack.sh --with-cluster --render-only
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod --render-only
+docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod --render-only
+docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod --render-only
 ```
 
 渲染文件默认在：
@@ -628,16 +760,12 @@ docker/swarm/deploy-stack.sh --with-cluster --render-only
 docker/swarm/deploy-stack.sh
 ```
 
-集群模式：
+拆分模板并入同一个生产栈：
 
 ```bash
-docker/swarm/deploy-stack.sh --with-cluster
-```
-
-使用自定义环境文件和栈名：
-
-```bash
-docker/swarm/deploy-stack.sh --env-file .env.swarm --stack-name cloudreve-prod --with-cluster
+docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudreve-prod
+docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod
+docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod
 ```
 
 ### 12.4 首次部署后检查
@@ -681,7 +809,7 @@ http(s)://<master-domain-or-ip>/admin
 4. 重新部署一次
 
 ```bash
-docker/swarm/deploy-stack.sh --with-cluster
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
 ```
 
 ## 14. 日常巡检命令
@@ -765,7 +893,7 @@ docker run --rm redis:8.6.2 redis-cli \
 2. 重新部署
 
 ```bash
-docker/swarm/deploy-stack.sh --with-cluster
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
 ```
 
 ### 16.2 只重启某个服务
@@ -989,9 +1117,17 @@ docker run --rm redis:8.6.2 redis-cli -h <ip> -p 16379 -a '<redis-password>' PIN
 
 先分别测：
 
+先定位 `elasticsearch-1` 落在哪台节点：
+
 ```bash
-docker run --rm --network cloudreve-prod_cloudreve_backend curlimages/curl:8.12.1 \
-  -sS -o /dev/null -w '%{http_code}\n' http://elasticsearch-1:9200
+docker service ps cloudreve-prod_elasticsearch-1
+```
+
+再到承载 `elasticsearch-1` 任务的那台节点执行：
+
+```bash
+docker exec "$(docker ps -q --filter label=com.docker.swarm.service.name=cloudreve-prod_elasticsearch-1)" \
+  curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9200
 
 curl -sS -o /dev/null -w '%{http_code}\n' http://<ip>:29200
 ```
@@ -1027,7 +1163,7 @@ docker service logs cloudreve-prod_kafka-3
 - Colima 单节点 Swarm
 - 栈名：`cloudreve-fulltest`
 - 环境文件：`.tmp/.env.swarm.fulltest`
-- 部署命令：`docker/swarm/deploy-stack.sh --env-file .tmp/.env.swarm.fulltest --stack-name cloudreve-fulltest --with-cluster`
+- 部署命令：`docker/swarm/deploy-stack.sh cloudreve --env-file .tmp/.env.swarm.fulltest --stack-name cloudreve-fulltest`
 
 已验证通过：
 
@@ -1073,11 +1209,12 @@ docker service logs cloudreve-prod_kafka-3
 如果你现在要上真实环境，建议顺序就是：
 
 1. 按本手册先规划主机名、节点标签、目录和 sysctl
-2. 在每台目标节点执行 `prepare-bitnami-images.sh`
+2. 在每台目标节点执行 `prepare-private-registry.sh`；如果走 `local` 模式，再在每台目标节点执行 `prepare-bitnami-images.sh`
 3. 在每台目标节点执行 `prepare-bind-paths.sh --apply`
+   如果发布 `infra`，对应节点改用 `prepare-bind-paths.sh --services minio,elasticsearch,kafka --apply`
 4. 在固定 manager 上维护 `.env.swarm`
 5. 先 `--render-only` 检查最终 YAML
-6. 再正式 `deploy-stack.sh --with-cluster`
+6. 再按同一个 stack name 正式执行 `deploy-stack.sh cloudreve`、`foundation`、`infra`
 7. 先打通 `Cloudreve / PG / Redis / Tika`
 8. 再单独验 `MinIO / Elasticsearch / Kafka`
 9. 最后再接 LB、域名、HTTPS、监控与备份

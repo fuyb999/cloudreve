@@ -2,13 +2,13 @@
 
 本文档对应这次新增的统一认证 Swarm 交付，覆盖：
 
-- `docker-compose.swarm.yml`
+- `docker-compose.swarm.cloudreve.yml`
 - `docker-compose.swarm.foundation.yml`
-- `docker-compose.swarm.cluster.yml`
+- `docker-compose.swarm.infra.yml`
 - `docker-compose.swarm.auth.yml`
 - `docker/swarm/build-auth-images.sh`
 - `docker/swarm/init-authverse-db.sh`
-- `docker/swarm/deploy-auth-stack.sh`
+- `docker/swarm/deploy-stack.sh`
 - `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `.env.swarm.example`
@@ -26,15 +26,15 @@
 
 - `cloudreve` 主栈继续承载网盘、PG、Redis、MinIO、ES、Kafka、Tika
 - `cloudreve` 主栈本身已经拆成 3 组 Swarm YML：
-  - `docker-compose.swarm.yml`：Cloudreve 主从与入口代理
+  - `docker-compose.swarm.cloudreve.yml`：Cloudreve 主从与入口代理
   - `docker-compose.swarm.foundation.yml`：PG / Redis / Tika / OnlyOffice，以及单节点 MinIO / ES 兼容形态
-  - `docker-compose.swarm.cluster.yml`：MinIO / Kafka / ES / Kafka UI 集群形态
+  - `docker-compose.swarm.infra.yml`：MinIO / Kafka / ES / Kafka UI 集群形态
 - `authverse` 前端 + `authverse-backend` 后端独立成一个 `authverse` 栈
 - 两个栈通过同一条 overlay 网络互通
 - 统一认证直接复用 `cloudreve` 主栈里的：
-  - `pgpool`
-  - `redis-proxy`
-  - `elasticsearch`
+  - `pgpool-internal`
+  - `redis-proxy-internal`
+  - `elasticsearch-internal`
 - 对外只暴露一个统一认证入口端口，由 `authverse-web` 负责：
   - `/` 走 authverse 前端
   - `/admin-api`、`/app-api`、`/.well-known`、`/oidc` 走 authverse-backend
@@ -69,15 +69,15 @@
    - `authverse-backend`
    - `cloudreve-master`
 4. `authverse-backend` 再访问：
-   - `cloudreve_pgpool`
-   - `cloudreve_redis-proxy`
-   - `cloudreve_elasticsearch`
+   - `cloudreve_pgpool-internal`
+   - `cloudreve_redis-proxy-internal`
+   - `cloudreve_elasticsearch-internal`
 
 补充说明：
 
-- 运行期业务流量走 `cloudreve_pgpool`
-- 但 `docker/swarm/init-authverse-db.sh` 做的是建库、删库、授权这类 DDL 操作，默认会直连 `cloudreve_postgresql-1`
-- 不建议把这类初始化 DDL 走 `pgpool`
+- 运行期业务流量走 `cloudreve_pgpool-internal`
+- `docker/swarm/init-authverse-db.sh` 现在默认通过 `pgpool` 的对外 TLS 入口执行初始化
+- 这样不再依赖 attachable overlay，适合把业务 overlay 收紧为 `attachable: false`
 
 ## 3. 资源建议
 
@@ -200,8 +200,8 @@ AUTHVERSE_OIDC_PUBLIC_KEY_PATH=file:/run/authverse/oidc/public.pem
 
 先确认主栈已经部署成功，并且这些入口可用：
 
-- `cloudreve_pgpool`
-- `cloudreve_redis-proxy`
+- `cloudreve_pgpool-internal`
+- `cloudreve_redis-proxy-internal`
 - `cloudreve_elasticsearch`
 - `cloudreve-master`
 - `cloudreve_backend` overlay 网络
@@ -236,9 +236,9 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 
 ```env
 AUTHVERSE_WEB_LOCAL_IMAGE=authverse/authverse-web:2024-local
-AUTHVERSE_WEB_REMOTE_IMAGE=${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-web:2024-local
+AUTHVERSE_WEB_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/authverse/authverse-web:2024-local"
 AUTHVERSE_BACKEND_LOCAL_IMAGE=authverse/authverse-backend:2024-local
-AUTHVERSE_BACKEND_REMOTE_IMAGE=${PRIVATE_REGISTRY_ADDR}/cloudreve/authverse-backend:2024-local
+AUTHVERSE_BACKEND_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/authverse/authverse-backend:2024-local"
 ```
 
 ### 5.3 准备 OIDC 密钥目录
@@ -266,7 +266,7 @@ docker/swarm/init-authverse-db.sh --env-file .env.swarm
 
 这个脚本会做三件事：
 
-1. 默认直连主库服务 `cloudreve_postgresql-1`
+1. 默认通过本机 `pgpool` 发布端口进入 Cloudreve 主库
 2. 重建专用 `AUTHVERSE_DB_NAME`
 3. 导入：
    - `authverse-20260329.sql`
@@ -323,13 +323,13 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 执行：
 
 ```bash
-docker/swarm/deploy-auth-stack.sh --env-file .env.swarm
+docker/swarm/deploy-stack.sh auth --env-file .env.swarm
 ```
 
 只渲染不部署：
 
 ```bash
-docker/swarm/deploy-auth-stack.sh --env-file .env.swarm --render-only
+docker/swarm/deploy-stack.sh auth --env-file .env.swarm --render-only
 ```
 
 ## 6. 联调与验收
@@ -337,7 +337,7 @@ docker/swarm/deploy-auth-stack.sh --env-file .env.swarm --render-only
 ### 6.1 入口健康检查
 
 ```bash
-curl -fsS http://127.0.0.1:${AUTHVERSE_HTTP_PORT}/healthz
+curl -kfsS https://127.0.0.1:${AUTHVERSE_HTTP_PORT}/healthz
 curl -fsS ${AUTHVERSE_PUBLIC_BASE_URL}/.well-known/openid-configuration
 curl -i -sS ${AUTHVERSE_PUBLIC_BASE_URL}/app-api/infra/server/get-info | sed -n '1,20p'
 ```
@@ -362,7 +362,7 @@ curl -i -sS ${AUTHVERSE_PUBLIC_BASE_URL}/app-api/infra/server/get-info | sed -n 
 可以直接复用后端仓库已有脚本：
 
 ```bash
-BASE_URL=${AUTHVERSE_PUBLIC_BASE_URL} \
+BASE_URL="${AUTHVERSE_PUBLIC_BASE_URL}" \
 LOGIN_USERNAME=admin \
 LOGIN_PASSWORD=admin123 \
 ../authverse-backend/script/shell/unified-auth-smoke.sh
@@ -531,7 +531,7 @@ sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services authver
 docker/swarm/init-authverse-db.sh --env-file .env.swarm
 docker/swarm/build-auth-images.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVERSE_WEB,AUTHVERSE_BACKEND
-docker/swarm/deploy-auth-stack.sh --env-file .env.swarm
+docker/swarm/deploy-stack.sh auth --env-file .env.swarm
 BASE_URL=https://auth.example.com ../authverse-backend/script/shell/unified-auth-smoke.sh
 ```
 

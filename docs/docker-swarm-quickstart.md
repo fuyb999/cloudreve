@@ -2,23 +2,23 @@
 
 这份清单对应当前仓库里的生产默认值：
 
-- `docker-compose.swarm.yml`
+- `docker-compose.swarm.cloudreve.yml`
 - `docker-compose.swarm.single.yml`
 - `docker-compose.swarm.foundation.yml`
 - `docker-compose.swarm.registry.yml`
-- `docker-compose.swarm.cluster.yml`
+- `docker-compose.swarm.infra.yml`
 - `.env.swarm.example`
+- `.env.swarm.user-test.example`
 - `.env.swarm.prod-4x128g.example`
-- `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
 - `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
+- `docker/swarm/sync-swarm-assets.sh`
 - `docker-compose.swarm.auth.yml`
 - `docker/swarm/build-auth-images.sh`
 - `docker/swarm/init-authverse-db.sh`
-- `docker/swarm/deploy-auth-stack.sh`
 - `docs/docker-swarm-production-checklist.md`
 - `docs/docker-swarm-deployment.md`
 - `docs/docker-swarm-env-sync.md`
@@ -42,13 +42,19 @@
 - 所有数据/运行目录挂载都统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
 - `pgpool` 默认对外发布 `15432`
 - `redis-proxy` 默认对外发布 `16379`
+- 所有对外入口现在默认启用 TLS，证书统一由一套自签 CA 管理
+- 业务 overlay 网络默认启用跨节点加密，并且不再允许独立容器直接 attach
+- 文本配置、启动脚本、Nginx / HAProxy 模板统一通过 Swarm `configs` 下发
 - Cloudreve 不再默认把用户文件落到宿主机目录
-- `cloudreve-master` / `minio` / `elasticsearch` / `tika` 字体目录现在同时支持命名卷和宿主机绝对路径两种挂载模式
+- `cloudreve-master` / `minio` / `elasticsearch` / `kafka` / `tika` 字体目录现在同时支持命名卷和宿主机绝对路径两种挂载模式
+- `Tika` 和 `OnlyOffice` 默认共用一套外挂字体目录
 - `PG / Redis` 默认仍是 `bind`，但变量名也统一成了 `*_MOUNT_TYPE + *_MOUNT_SOURCE`
 - Cloudreve 首次初始化时，默认存储策略会直接创建成 `S3` 兼容存储
-- 默认 `S3` 指向栈内 `MinIO`，并由 `minio-init` 持续确保 `cloudreve` bucket 存在
+- 默认 `S3` 指向栈内 `minio-internal`，并由 `minio-init` 持续确保 `cloudreve` bucket 存在
 - 默认 `docker/swarm/deploy-stack.sh` 会直接使用单节点全量模板
-- `SWARM_WITH_CLUSTER=yes` 时，会切成 4 节点 MinIO + 3 节点 Elasticsearch + 3 节点 Kafka
+- 默认单节点模板也会把 `authverse-web + authverse-backend` 一起部署进主栈
+- 默认单节点部署后会自动执行一次 `docker/swarm/init-authverse-db.sh`
+- 对同一个 stack name 再执行 `deploy-stack.sh infra` 时，会切成 4 节点 MinIO + 3 节点 Elasticsearch + 3 节点 Kafka
 - Kafka UI 会一起挂上，默认对外端口 `18089`
 - 默认单节点模板里 OnlyOffice 8 也会一起起来；生产样例仍可通过 `ONLYOFFICE_REPLICAS=0` 关闭
 - 自定义镜像现在建议统一放到单点 `registry:2` 仓库栈，其它节点远程拉取
@@ -57,20 +63,52 @@
 当前文件分组：
 
 - `docker-compose.swarm.single.yml`：默认单节点全量栈
-- `docker-compose.swarm.yml`：Cloudreve 主从
+- `docker-compose.swarm.cloudreve.yml`：Cloudreve 主从
 - `docker-compose.swarm.foundation.yml`：PG / Redis / Tika / OnlyOffice
-- `docker-compose.swarm.cluster.yml`：MinIO / Kafka / ES / Kafka UI 集群
+- `docker-compose.swarm.infra.yml`：MinIO / minio-init / Kafka / ES / Kafka UI 集群
 - `docker-compose.swarm.auth.yml`：Authverse 前后端
 - `docker-compose.swarm.registry.yml`：私有仓库
+
+补充：
+
+- `.env.swarm.example` 默认让单节点 authverse 直接使用本地镜像 tag
+- `.env.swarm.user-test.example` 是把 4 节点生产基线裁成 1 台 Linux 的用户测试版
+- `.env.swarm.prod-4x128g.example` 仍然按私有仓库远程 tag 组织
 
 ## 2. 上线前准备
 
 1. 初始化 Swarm 并把节点加入集群。
 2. 复制环境模板：
 
+如果你是多节点 Swarm，并且已经启用了业务 overlay 加密，还要确认节点间防火墙 / 安全组至少放通：
+
+- `2377/tcp`
+- `7946/tcp`
+- `7946/udp`
+- `4789/udp`
+- `ESP`，也就是 `IP protocol 50`
+
+如果你用的是 Ubuntu `ufw`，推荐直接看运维手册里的现成命令：
+
+- `docs/docker-swarm-operations-manual.md`
+
 ```bash
 cp .env.swarm.example .env.swarm
 ```
+
+如果你现在是把原来的 4 台生产方案先裁成 1 台 Linux 做用户测试，直接用：
+
+```bash
+cp .env.swarm.user-test.example .env.swarm
+```
+
+这份模板的特点是：
+
+- 默认走 `docker-compose.swarm.single.yml`
+- 默认 `SWARM_IMAGE_SOURCE=local`
+- 已经把外部端口、TLS、Authverse、MinIO、ES、Kafka、Tika、OnlyOffice 全部收进一台机器
+- 默认 bind 路径统一落到 `/srv/cloudreve-user-test/...`
+- 如果后面你要验证私有仓库，只需要先部署 `registry`，再把 `SWARM_IMAGE_SOURCE` 改成 `remote`
 
 如果你的拓扑是 `1 manager + 3 worker`，并且每台机器都是 `128GB / 64 线程`，可以直接改用：
 
@@ -92,8 +130,21 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 - `CR_INIT_S3_SECRET_KEY`
 - `PRIVATE_REGISTRY_ADDR`
 - `TIKA_REMOTE_IMAGE`
+- `SWARM_PKI_MOUNT_SOURCE`
+- `SHARED_CUSTOM_FONTS_MOUNT_SOURCE`
 
-5. 在所有 Swarm 节点写入私有仓库 daemon 配置：
+5. 在 manager 生成默认 CA 和服务证书：
+
+```bash
+docker/swarm/generate-swarm-pki.sh --env-file .env.swarm --force-certs
+```
+
+说明：
+
+- 默认根 CA 会生成到 `PRIVATE_REGISTRY_CA_FILE`
+- 以后如果你要替换成自己的 CA，直接覆盖 `ca.crt + ca.key`，然后重新执行 `generate-swarm-pki.sh --force-ca --force-certs`
+
+6. 在所有 Swarm 节点写入私有仓库 `insecure-registries` 并刷新 Docker：
 
 ```bash
 sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --check
@@ -102,17 +153,26 @@ sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --re
 
 说明：
 
+- 默认 `PRIVATE_REGISTRY_SCHEME=http`
+- 这个脚本会把 `PRIVATE_REGISTRY_ADDR` 写入 Docker `insecure-registries`
+- 如果是多机并且 `SWARM_PKI_MOUNT_TYPE=bind` 或 `SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind`，建议在 manager 再执行：
+
+```bash
+docker/swarm/sync-swarm-assets.sh --env-file .env.swarm --targets "node2,node3,node4" --check
+docker/swarm/sync-swarm-assets.sh --env-file .env.swarm --targets "node2,node3,node4" --ssh-user root --apply
+```
+
 - 如果这些脚本是在其它 worker 节点执行，也要提前把同一份 `.env.swarm` 同步过去
 - `.env.swarm` 只在部署 manager 上是必须品，但准备脚本想复用同一套变量时，其它节点也需要拿到一份
 
-6. 如果你要提前把 PostgreSQL / Redis / MinIO 镜像预拉到各节点，执行：
+8. 如果你选择 `SWARM_IMAGE_SOURCE=local`，或者想在固定部署 manager 先把 PostgreSQL / Redis / MinIO 的 local 源镜像预拉齐，再执行：
 
 ```bash
 docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --check
 docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
 ```
 
-7. 在各个有状态节点提前创建目录：
+9. 在各个有状态节点提前创建目录：
 
 ```bash
 mkdir -p /srv/cloudreve/postgresql/1
@@ -136,10 +196,10 @@ sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
 sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services registry
 ```
 
-8. 先部署私有仓库栈，再发布自定义镜像：
+10. 先部署私有仓库栈，再发布自定义镜像：
 
 ```bash
-docker/swarm/deploy-private-registry.sh --env-file .env.swarm
+docker/swarm/deploy-stack.sh registry --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
@@ -149,15 +209,16 @@ docker/swarm/publish-private-images.sh --env-file .env.swarm
 docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 ```
 
-如果你要直接启用栈内 MinIO / Elasticsearch / Kafka 集群，再额外确认：
+如果你要启用 `infra` 这组集群型基础设施，再额外确认：
 
-- `SWARM_WITH_CLUSTER=yes`
 - `MINIO_1_DATA_MOUNT_TYPE` 到 `MINIO_4_DATA_MOUNT_TYPE`
 - `MINIO_1_DATA_MOUNT_SOURCE` 到 `MINIO_4_DATA_MOUNT_SOURCE`
 - `ELASTICSEARCH_1_DATA_MOUNT_TYPE` 到 `ELASTICSEARCH_3_DATA_MOUNT_TYPE`
 - `ELASTICSEARCH_1_DATA_MOUNT_SOURCE` 到 `ELASTICSEARCH_3_DATA_MOUNT_SOURCE`
 - `KAFKA_1_DATA_MOUNT_TYPE` 到 `KAFKA_3_DATA_MOUNT_TYPE`
 - `KAFKA_1_DATA_MOUNT_SOURCE` 到 `KAFKA_3_DATA_MOUNT_SOURCE`
+- 对应节点在部署前执行：
+  `sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka`
 
 说明：
 
@@ -165,15 +226,16 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 - 如果你要改成外部 S3 / MinIO，而不是用栈内 `minio`，就在第一次部署前改掉 `CR_INIT_S3_*`
 - 如果数据库已经初始化过，默认存储策略 `ID=1` 不会被自动重建
 - `PG / Redis` 仍然必须使用宿主机物理路径
-- `cloudreve-master` / `minio` / `elasticsearch` / `tika` 字体目录默认走命名卷
+- `cloudreve-master` / `minio` / `elasticsearch` / `kafka` / `tika` 字体目录默认走命名卷
 - 如果你确实要改成宿主机绝对路径，就把对应的 `*_MOUNT_TYPE=bind`，并把 `*_MOUNT_SOURCE` 改成真实绝对路径
 - 如果是多 manager / 多机器部署，再看 `docs/docker-swarm-env-sync.md`
-- PostgreSQL / Redis / MinIO 默认镜像现在就是 Docker Hub 可直接 pull 的名字与 tag
+- `SWARM_IMAGE_SOURCE=local` 时，PostgreSQL / Redis / MinIO 默认镜像就是 Docker Hub 可直接 pull 的名字与 tag
+- `SWARM_IMAGE_SOURCE=remote` 时，`*_REMOTE_IMAGE` 应统一指向 `${PRIVATE_REGISTRY_ADDR}`
 - 默认 `TIKA_IMAGE` 是自定义镜像，生产里建议写成 `${PRIVATE_REGISTRY_ADDR}/cloudreve/tika:...`
 - 如果是 bind 模式，建议上线前先在目标节点执行 `docker/swarm/prepare-bind-paths.sh`
 - 如果是 Elasticsearch 集群节点，记得先在宿主机执行 `sysctl -w vm.max_map_count=262144`
 - 如果你准备让 Cloudreve 直接使用栈内 Kafka，再把 `CLOUDREVE_GLOBAL_KAFKA_ENABLED=true`
-- Kafka UI 默认访问地址是 `http://<node-or-lb>:18089`
+- Kafka UI 默认访问地址是 `https://<node-or-lb>:18089`
 
 ## 3. Colima 说明
 
@@ -189,7 +251,7 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 首次部署建议：
 
 - `CLOUDREVE_MASTER_REPLICAS=1`
-- 先确认 `docker/swarm/deploy-private-registry.sh` 和 `docker/swarm/publish-private-images.sh` 已经执行完成
+- 先确认 `docker/swarm/deploy-stack.sh registry` 和 `docker/swarm/publish-private-images.sh` 已经执行完成
 
 执行主业务栈：
 
@@ -197,17 +259,19 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 docker/swarm/deploy-stack.sh
 ```
 
-如果要启用集群版 MinIO / Elasticsearch / Kafka：
+如果要按拆分模板把同一个生产栈补齐：
 
 ```bash
-docker/swarm/deploy-stack.sh --with-cluster
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
+docker/swarm/deploy-stack.sh foundation --stack-name cloudreve
+docker/swarm/deploy-stack.sh infra --stack-name cloudreve
 ```
 
 如果你确实需要给 Tika 指定宿主机字体目录，直接在 `.env.swarm` 里设置：
 
 ```env
-TIKA_CUSTOM_FONTS_MOUNT_TYPE=bind
-TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/absolute/path/tika-fonts
+SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind
+SHARED_CUSTOM_FONTS_MOUNT_SOURCE=/absolute/path/shared-fonts
 ```
 
 如果你想把某些默认命名卷切换成宿主机绝对路径，在 `.env.swarm` 中这样改：
@@ -246,7 +310,7 @@ docker service logs -f cloudreve_cloudreve-master
 - 上传方式：中继上传（Relay）
 - 下载方式：内部代理（Internal Proxy）
 
-如果启用了 `SWARM_WITH_CLUSTER=yes`，这里仍然保持 `http://minio:9000` 不变。
+如果启用了 `infra` 模板，这里仍然保持 `http://minio:9000` 不变。
 
 同时在 Cloudreve 后台配置全文检索时，应填写：
 
@@ -264,12 +328,12 @@ docker service logs -f cloudreve_cloudreve-master
 2. 创建 slave node
 3. 复制生成的从节点密钥（`Slave Key`）
 4. 把 `.env.swarm` 中的 `CLOUDREVE_SLAVE_SECRET` 替换成真实值
-5. 重新执行一次 `docker/swarm/deploy-stack.sh --with-cluster`
+5. 重新执行一次 `docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve`
 
 如果你不是用默认栈名，也可以直接：
 
 ```bash
-STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh --with-cluster
+STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh cloudreve
 ```
 
 ## 7. 扩容原则
@@ -313,7 +377,7 @@ STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh --with-cluster
 
 它默认启用：
 
-- `SWARM_WITH_CLUSTER=yes`
+- `cloudreve + foundation + infra` 拆分发布
 - PostgreSQL / Redis / MinIO / Elasticsearch / Kafka / Cloudreve 运行目录全部宿主机绝对路径
 - 更保守但不浪费资源的 reservation / limit
 - `edge` / `redis-sentinel` / `tika` / `kafka-ui` 这些额外标签约束

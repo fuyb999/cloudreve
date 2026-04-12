@@ -1,51 +1,77 @@
-# MinIO / Elasticsearch / Kafka 多节点集群覆盖文件。
-# 用法：
-# - 在 `.env.swarm` 中设置 `SWARM_WITH_CLUSTER=yes`
-# - 再执行 `docker/swarm/deploy-stack.sh`
+# MinIO / Elasticsearch / Kafka 集群基础设施模板。
 #
 # 说明：
-# - 这个覆盖文件依赖 `docker/swarm/deploy-stack.sh --with-cluster`
-#   或 `.env.swarm` 中的 `SWARM_WITH_CLUSTER=yes`
-# - 部署脚本会先从基础模板里剔除单节点 `minio` / `elasticsearch`
-# - 再由这里提供：
+# - 这个文件用于独立发布集群型基础设施：
 #   - 同名 `minio` 入口：4 节点 MinIO 分布式集群 + 1 个代理入口
+#   - `minio-init`：通过稳定入口 `minio:9000` 持续确保默认 bucket 存在
 #   - 同名 `elasticsearch` 入口：3 节点 Elasticsearch 集群 + 1 个代理入口
 #   - 同名 `kafka` 入口：3 节点 Kafka KRaft 集群 + 1 个内部 bootstrap 代理
 #   - `kafka-ui`：专门访问 Kafka 集群的管理界面
+# - 典型方式是对同一个 stack name 再执行一次：
+#   - `docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod`
+# - 这样会把这些服务并入同一套 Swarm 栈，而不再依赖 `--with-cluster`
 # - 建议在真实环境中给这些节点单独打 label，并把数据目录改成真实物理路径
 # - Kafka 这 3 个固定 KRaft 节点必须使用 `endpoint_mode: dnsrr`
 #   避免 Swarm VIP / 内部负载均衡介入控制面连接
 
+x-default-env: &default-env
+  TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
+
+x-localtime-volume: &localtime-volume
+  type: ${SWARM_LOCALTIME_MOUNT_TYPE:-bind}
+  source: ${SWARM_LOCALTIME_MOUNT_SOURCE:-/etc/localtime}
+  target: /etc/localtime
+  read_only: true
+
+x-pki-volume: &pki-volume
+  type: ${SWARM_PKI_MOUNT_TYPE:-bind}
+  source: ${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}
+  target: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}
+  read_only: true
+
+x-default-logging: &default-logging
+  driver: ${SWARM_LOGGING_DRIVER:-json-file}
+  options:
+    max-size: "${SWARM_LOGGING_MAX_SIZE:-20m}"
+    max-file: "${SWARM_LOGGING_MAX_FILE:-5}"
+    compress: "${SWARM_LOGGING_COMPRESS:-true}"
+
+x-service-base: &service-base
+  logging: *default-logging
+
+x-default-update-config: &default-update-config
+  parallelism: 1
+  order: ${SWARM_ROLLING_ORDER:-start-first}
+  failure_action: rollback
+
+x-default-rollback-config: &default-rollback-config
+  parallelism: 1
+  order: stop-first
+
+x-default-restart-policy: &default-restart-policy
+  condition: on-failure
+  delay: 5s
+  window: 2m
+
 services:
-  minio:
+  minio-internal:
+    <<: *service-base
     image: ${MINIO_PROXY_IMAGE:-haproxy:3.0-alpine}
-    hostname: "{{.Node.Hostname}}-minio-proxy-{{.Task.Slot}}"
+    hostname: "{{.Node.Hostname}}-minio-internal-{{.Task.Slot}}"
+    environment: *default-env
     configs:
       - source: minio_cluster_proxy_cfg_v2
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
-    ports:
-      - target: 9000
-        published: ${MINIO_API_PORT:-9000}
-        protocol: tcp
-        mode: ingress
-      - target: 9001
-        published: ${MINIO_CONSOLE_PORT:-9001}
-        protocol: tcp
-        mode: ingress
+    volumes:
+      - *localtime-volume
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${MINIO_PROXY_REPLICAS:-1}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -58,10 +84,52 @@ services:
           cpus: "${MINIO_PROXY_CPU_LIMIT:-1.0}"
           memory: "${MINIO_PROXY_MEM_LIMIT:-512M}"
 
+  minio:
+    <<: *service-base
+    image: ${MINIO_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-minio-public-{{.Task.Slot}}"
+    environment: *default-env
+    configs:
+      - source: minio_public_tls_cfg_v2
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
+    ports:
+      - target: 9000
+        published: ${MINIO_API_PORT:-19000}
+        protocol: tcp
+        mode: ingress
+      - target: 9001
+        published: ${MINIO_CONSOLE_PORT:-19001}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${MINIO_PUBLIC_REPLICAS:-1}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${MINIO_PUBLIC_NODE_CONSTRAINT:-${MINIO_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+      resources:
+        reservations:
+          cpus: "${MINIO_PUBLIC_CPU_RESERVATION:-0.25}"
+          memory: "${MINIO_PUBLIC_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${MINIO_PUBLIC_CPU_LIMIT:-1.0}"
+          memory: "${MINIO_PUBLIC_MEM_LIMIT:-512M}"
+
   minio-1:
+    <<: *service-base
     image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
     hostname: minio-1
     environment:
+      <<: *default-env
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
@@ -81,6 +149,8 @@ services:
       retries: 10
       start_period: 45s
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${MINIO_1_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_1_DATA_MOUNT_SOURCE:-minio_1_data}
         target: /bitnami/minio/data
@@ -89,8 +159,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${MINIO_NODE_1_CONSTRAINT:-node.labels.cloudreve.minio1==true}
@@ -103,9 +172,11 @@ services:
           memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   minio-2:
+    <<: *service-base
     image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
     hostname: minio-2
     environment:
+      <<: *default-env
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
@@ -125,6 +196,8 @@ services:
       retries: 10
       start_period: 45s
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${MINIO_2_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_2_DATA_MOUNT_SOURCE:-minio_2_data}
         target: /bitnami/minio/data
@@ -133,8 +206,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${MINIO_NODE_2_CONSTRAINT:-node.labels.cloudreve.minio2==true}
@@ -147,9 +219,11 @@ services:
           memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   minio-3:
+    <<: *service-base
     image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
     hostname: minio-3
     environment:
+      <<: *default-env
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
@@ -169,6 +243,8 @@ services:
       retries: 10
       start_period: 45s
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${MINIO_3_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_3_DATA_MOUNT_SOURCE:-minio_3_data}
         target: /bitnami/minio/data
@@ -177,8 +253,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${MINIO_NODE_3_CONSTRAINT:-node.labels.cloudreve.minio3==true}
@@ -191,9 +266,11 @@ services:
           memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   minio-4:
+    <<: *service-base
     image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
     hostname: minio-4
     environment:
+      <<: *default-env
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
@@ -213,6 +290,8 @@ services:
       retries: 10
       start_period: 45s
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${MINIO_4_DATA_MOUNT_TYPE:-volume}
         source: ${MINIO_4_DATA_MOUNT_SOURCE:-minio_4_data}
         target: /bitnami/minio/data
@@ -221,8 +300,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${MINIO_NODE_4_CONSTRAINT:-node.labels.cloudreve.minio4==true}
@@ -234,35 +312,61 @@ services:
           cpus: "${MINIO_CLUSTER_NODE_CPU_LIMIT:-2.0}"
           memory: "${MINIO_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
-  elasticsearch:
-    image: ${ELASTICSEARCH_PROXY_IMAGE:-haproxy:3.0-alpine}
-    hostname: "{{.Node.Hostname}}-es-proxy-{{.Task.Slot}}"
+  minio-init:
+    <<: *service-base
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
+    hostname: "{{.Node.Hostname}}-minio-init-{{.Task.Slot}}"
+    environment:
+      <<: *default-env
+      MINIO_ENDPOINT: ${MINIO_INIT_ENDPOINT:-https://minio:9000}
+      MINIO_CA_FILE: ${MINIO_INIT_CA_FILE:-/run/swarm-pki/ca/ca.crt}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
+      MINIO_INIT_INTERVAL_SECONDS: ${MINIO_INIT_INTERVAL_SECONDS:-30}
+    entrypoint: ["/bin/bash", "/usr/local/bin/minio-init.sh"]
     configs:
-      - source: elasticsearch_cluster_proxy_cfg_v1
+      - source: minio_init_v1
+        target: /usr/local/bin/minio-init.sh
+        mode: 0555
+    volumes:
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${MINIO_INIT_REPLICAS:-1}
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${MINIO_INIT_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${MINIO_INIT_CPU_RESERVATION:-0.05}"
+          memory: "${MINIO_INIT_MEM_RESERVATION:-64M}"
+        limits:
+          cpus: "${MINIO_INIT_CPU_LIMIT:-0.25}"
+          memory: "${MINIO_INIT_MEM_LIMIT:-128M}"
+
+  elasticsearch-internal:
+    <<: *service-base
+    image: ${ELASTICSEARCH_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-es-internal-{{.Task.Slot}}"
+    environment: *default-env
+    configs:
+      - source: elasticsearch_cluster_proxy_cfg_v2
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
-    ports:
-      - target: 9200
-        published: ${ELASTICSEARCH_HTTP_PORT:-9200}
-        protocol: tcp
-        mode: ingress
-      - target: 9300
-        published: ${ELASTICSEARCH_TRANSPORT_PORT:-9300}
-        protocol: tcp
-        mode: ingress
+    volumes:
+      - *localtime-volume
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${ELASTICSEARCH_PROXY_REPLICAS:-1}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -275,10 +379,52 @@ services:
           cpus: "${ELASTICSEARCH_PROXY_CPU_LIMIT:-1.0}"
           memory: "${ELASTICSEARCH_PROXY_MEM_LIMIT:-512M}"
 
+  elasticsearch:
+    <<: *service-base
+    image: ${ELASTICSEARCH_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-es-public-{{.Task.Slot}}"
+    environment: *default-env
+    configs:
+      - source: elasticsearch_public_tls_cfg_v2
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
+    ports:
+      - target: 9200
+        published: ${ELASTICSEARCH_HTTP_PORT:-19200}
+        protocol: tcp
+        mode: ingress
+      - target: 9300
+        published: ${ELASTICSEARCH_TRANSPORT_PORT:-19300}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${ELASTICSEARCH_PUBLIC_REPLICAS:-1}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${ELASTICSEARCH_PUBLIC_NODE_CONSTRAINT:-${ELASTICSEARCH_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+      resources:
+        reservations:
+          cpus: "${ELASTICSEARCH_PUBLIC_CPU_RESERVATION:-0.25}"
+          memory: "${ELASTICSEARCH_PUBLIC_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${ELASTICSEARCH_PUBLIC_CPU_LIMIT:-1.0}"
+          memory: "${ELASTICSEARCH_PUBLIC_MEM_LIMIT:-512M}"
+
   elasticsearch-1:
+    <<: *service-base
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
     hostname: "{{.Node.Hostname}}-es1"
     environment:
+      <<: *default-env
       cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "${ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS:--Xms4g -Xmx4g}"
@@ -295,8 +441,9 @@ services:
       interval: 20s
       timeout: 5s
       retries: 10
-      start_period: 90s
+      start_period: 20m
     volumes:
+      - *localtime-volume
       - type: ${ELASTICSEARCH_1_DATA_MOUNT_TYPE:-volume}
         source: ${ELASTICSEARCH_1_DATA_MOUNT_SOURCE:-elasticsearch_1_data}
         target: /usr/share/elasticsearch/data
@@ -304,8 +451,7 @@ services:
       - cloudreve_backend
     deploy:
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${ELASTICSEARCH_NODE_1_CONSTRAINT:-node.labels.cloudreve.es1==true}
@@ -318,9 +464,11 @@ services:
           memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}"
 
   elasticsearch-2:
+    <<: *service-base
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
     hostname: "{{.Node.Hostname}}-es2"
     environment:
+      <<: *default-env
       cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "${ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS:--Xms4g -Xmx4g}"
@@ -337,8 +485,9 @@ services:
       interval: 20s
       timeout: 5s
       retries: 10
-      start_period: 90s
+      start_period: 20m
     volumes:
+      - *localtime-volume
       - type: ${ELASTICSEARCH_2_DATA_MOUNT_TYPE:-volume}
         source: ${ELASTICSEARCH_2_DATA_MOUNT_SOURCE:-elasticsearch_2_data}
         target: /usr/share/elasticsearch/data
@@ -346,8 +495,7 @@ services:
       - cloudreve_backend
     deploy:
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${ELASTICSEARCH_NODE_2_CONSTRAINT:-node.labels.cloudreve.es2==true}
@@ -360,9 +508,11 @@ services:
           memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}"
 
   elasticsearch-3:
+    <<: *service-base
     image: ${ELASTICSEARCH_IMAGE:-elasticsearch:8.12.2}
     hostname: "{{.Node.Hostname}}-es3"
     environment:
+      <<: *default-env
       cluster.name: ${ELASTICSEARCH_CLUSTER_NAME:-cloudreve-es}
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "${ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS:--Xms4g -Xmx4g}"
@@ -379,8 +529,9 @@ services:
       interval: 20s
       timeout: 5s
       retries: 10
-      start_period: 90s
+      start_period: 20m
     volumes:
+      - *localtime-volume
       - type: ${ELASTICSEARCH_3_DATA_MOUNT_TYPE:-volume}
         source: ${ELASTICSEARCH_3_DATA_MOUNT_SOURCE:-elasticsearch_3_data}
         target: /usr/share/elasticsearch/data
@@ -388,8 +539,7 @@ services:
       - cloudreve_backend
     deploy:
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${ELASTICSEARCH_NODE_3_CONSTRAINT:-node.labels.cloudreve.es3==true}
@@ -402,25 +552,24 @@ services:
           memory: "${ELASTICSEARCH_CLUSTER_NODE_MEM_LIMIT:-8G}"
 
   kafka:
+    <<: *service-base
     image: ${KAFKA_PROXY_IMAGE:-haproxy:3.0-alpine}
     hostname: "{{.Node.Hostname}}-kafka-proxy-{{.Task.Slot}}"
+    environment: *default-env
     configs:
-      - source: kafka_cluster_proxy_cfg_v1
+      - source: kafka_cluster_proxy_cfg_v2
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
+    volumes:
+      - *localtime-volume
+      - *pki-volume
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${KAFKA_PROXY_REPLICAS:-1}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -434,9 +583,11 @@ services:
           memory: "${KAFKA_PROXY_MEM_LIMIT:-512M}"
 
   kafka-1:
+    <<: *service-base
     image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
     hostname: "{{.Node.Hostname}}-kafka1"
     environment:
+      <<: *default-env
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: broker,controller
@@ -463,6 +614,7 @@ services:
       retries: 10
       start_period: 90s
     volumes:
+      - *localtime-volume
       - type: ${KAFKA_1_DATA_MOUNT_TYPE:-volume}
         source: ${KAFKA_1_DATA_MOUNT_SOURCE:-kafka_1_data}
         target: /var/lib/kafka/data
@@ -471,8 +623,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${KAFKA_NODE_1_CONSTRAINT:-node.labels.cloudreve.kafka1==true}
@@ -485,9 +636,11 @@ services:
           memory: "${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   kafka-2:
+    <<: *service-base
     image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
     hostname: "{{.Node.Hostname}}-kafka2"
     environment:
+      <<: *default-env
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
       KAFKA_NODE_ID: "2"
       KAFKA_PROCESS_ROLES: broker,controller
@@ -514,6 +667,7 @@ services:
       retries: 10
       start_period: 90s
     volumes:
+      - *localtime-volume
       - type: ${KAFKA_2_DATA_MOUNT_TYPE:-volume}
         source: ${KAFKA_2_DATA_MOUNT_SOURCE:-kafka_2_data}
         target: /var/lib/kafka/data
@@ -522,8 +676,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${KAFKA_NODE_2_CONSTRAINT:-node.labels.cloudreve.kafka2==true}
@@ -536,9 +689,11 @@ services:
           memory: "${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   kafka-3:
+    <<: *service-base
     image: ${KAFKA_IMAGE:-apache/kafka:4.2.0}
     hostname: "{{.Node.Hostname}}-kafka3"
     environment:
+      <<: *default-env
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
       KAFKA_NODE_ID: "3"
       KAFKA_PROCESS_ROLES: broker,controller
@@ -565,6 +720,7 @@ services:
       retries: 10
       start_period: 90s
     volumes:
+      - *localtime-volume
       - type: ${KAFKA_3_DATA_MOUNT_TYPE:-volume}
         source: ${KAFKA_3_DATA_MOUNT_SOURCE:-kafka_3_data}
         target: /var/lib/kafka/data
@@ -573,8 +729,7 @@ services:
     deploy:
       endpoint_mode: dnsrr
       replicas: 1
-      restart_policy:
-        condition: on-failure
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${KAFKA_NODE_3_CONSTRAINT:-node.labels.cloudreve.kafka3==true}
@@ -587,38 +742,36 @@ services:
           memory: "${KAFKA_CLUSTER_NODE_MEM_LIMIT:-4G}"
 
   kafka-ui:
+    <<: *service-base
     image: ${KAFKA_UI_IMAGE:-provectuslabs/kafka-ui:v0.7.2}
     hostname: "{{.Node.Hostname}}-kafka-ui-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       SERVER_PORT: "8080"
       DYNAMIC_CONFIG_ENABLED: "${KAFKA_UI_DYNAMIC_CONFIG_ENABLED:-false}"
+      JAVA_TOOL_OPTIONS: ${KAFKA_UI_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
       KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTER_NAME:-cloudreve-kafka}
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_UI_BOOTSTRAP_SERVERS:-kafka:9092}
-      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-PLAINTEXT}
-    ports:
-      - target: 8080
-        published: ${KAFKA_UI_HTTP_PORT:-18089}
-        protocol: tcp
-        mode: ingress
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-SSL}
+      KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_LOCATION: ${KAFKA_UI_TRUSTSTORE_LOCATION:-/run/swarm-pki/ca/truststore.p12}
+      KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_UI_TRUSTSTORE_PASSWORD:-changeit}
+      KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_TYPE: ${KAFKA_UI_TRUSTSTORE_TYPE:-PKCS12}
+    volumes:
+      - *localtime-volume
+      - *pki-volume
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/actuator/health >/dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 10
-      start_period: 45s
+      start_period: 5m
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${KAFKA_UI_REPLICAS:-1}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -631,15 +784,76 @@ services:
           cpus: "${KAFKA_UI_CPU_LIMIT:-1.0}"
           memory: "${KAFKA_UI_MEM_LIMIT:-1G}"
 
+  kafka-ui-public:
+    <<: *service-base
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-kafka-ui-public-{{.Task.Slot}}"
+    environment:
+      <<: *default-env
+      SERVER_NAME: ${KAFKA_UI_SERVER_NAME:-_}
+      TLS_CERT_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/kafka-ui-public/fullchain.crt
+      TLS_KEY_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/kafka-ui-public/tls.key
+      UPSTREAM_SCHEME: http
+      UPSTREAM_SERVICE: kafka-ui:8080
+      CLIENT_MAX_BODY_SIZE: ${KAFKA_UI_CLIENT_MAX_BODY_SIZE:-0}
+      PROXY_READ_TIMEOUT: ${KAFKA_UI_PROXY_READ_TIMEOUT:-3600s}
+      PROXY_SEND_TIMEOUT: ${KAFKA_UI_PROXY_SEND_TIMEOUT:-3600s}
+    configs:
+      - source: http_tls_proxy_template_v2
+        target: /etc/nginx/templates/default.conf.template
+        mode: 0444
+    ports:
+      - target: 443
+        published: ${KAFKA_UI_HTTP_PORT:-18089}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${KAFKA_UI_PUBLIC_REPLICAS:-1}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${KAFKA_UI_PUBLIC_NODE_CONSTRAINT:-${KAFKA_UI_NODE_CONSTRAINT:-node.platform.os==linux}}
+      resources:
+        reservations:
+          cpus: "${KAFKA_UI_PUBLIC_CPU_RESERVATION:-0.25}"
+          memory: "${KAFKA_UI_PUBLIC_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${KAFKA_UI_PUBLIC_CPU_LIMIT:-1.0}"
+          memory: "${KAFKA_UI_PUBLIC_MEM_LIMIT:-512M}"
+
 configs:
   minio_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/minio-cluster.cfg
-  elasticsearch_cluster_proxy_cfg_v1:
+  minio_public_tls_cfg_v2:
+    file: ./docker/swarm/haproxy/minio-public-tls.cfg
+  minio_swarm_entrypoint_v1:
+    file: ./docker/swarm/minio-swarm-entrypoint.sh
+  minio_init_v1:
+    file: ./docker/swarm/minio-init.sh
+  elasticsearch_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/elasticsearch-cluster.cfg
-  kafka_cluster_proxy_cfg_v1:
+  elasticsearch_public_tls_cfg_v2:
+    file: ./docker/swarm/haproxy/elasticsearch-public-tls.cfg
+  kafka_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/kafka-cluster.cfg
   elasticsearch_swarm_entrypoint_v1:
     file: ./docker/swarm/elasticsearch-swarm-entrypoint.sh
+  http_tls_proxy_template_v2:
+    file: ./docker/swarm/nginx/http-tls-proxy.conf.template
 
 volumes:
   minio_1_data:

@@ -16,11 +16,12 @@ usage() {
   docker/swarm/init-authverse-db.sh [--env-file 文件]
 
 说明：
-  这个脚本会直连共享 PostgreSQL 主库，重建专用 `authverse` 数据库，
+  这个脚本会通过 Pgpool 的对外 TLS 入口连接 Cloudreve 主库，
+  重建专用 `authverse` 数据库，
   然后执行统一认证初始化 SQL，并修正对象 owner / grant。
 
 注意：
-  1. 脚本默认连接 Cloudreve 主栈里的 `postgresql-1`
+  1. 脚本默认连接本机 `pgpool` 发布端口，不再依赖 attachable overlay 网络
   2. SQL 是全量初始化，脚本会重建目标数据库
   3. 只应对专用的 `authverse` 数据库执行，不要对 Cloudreve 主库执行
 
@@ -66,11 +67,12 @@ set -a
 source "$ENV_FILE"
 set +a
 
-CLOUDREVE_STACK_NAME="${CLOUDREVE_STACK_NAME:-cloudreve}"
-AUTHVERSE_SHARED_NETWORK="${AUTHVERSE_SHARED_NETWORK:-${CLOUDREVE_STACK_NAME}_cloudreve_backend}"
-AUTHVERSE_CLOUDREVE_SERVICE_PREFIX="${AUTHVERSE_CLOUDREVE_SERVICE_PREFIX:-${CLOUDREVE_STACK_NAME}_}"
-AUTHVERSE_DB_INIT_HOST="${AUTHVERSE_DB_INIT_HOST:-${AUTHVERSE_CLOUDREVE_SERVICE_PREFIX}postgresql-1}"
-AUTHVERSE_DB_INIT_PORT="${AUTHVERSE_DB_INIT_PORT:-5432}"
+SWARM_PKI_MOUNT_TYPE="${SWARM_PKI_MOUNT_TYPE:-bind}"
+SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
+AUTHVERSE_DB_INIT_HOST="${AUTHVERSE_DB_INIT_HOST:-127.0.0.1}"
+AUTHVERSE_DB_INIT_PORT="${AUTHVERSE_DB_INIT_PORT:-${PGPOOL_PUBLIC_PORT:-15432}}"
+AUTHVERSE_DB_INIT_SSLMODE="${AUTHVERSE_DB_INIT_SSLMODE:-verify-ca}"
+AUTHVERSE_DB_INIT_SSLROOTCERT="${AUTHVERSE_DB_INIT_SSLROOTCERT:-/pki/ca/ca.crt}"
 AUTHVERSE_DB_NAME="${AUTHVERSE_DB_NAME:-authverse}"
 AUTHVERSE_DB_USERNAME="${AUTHVERSE_DB_USERNAME:-${POSTGRESQL_USERNAME:-cloudreve}}"
 AUTHVERSE_DB_ADMIN_USER="${AUTHVERSE_DB_ADMIN_USER:-postgres}"
@@ -81,26 +83,47 @@ if [[ -z "$AUTHVERSE_DB_ADMIN_PASSWORD" ]]; then
   exit 1
 fi
 
-if ! docker network inspect "$AUTHVERSE_SHARED_NETWORK" >/dev/null 2>&1; then
-  echo "[$HOST_NAME] 共享 overlay 网络不存在：$AUTHVERSE_SHARED_NETWORK" >&2
-  echo "[$HOST_NAME] 请先部署 Cloudreve 主栈，或者把 AUTHVERSE_SHARED_NETWORK 改成真实网络名。" >&2
-  exit 1
-fi
+case "$SWARM_PKI_MOUNT_TYPE" in
+  bind)
+    if [[ ! -e "$SWARM_PKI_MOUNT_SOURCE" ]]; then
+      echo "[$HOST_NAME] 找不到 SWARM_PKI_MOUNT_SOURCE：$SWARM_PKI_MOUNT_SOURCE" >&2
+      exit 1
+    fi
+    ;;
+  volume)
+    if ! docker volume inspect "$SWARM_PKI_MOUNT_SOURCE" >/dev/null 2>&1; then
+      echo "[$HOST_NAME] 找不到 PKI volume：$SWARM_PKI_MOUNT_SOURCE" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "[$HOST_NAME] 不支持的 SWARM_PKI_MOUNT_TYPE：$SWARM_PKI_MOUNT_TYPE" >&2
+    exit 1
+    ;;
+esac
 
 echo "[$HOST_NAME] 准备初始化统一认证数据库：$AUTHVERSE_DB_NAME"
 docker run --rm \
-  --network "$AUTHVERSE_SHARED_NETWORK" \
+  --network host \
   -e PGHOST="$AUTHVERSE_DB_INIT_HOST" \
   -e PGPORT="$AUTHVERSE_DB_INIT_PORT" \
+  -e PGSSLMODE="$AUTHVERSE_DB_INIT_SSLMODE" \
+  -e PGSSLROOTCERT="$AUTHVERSE_DB_INIT_SSLROOTCERT" \
   -e PGADMINUSER="$AUTHVERSE_DB_ADMIN_USER" \
   -e PGPASSWORD_ADMIN="$AUTHVERSE_DB_ADMIN_PASSWORD" \
   -e APP_DB="$AUTHVERSE_DB_NAME" \
   -e APP_USER="$AUTHVERSE_DB_USERNAME" \
+  -v "$SWARM_PKI_MOUNT_SOURCE:/pki:ro" \
   -v "$SQL_BASE_FILE:/sql/authverse-base.sql:ro" \
   -v "$SQL_REGISTRY_FILE:/sql/authverse-registry.sql:ro" \
   "$POSTGRES_INIT_IMAGE" \
   sh -ec '
     export PGPASSWORD="$PGPASSWORD_ADMIN"
+
+    if [[ "$PGSSLMODE" != "disable" && ! -f "$PGSSLROOTCERT" ]]; then
+      echo "[authverse-db-init] 缺少 CA 文件：$PGSSLROOTCERT" >&2
+      exit 1
+    fi
 
     until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGADMINUSER" >/dev/null 2>&1; do
       echo "[authverse-db-init] 等待 PostgreSQL 就绪..."

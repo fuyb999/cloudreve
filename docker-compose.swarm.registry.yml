@@ -10,34 +10,69 @@
 # - 如果使用 bind 路径，再在 registry 所在节点执行
 #   `docker/swarm/prepare-bind-paths.sh --services registry`
 
+x-default-env: &default-env
+  TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
+
+x-localtime-volume: &localtime-volume
+  type: ${SWARM_LOCALTIME_MOUNT_TYPE:-bind}
+  source: ${SWARM_LOCALTIME_MOUNT_SOURCE:-/etc/localtime}
+  target: /etc/localtime
+  read_only: true
+
+x-default-logging: &default-logging
+  driver: ${SWARM_LOGGING_DRIVER:-json-file}
+  options:
+    max-size: "${SWARM_LOGGING_MAX_SIZE:-20m}"
+    max-file: "${SWARM_LOGGING_MAX_FILE:-5}"
+    compress: "${SWARM_LOGGING_COMPRESS:-true}"
+
+x-service-base: &service-base
+  logging: *default-logging
+
+x-stateful-update-config: &stateful-update-config
+  order: stop-first
+  failure_action: rollback
+
+x-default-rollback-config: &default-rollback-config
+  parallelism: 1
+  order: stop-first
+
+x-default-restart-policy: &default-restart-policy
+  condition: on-failure
+  delay: 5s
+  window: 2m
+
 services:
   registry:
+    <<: *service-base
     image: ${PRIVATE_REGISTRY_IMAGE:-registry:2.8.3}
     hostname: "{{.Node.Hostname}}-registry"
     environment:
+      <<: *default-env
       REGISTRY_HTTP_ADDR: 0.0.0.0:5000
       REGISTRY_STORAGE_DELETE_ENABLED: ${PRIVATE_REGISTRY_DELETE_ENABLED:-true}
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
     ports:
       - target: 5000
-        published: ${PRIVATE_REGISTRY_HTTP_PORT:-5000}
+        published: ${PRIVATE_REGISTRY_HTTP_PORT:-15000}
         protocol: tcp
         mode: host
     volumes:
+      - *localtime-volume
       - type: ${PRIVATE_REGISTRY_DATA_MOUNT_TYPE:-bind}
         source: ${PRIVATE_REGISTRY_DATA_MOUNT_SOURCE:-/srv/cloudreve/registry}
         target: /var/lib/registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:5000/v2/ >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     deploy:
       replicas: ${PRIVATE_REGISTRY_REPLICAS:-1}
-      update_config:
-        parallelism: 1
-        order: stop-first
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
+      update_config: *stateful-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:

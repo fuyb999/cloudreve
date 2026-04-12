@@ -7,16 +7,78 @@
 # - OnlyOffice 8
 #
 # 说明：
-# - 这个文件只在 `docker/swarm/deploy-stack.sh --with-cluster`
-#   或 `SWARM_WITH_CLUSTER=yes` 时参与主栈渲染。
+# - 这个文件用于独立发布 PostgreSQL / Redis / Tika / OnlyOffice 这一组基础中间件。
+# - 典型方式是对同一个 stack name 再执行一次：
+#   - `docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod`
+# - `minio-init` 不放在这里，而是跟随 `docker-compose.swarm.infra.yml` 中的 `minio`
+#   入口一起发布，避免 foundation 单独部署时出现无意义的初始化重试。
 # - 默认单节点联调走 `docker-compose.swarm.single.yml`。
-# - `onlyoffice` 默认 `replicas=0`，只是先把生产级参数和挂载方式收进 Swarm 体系里，需要时再开启。
+# - `onlyoffice` 使用外置 `pgpool + redis-proxy + onlyoffice-rabbitmq`，这样才能在 Swarm 下安全开多副本。
+# - 社区版这里实现的是 Swarm 级多副本高可用编排，不是 ONLYOFFICE 商业版官方集群产品形态。
+
+x-default-env: &default-env
+  TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
+
+x-localtime-volume: &localtime-volume
+  type: ${SWARM_LOCALTIME_MOUNT_TYPE:-bind}
+  source: ${SWARM_LOCALTIME_MOUNT_SOURCE:-/etc/localtime}
+  target: /etc/localtime
+  read_only: true
+
+x-pki-volume: &pki-volume
+  type: ${SWARM_PKI_MOUNT_TYPE:-bind}
+  source: ${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}
+  target: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}
+  read_only: true
+
+x-default-logging: &default-logging
+  driver: ${SWARM_LOGGING_DRIVER:-json-file}
+  options:
+    max-size: "${SWARM_LOGGING_MAX_SIZE:-20m}"
+    max-file: "${SWARM_LOGGING_MAX_FILE:-5}"
+    compress: "${SWARM_LOGGING_COMPRESS:-true}"
+
+x-service-base: &service-base
+  logging: *default-logging
+
+x-stateful-update-config: &stateful-update-config
+  order: stop-first
+
+x-default-update-config: &default-update-config
+  parallelism: 1
+  order: ${SWARM_ROLLING_ORDER:-start-first}
+  failure_action: rollback
+
+x-delayed-update-config: &delayed-update-config
+  <<: *default-update-config
+  delay: 10s
+
+x-default-rollback-config: &default-rollback-config
+  parallelism: 1
+  order: stop-first
+
+x-default-restart-policy: &default-restart-policy
+  condition: on-failure
+  delay: 5s
+  window: 2m
+
+x-restart-policy-with-attempts: &restart-policy-with-attempts
+  <<: *default-restart-policy
+  max_attempts: 10
+
+x-onlyoffice-restart-policy: &onlyoffice-restart-policy
+  condition: on-failure
+  delay: 10s
+  max_attempts: 10
+  window: 3m
 
 services:
   postgresql-1:
+    <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg1"
     environment:
+      <<: *default-env
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
@@ -35,6 +97,7 @@ services:
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     volumes:
+      - *localtime-volume
       - type: ${PG_1_DATA_MOUNT_TYPE:-bind}
         source: ${PG_1_DATA_MOUNT_SOURCE:?set PG_1_DATA_MOUNT_SOURCE}
         target: /bitnami/postgresql
@@ -48,12 +111,8 @@ services:
       start_period: 2m
     deploy:
       replicas: 1
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *stateful-update-config
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${PG_NODE_1_CONSTRAINT:-node.labels.cloudreve.pg1==true}
@@ -66,9 +125,11 @@ services:
           memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
 
   postgresql-2:
+    <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg2"
     environment:
+      <<: *default-env
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
@@ -87,6 +148,7 @@ services:
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     volumes:
+      - *localtime-volume
       - type: ${PG_2_DATA_MOUNT_TYPE:-bind}
         source: ${PG_2_DATA_MOUNT_SOURCE:?set PG_2_DATA_MOUNT_SOURCE}
         target: /bitnami/postgresql
@@ -100,12 +162,8 @@ services:
       start_period: 2m
     deploy:
       replicas: 1
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *stateful-update-config
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${PG_NODE_2_CONSTRAINT:-node.labels.cloudreve.pg2==true}
@@ -118,9 +176,11 @@ services:
           memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
 
   postgresql-3:
+    <<: *service-base
     image: ${POSTGRESQL_REPMGR_IMAGE:-bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2}
     hostname: "{{.Node.Hostname}}-pg3"
     environment:
+      <<: *default-env
       POSTGRESQL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
@@ -139,6 +199,7 @@ services:
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     volumes:
+      - *localtime-volume
       - type: ${PG_3_DATA_MOUNT_TYPE:-bind}
         source: ${PG_3_DATA_MOUNT_SOURCE:?set PG_3_DATA_MOUNT_SOURCE}
         target: /bitnami/postgresql
@@ -152,12 +213,8 @@ services:
       start_period: 2m
     deploy:
       replicas: 1
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *stateful-update-config
+      restart_policy: *default-restart-policy
       placement:
         constraints:
           - ${PG_NODE_3_CONSTRAINT:-node.labels.cloudreve.pg3==true}
@@ -169,10 +226,12 @@ services:
           cpus: "${POSTGRESQL_CPU_LIMIT:-4.0}"
           memory: "${POSTGRESQL_MEM_LIMIT:-8G}"
 
-  pgpool:
+  pgpool-internal:
+    <<: *service-base
     image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
-    hostname: "{{.Node.Hostname}}-pgpool-{{.Task.Slot}}"
+    hostname: "{{.Node.Hostname}}-pgpool-internal-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
       PGPOOL_POSTGRES_PASSWORD: ${POSTGRESQL_POSTGRES_PASSWORD:?set POSTGRESQL_POSTGRES_PASSWORD}
@@ -184,11 +243,8 @@ services:
       PGPOOL_ADMIN_PASSWORD: ${PGPOOL_ADMIN_PASSWORD:?set PGPOOL_ADMIN_PASSWORD}
       PGPOOL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       PGPOOL_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
-    ports:
-      - target: 5432
-        published: ${PGPOOL_PUBLIC_PORT:-15432}
-        protocol: tcp
-        mode: ingress
+    volumes:
+      - *localtime-volume
     networks:
       - cloudreve_backend
     healthcheck:
@@ -199,18 +255,9 @@ services:
       start_period: 2m
     deploy:
       replicas: ${PGPOOL_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -223,15 +270,54 @@ services:
           cpus: "${PGPOOL_CPU_LIMIT:-2.0}"
           memory: "${PGPOOL_MEM_LIMIT:-2G}"
 
+  pgpool:
+    <<: *service-base
+    image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-pgpool-public-{{.Task.Slot}}"
+    environment: *default-env
+    configs:
+      - source: pgpool_public_tls_cfg_v2
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
+    ports:
+      - target: 5432
+        published: ${PGPOOL_PUBLIC_PORT:-15432}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${PGPOOL_PUBLIC_REPLICAS:-2}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${PGPOOL_PUBLIC_NODE_CONSTRAINT:-${PGPOOL_NODE_CONSTRAINT:-node.platform.os==linux}}
+      resources:
+        reservations:
+          cpus: "${PGPOOL_PUBLIC_CPU_RESERVATION:-0.25}"
+          memory: "${PGPOOL_PUBLIC_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${PGPOOL_PUBLIC_CPU_LIMIT:-1.0}"
+          memory: "${PGPOOL_PUBLIC_MEM_LIMIT:-512M}"
+
   redis-1:
+    <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis1"
     environment:
+      <<: *default-env
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: master
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
+      - *localtime-volume
       - type: ${REDIS_1_DATA_MOUNT_TYPE:-bind}
         source: ${REDIS_1_DATA_MOUNT_SOURCE:?set REDIS_1_DATA_MOUNT_SOURCE}
         target: /bitnami/redis/data
@@ -245,13 +331,8 @@ services:
       start_period: 20s
     deploy:
       replicas: 1
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
+      update_config: *stateful-update-config
+      restart_policy: *restart-policy-with-attempts
       placement:
         constraints:
           - ${REDIS_NODE_1_CONSTRAINT:-node.labels.cloudreve.redis1==true}
@@ -264,9 +345,11 @@ services:
           memory: "${REDIS_MEM_LIMIT:-4G}"
 
   redis-2:
+    <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis2"
     environment:
+      <<: *default-env
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
@@ -275,6 +358,7 @@ services:
       REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
+      - *localtime-volume
       - type: ${REDIS_2_DATA_MOUNT_TYPE:-bind}
         source: ${REDIS_2_DATA_MOUNT_SOURCE:?set REDIS_2_DATA_MOUNT_SOURCE}
         target: /bitnami/redis/data
@@ -288,13 +372,8 @@ services:
       start_period: 20s
     deploy:
       replicas: 1
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
+      update_config: *stateful-update-config
+      restart_policy: *restart-policy-with-attempts
       placement:
         constraints:
           - ${REDIS_NODE_2_CONSTRAINT:-node.labels.cloudreve.redis2==true}
@@ -307,9 +386,11 @@ services:
           memory: "${REDIS_MEM_LIMIT:-4G}"
 
   redis-3:
+    <<: *service-base
     image: ${REDIS_IMAGE:-bitnamilegacy/redis:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis3"
     environment:
+      <<: *default-env
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
@@ -318,6 +399,7 @@ services:
       REDIS_MASTER_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     volumes:
+      - *localtime-volume
       - type: ${REDIS_3_DATA_MOUNT_TYPE:-bind}
         source: ${REDIS_3_DATA_MOUNT_SOURCE:?set REDIS_3_DATA_MOUNT_SOURCE}
         target: /bitnami/redis/data
@@ -331,13 +413,8 @@ services:
       start_period: 20s
     deploy:
       replicas: 1
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
+      update_config: *stateful-update-config
+      restart_policy: *restart-policy-with-attempts
       placement:
         constraints:
           - ${REDIS_NODE_3_CONSTRAINT:-node.labels.cloudreve.redis3==true}
@@ -350,9 +427,11 @@ services:
           memory: "${REDIS_MEM_LIMIT:-4G}"
 
   redis-sentinel:
+    <<: *service-base
     image: ${REDIS_SENTINEL_IMAGE:-bitnamilegacy/redis-sentinel:8.2.1-debian-12-r0}
     hostname: "{{.Node.Hostname}}-redis-sentinel-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       REDIS_MASTER_HOST: redis-1
       REDIS_MASTER_PORT_NUMBER: "6379"
       REDIS_MASTER_SET: ${REDIS_SENTINEL_MASTER_SET:-mymaster}
@@ -360,19 +439,14 @@ services:
       REDIS_SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
       REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS: ${REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS:-5000}
       REDIS_SENTINEL_FAILOVER_TIMEOUT: ${REDIS_SENTINEL_FAILOVER_TIMEOUT:-10000}
+    volumes:
+      - *localtime-volume
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${REDIS_SENTINEL_REPLICAS:-3}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
+      update_config: *default-update-config
+      restart_policy: *restart-policy-with-attempts
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -385,10 +459,12 @@ services:
           cpus: "${REDIS_SENTINEL_CPU_LIMIT:-1.0}"
           memory: "${REDIS_SENTINEL_MEM_LIMIT:-512M}"
 
-  redis-proxy:
+  redis-proxy-internal:
+    <<: *service-base
     image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
-    hostname: "{{.Node.Hostname}}-redis-proxy-{{.Task.Slot}}"
+    hostname: "{{.Node.Hostname}}-redis-proxy-internal-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
       REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
       REDIS_SENTINEL_HOST: ${REDIS_SENTINEL_HOST:-redis-sentinel}
@@ -400,27 +476,15 @@ services:
       - source: redis_proxy_bootstrap_v8
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
-    ports:
-      - target: 6379
-        published: ${REDIS_PROXY_PUBLIC_PORT:-16379}
-        protocol: tcp
-        mode: ingress
+    volumes:
+      - *localtime-volume
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${REDIS_PROXY_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *restart-policy-with-attempts
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -433,71 +497,63 @@ services:
           cpus: "${REDIS_PROXY_CPU_LIMIT:-1.0}"
           memory: "${REDIS_PROXY_MEM_LIMIT:-512M}"
 
-  minio-init:
-    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2024.10.2-debian-12-r0}
-    hostname: "{{.Node.Hostname}}-minio-init-{{.Task.Slot}}"
-    environment:
-      MINIO_ENDPOINT: ${MINIO_INIT_ENDPOINT:-http://minio:9000}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
-      MINIO_INIT_INTERVAL_SECONDS: ${MINIO_INIT_INTERVAL_SECONDS:-30}
-    entrypoint: ["/bin/bash", "/usr/local/bin/minio-init.sh"]
+  redis-proxy:
+    <<: *service-base
+    image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
+    hostname: "{{.Node.Hostname}}-redis-proxy-public-{{.Task.Slot}}"
+    environment: *default-env
     configs:
-      - source: minio_init_v1
-        target: /usr/local/bin/minio-init.sh
-        mode: 0555
-    networks:
-      - cloudreve_backend
-    deploy:
-      replicas: ${MINIO_INIT_REPLICAS:-1}
-      restart_policy:
-        condition: on-failure
-      placement:
-        max_replicas_per_node: 1
-        constraints:
-          - ${MINIO_INIT_NODE_CONSTRAINT:-node.platform.os==linux}
-      resources:
-        reservations:
-          cpus: "${MINIO_INIT_CPU_RESERVATION:-0.05}"
-          memory: "${MINIO_INIT_MEM_RESERVATION:-64M}"
-        limits:
-          cpus: "${MINIO_INIT_CPU_LIMIT:-0.25}"
-          memory: "${MINIO_INIT_MEM_LIMIT:-128M}"
-
-  tika:
-    image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
-    hostname: "{{.Node.Hostname}}-tika-{{.Task.Slot}}"
-    environment:
-      TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
-      TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
+      - source: redis_public_tls_cfg_v2
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0444
     ports:
-      - target: 9998
-        published: ${TIKA_HTTP_PORT:-9998}
+      - target: 6379
+        published: ${REDIS_PROXY_PUBLIC_PORT:-16379}
         protocol: tcp
         mode: ingress
     volumes:
-      - type: ${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-volume}
-        source: ${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-tika_custom_fonts}
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    deploy:
+      replicas: ${REDIS_PROXY_PUBLIC_REPLICAS:-2}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *restart-policy-with-attempts
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${REDIS_PROXY_PUBLIC_NODE_CONSTRAINT:-${REDIS_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+      resources:
+        reservations:
+          cpus: "${REDIS_PROXY_PUBLIC_CPU_RESERVATION:-0.25}"
+          memory: "${REDIS_PROXY_PUBLIC_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${REDIS_PROXY_PUBLIC_CPU_LIMIT:-1.0}"
+          memory: "${REDIS_PROXY_PUBLIC_MEM_LIMIT:-512M}"
+
+  tika:
+    <<: *service-base
+    image: ${TIKA_IMAGE:-cloudreve/tika:3.2.3.0-full-unrar-charset}
+    hostname: "{{.Node.Hostname}}-tika-{{.Task.Slot}}"
+    environment:
+      <<: *default-env
+      TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
+      TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
+    volumes:
+      - *localtime-volume
+      - type: ${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-volume}
+        source: ${SHARED_CUSTOM_FONTS_MOUNT_SOURCE:-shared_custom_fonts}
         target: /tika-fonts/custom
         read_only: true
     networks:
       - cloudreve_backend
     deploy:
       replicas: ${TIKA_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 10
-        window: 2m
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *restart-policy-with-attempts
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -510,18 +566,124 @@ services:
           cpus: "${TIKA_CPU_LIMIT:-2.0}"
           memory: "${TIKA_MEM_LIMIT:-2G}"
 
-  onlyoffice:
-    image: ${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:8.2.2}
-    hostname: "{{.Node.Hostname}}-onlyoffice-{{.Task.Slot}}"
+  tika-proxy:
+    <<: *service-base
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-tika-proxy-{{.Task.Slot}}"
     environment:
-      JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
-      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-replace-with-strong-onlyoffice-jwt-secret}
+      <<: *default-env
+      SERVER_NAME: ${TIKA_SERVER_NAME:-_}
+      TLS_CERT_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/tika-proxy/fullchain.crt
+      TLS_KEY_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/tika-proxy/tls.key
+      UPSTREAM_SCHEME: http
+      UPSTREAM_SERVICE: tika:9998
+      CLIENT_MAX_BODY_SIZE: ${TIKA_CLIENT_MAX_BODY_SIZE:-0}
+      PROXY_READ_TIMEOUT: ${TIKA_PROXY_READ_TIMEOUT:-3600s}
+      PROXY_SEND_TIMEOUT: ${TIKA_PROXY_SEND_TIMEOUT:-3600s}
+    configs:
+      - source: http_tls_proxy_template_v2
+        target: /etc/nginx/templates/default.conf.template
+        mode: 0444
     ports:
-      - target: 80
-        published: ${ONLYOFFICE_HTTP_PORT:-18090}
+      - target: 443
+        published: ${TIKA_HTTP_PORT:-19998}
         protocol: tcp
         mode: ingress
     volumes:
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      replicas: ${TIKA_PROXY_REPLICAS:-2}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${TIKA_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${TIKA_PROXY_CPU_RESERVATION:-0.25}"
+          memory: "${TIKA_PROXY_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${TIKA_PROXY_CPU_LIMIT:-1.0}"
+          memory: "${TIKA_PROXY_MEM_LIMIT:-512M}"
+
+  onlyoffice-rabbitmq:
+    <<: *service-base
+    image: ${ONLYOFFICE_RABBITMQ_IMAGE:-rabbitmq:3.13.7-alpine}
+    hostname: "{{.Node.Hostname}}-onlyoffice-rmq"
+    environment:
+      <<: *default-env
+      RABBITMQ_DEFAULT_USER: ${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}
+      RABBITMQ_DEFAULT_PASS: ${ONLYOFFICE_RABBITMQ_PASSWORD:?set ONLYOFFICE_RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}
+    volumes:
+      - *localtime-volume
+      - type: ${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}
+        source: ${ONLYOFFICE_RABBITMQ_MOUNT_SOURCE:-onlyoffice_rabbitmq}
+        target: /var/lib/rabbitmq
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5672 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+      start_period: 10m
+    deploy:
+      replicas: ${ONLYOFFICE_RABBITMQ_REPLICAS:-1}
+      update_config: *stateful-update-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT:-node.platform.os==linux}
+      resources:
+        reservations:
+          cpus: "${ONLYOFFICE_RABBITMQ_CPU_RESERVATION:-0.25}"
+          memory: "${ONLYOFFICE_RABBITMQ_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${ONLYOFFICE_RABBITMQ_CPU_LIMIT:-1.0}"
+          memory: "${ONLYOFFICE_RABBITMQ_MEM_LIMIT:-1G}"
+
+  onlyoffice:
+    <<: *service-base
+    image: ${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:8.2.2}
+    hostname: "{{.Node.Hostname}}-onlyoffice-{{.Task.Slot}}"
+    entrypoint: ["/bin/bash", "/usr/local/bin/onlyoffice-font-bootstrap.sh"]
+    environment:
+      <<: *default-env
+      DB_TYPE: postgres
+      DB_HOST: ${ONLYOFFICE_DB_HOST:-pgpool-internal}
+      DB_PORT: ${ONLYOFFICE_DB_PORT:-5432}
+      DB_NAME: ${ONLYOFFICE_DB_NAME:?set ONLYOFFICE_DB_NAME}
+      DB_USER: ${ONLYOFFICE_DB_USER:?set ONLYOFFICE_DB_USER}
+      DB_PWD: ${ONLYOFFICE_DB_PASSWORD:?set ONLYOFFICE_DB_PASSWORD}
+      DB_SCHEMA: ${ONLYOFFICE_DB_SCHEMA:-onlyoffice}
+      AMQP_TYPE: rabbitmq
+      AMQP_URI: amqp://${ONLYOFFICE_RABBITMQ_USER:-onlyoffice}:${ONLYOFFICE_RABBITMQ_PASSWORD:?set ONLYOFFICE_RABBITMQ_PASSWORD}@onlyoffice-rabbitmq:${ONLYOFFICE_RABBITMQ_PORT:-5672}/${ONLYOFFICE_RABBITMQ_VHOST:-onlyoffice}
+      REDIS_SERVER_HOST: ${ONLYOFFICE_REDIS_HOST:-redis-proxy-internal}
+      REDIS_SERVER_PORT: ${ONLYOFFICE_REDIS_PORT:-6379}
+      REDIS_SERVER_PASS: ${ONLYOFFICE_REDIS_PASSWORD:?set ONLYOFFICE_REDIS_PASSWORD}
+      REDIS_SERVER_DB: ${ONLYOFFICE_REDIS_DB:-1}
+      ALLOW_PRIVATE_IP_ADDRESS: "${ONLYOFFICE_ALLOW_PRIVATE_IP_ADDRESS:-true}"
+      JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-replace-with-strong-onlyoffice-jwt-secret}
+    configs:
+      - source: onlyoffice_font_bootstrap_v1
+        target: /usr/local/bin/onlyoffice-font-bootstrap.sh
+        mode: 0555
+    volumes:
+      - *localtime-volume
       - type: ${ONLYOFFICE_DATA_MOUNT_TYPE:-volume}
         source: ${ONLYOFFICE_DATA_MOUNT_SOURCE:-onlyoffice_data}
         target: /var/www/onlyoffice/Data
@@ -531,12 +693,10 @@ services:
       - type: ${ONLYOFFICE_LOG_MOUNT_TYPE:-volume}
         source: ${ONLYOFFICE_LOG_MOUNT_SOURCE:-onlyoffice_log}
         target: /var/log/onlyoffice
-      - type: ${ONLYOFFICE_DB_MOUNT_TYPE:-volume}
-        source: ${ONLYOFFICE_DB_MOUNT_SOURCE:-onlyoffice_db}
-        target: /var/lib/postgresql
-      - type: ${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}
-        source: ${ONLYOFFICE_RABBITMQ_MOUNT_SOURCE:-onlyoffice_rabbitmq}
-        target: /var/lib/rabbitmq
+      - type: ${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-volume}
+        source: ${SHARED_CUSTOM_FONTS_MOUNT_SOURCE:-shared_custom_fonts}
+        target: /usr/share/fonts/truetype/custom
+        read_only: true
     networks:
       - cloudreve_backend
     healthcheck:
@@ -544,22 +704,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 2m
+      start_period: 20m
     deploy:
-      replicas: ${ONLYOFFICE_REPLICAS:-0}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 10s
-        max_attempts: 10
-        window: 3m
+      replicas: ${ONLYOFFICE_REPLICAS:-2}
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *onlyoffice-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -572,6 +722,57 @@ services:
           cpus: "${ONLYOFFICE_CPU_LIMIT:-4.0}"
           memory: "${ONLYOFFICE_MEM_LIMIT:-4G}"
 
+  onlyoffice-public:
+    <<: *service-base
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    hostname: "{{.Node.Hostname}}-onlyoffice-public-{{.Task.Slot}}"
+    environment:
+      <<: *default-env
+      SERVER_NAME: ${ONLYOFFICE_SERVER_NAME:-_}
+      TLS_CERT_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/onlyoffice-public/fullchain.crt
+      TLS_KEY_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/onlyoffice-public/tls.key
+      UPSTREAM_SCHEME: http
+      UPSTREAM_SERVICE: onlyoffice:80
+      CLIENT_MAX_BODY_SIZE: ${ONLYOFFICE_CLIENT_MAX_BODY_SIZE:-0}
+      PROXY_READ_TIMEOUT: ${ONLYOFFICE_PROXY_READ_TIMEOUT:-3600s}
+      PROXY_SEND_TIMEOUT: ${ONLYOFFICE_PROXY_SEND_TIMEOUT:-3600s}
+    configs:
+      - source: http_tls_proxy_template_v2
+        target: /etc/nginx/templates/default.conf.template
+        mode: 0444
+    ports:
+      - target: 443
+        published: ${ONLYOFFICE_HTTP_PORT:-18090}
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
+    networks:
+      - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      replicas: ${ONLYOFFICE_PUBLIC_REPLICAS:-2}
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          - ${ONLYOFFICE_PUBLIC_NODE_CONSTRAINT:-${ONLYOFFICE_NODE_CONSTRAINT:-node.platform.os==linux}}
+      resources:
+        reservations:
+          cpus: "${ONLYOFFICE_PUBLIC_CPU_RESERVATION:-0.25}"
+          memory: "${ONLYOFFICE_PUBLIC_MEM_RESERVATION:-256M}"
+        limits:
+          cpus: "${ONLYOFFICE_PUBLIC_CPU_LIMIT:-1.0}"
+          memory: "${ONLYOFFICE_PUBLIC_MEM_LIMIT:-512M}"
+
 volumes:
   postgresql_1_data:
   postgresql_2_data:
@@ -580,10 +781,10 @@ volumes:
   redis_2_data:
   redis_3_data:
   tika_custom_fonts:
+  shared_custom_fonts:
   onlyoffice_data:
   onlyoffice_lib:
   onlyoffice_log:
-  onlyoffice_db:
   onlyoffice_rabbitmq:
 
 configs:
@@ -591,7 +792,11 @@ configs:
     file: ./docker/swarm/postgresql-repmgr-run.sh
   redis_proxy_bootstrap_v8:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
-  minio_swarm_entrypoint_v1:
-    file: ./docker/swarm/minio-swarm-entrypoint.sh
-  minio_init_v1:
-    file: ./docker/swarm/minio-init.sh
+  pgpool_public_tls_cfg_v2:
+    file: ./docker/swarm/haproxy/pgpool-public-tls.cfg
+  redis_public_tls_cfg_v2:
+    file: ./docker/swarm/haproxy/redis-public-tls.cfg
+  http_tls_proxy_template_v2:
+    file: ./docker/swarm/nginx/http-tls-proxy.conf.template
+  onlyoffice_font_bootstrap_v1:
+    file: ./docker/swarm/onlyoffice-font-bootstrap.sh

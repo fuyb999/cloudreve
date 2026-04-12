@@ -13,19 +13,19 @@ usage() {
   docker/swarm/publish-private-images.sh [--env-file 文件] [--image-keys 列表]
 
 说明：
-  这个脚本用于把本地已有的自定义镜像重新打 tag 并 push 到 registry:2 私有仓库。
+ 这个脚本用于把本地已有镜像重新打 tag 并 push 到 registry:2 私有仓库。
+ 既支持自定义镜像，也支持把公共镜像 mirror 到私有仓库。
   默认读取：
   - PRIVATE_REGISTRY_ADDR
   - PRIVATE_REGISTRY_SCHEME
+  - PRIVATE_REGISTRY_CA_FILE
   - PRIVATE_REGISTRY_IMAGE_KEYS
   - <KEY>_LOCAL_IMAGE
   - <KEY>_REMOTE_IMAGE
   - <KEY>_IMAGE
 
-默认 image key 是 `TIKA`，也就是：
-  - TIKA_LOCAL_IMAGE
-  - TIKA_REMOTE_IMAGE
-  - TIKA_IMAGE
+如果本地不存在 `<KEY>_LOCAL_IMAGE`，脚本会先尝试 `docker pull` 这个 local tag；
+对于自定义镜像，如果 pull 失败，说明你需要先本地构建。
 
 示例：
   docker/swarm/publish-private-images.sh --env-file .env.swarm
@@ -67,16 +67,37 @@ fi
 
 PRIVATE_REGISTRY_SCHEME="${PRIVATE_REGISTRY_SCHEME:-http}"
 PRIVATE_REGISTRY_ADDR="${PRIVATE_REGISTRY_ADDR:-}"
+SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
+PRIVATE_REGISTRY_CA_FILE="${PRIVATE_REGISTRY_CA_FILE:-$SWARM_PKI_MOUNT_SOURCE/ca/ca.crt}"
 
 if [[ -z "$PRIVATE_REGISTRY_ADDR" ]]; then
   echo "[$HOST_NAME] 缺少 PRIVATE_REGISTRY_ADDR，无法发布私有镜像。" >&2
   exit 1
 fi
 
+case "$PRIVATE_REGISTRY_SCHEME" in
+  http|https)
+    ;;
+  *)
+    echo "[$HOST_NAME] 不支持的 PRIVATE_REGISTRY_SCHEME=$PRIVATE_REGISTRY_SCHEME，只允许 http / https。" >&2
+    exit 1
+    ;;
+esac
+
 registry_url="${PRIVATE_REGISTRY_SCHEME}://${PRIVATE_REGISTRY_ADDR}"
+curl_args=(-fsS --connect-timeout 5 --retry 3 --retry-delay 1)
+
+if [[ "$PRIVATE_REGISTRY_SCHEME" == "https" ]]; then
+  if [[ ! -f "$PRIVATE_REGISTRY_CA_FILE" ]]; then
+    echo "[$HOST_NAME] 找不到私有仓库 CA 文件：$PRIVATE_REGISTRY_CA_FILE" >&2
+    echo "[$HOST_NAME] 先执行 docker/swarm/generate-swarm-pki.sh，或把你自己的 CA 放到这个路径后再重试。" >&2
+    exit 1
+  fi
+  curl_args+=(--cacert "$PRIVATE_REGISTRY_CA_FILE")
+fi
 
 echo "[$HOST_NAME] 检查私有仓库：$registry_url"
-curl -fsS "${registry_url}/v2/" >/dev/null
+curl "${curl_args[@]}" "${registry_url}/v2/" >/dev/null
 
 IFS=',' read -r -a image_keys <<<"$IMAGE_KEYS"
 for image_key in "${image_keys[@]}"; do
@@ -102,8 +123,11 @@ for image_key in "${image_keys[@]}"; do
     exit 1
   fi
   if ! docker image inspect "$local_image" >/dev/null 2>&1; then
-    echo "[$HOST_NAME] 本地不存在镜像：$local_image" >&2
-    exit 1
+    echo "[$HOST_NAME] 本地不存在镜像，尝试拉取：$local_image"
+    if ! docker pull "$local_image"; then
+      echo "[$HOST_NAME] 拉取失败，请先准备本地镜像：$local_image" >&2
+      exit 1
+    fi
   fi
 
   echo "[$HOST_NAME] [TAG]  $local_image -> $remote_image"

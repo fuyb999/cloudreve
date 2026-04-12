@@ -10,37 +10,90 @@
 # - 这个文件只承载 Cloudreve 主站 / 从站 / 入口代理。
 # - PostgreSQL / Redis / Tika / OnlyOffice
 #   已经拆到 `docker-compose.swarm.foundation.yml`。
-# - MinIO / Elasticsearch / Kafka / Kafka UI 集群形态在 `docker-compose.swarm.cluster.yml`。
+# - MinIO / Elasticsearch / Kafka / Kafka UI 集群形态在 `docker-compose.swarm.infra.yml`。
 # - Cloudreve 运行目录仍统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`。
 # - `cloudreve-master` 可以通过 `CR_INIT_*` 在首次初始化时直接创建默认 S3 存储策略。
 # - 生产里更推荐把自定义镜像先 push 到单点 `registry:2` 私有仓库，再让其它节点远程拉取。
 # - 私有仓库本身建议单独使用 `docker-compose.swarm.registry.yml` 部署，不和主业务栈混在一起。
 
+x-default-env: &default-env
+  TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
+
+x-localtime-volume: &localtime-volume
+  type: ${SWARM_LOCALTIME_MOUNT_TYPE:-bind}
+  source: ${SWARM_LOCALTIME_MOUNT_SOURCE:-/etc/localtime}
+  target: /etc/localtime
+  read_only: true
+
+x-pki-volume: &pki-volume
+  type: ${SWARM_PKI_MOUNT_TYPE:-bind}
+  source: ${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}
+  target: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}
+  read_only: true
+
+x-default-logging: &default-logging
+  driver: ${SWARM_LOGGING_DRIVER:-json-file}
+  options:
+    max-size: "${SWARM_LOGGING_MAX_SIZE:-20m}"
+    max-file: "${SWARM_LOGGING_MAX_FILE:-5}"
+    compress: "${SWARM_LOGGING_COMPRESS:-true}"
+
+x-service-base: &service-base
+  logging: *default-logging
+
+x-default-update-config: &default-update-config
+  parallelism: 1
+  order: ${SWARM_ROLLING_ORDER:-start-first}
+  failure_action: rollback
+
+x-delayed-update-config: &delayed-update-config
+  <<: *default-update-config
+  delay: 10s
+
+x-default-rollback-config: &default-rollback-config
+  parallelism: 1
+  order: stop-first
+
+x-default-restart-policy: &default-restart-policy
+  condition: on-failure
+  delay: 5s
+  window: 2m
+
 services:
   cloudreve-master:
+    <<: *service-base
     image: ${CLOUDREVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     hostname: "{{.Node.Hostname}}-cr-master-{{.Task.Slot}}"
     environment:
+      <<: *default-env
+      SSL_CERT_FILE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
+      SSL_CERT_DIR: ${CLOUDREVE_CA_CERT_DIR:-/run/swarm-pki/ca}
+      CURL_CA_BUNDLE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       CR_CONF_System.Mode: master
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
       CR_CONF_System.SessionSecret: ${CLOUDREVE_SESSION_SECRET:?set CLOUDREVE_SESSION_SECRET}
       CR_CONF_Database.Type: postgres
-      CR_CONF_Database.Host: pgpool
+      CR_CONF_Database.Host: pgpool-internal
       CR_CONF_Database.Port: "5432"
       CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
       CR_CONF_Database.Password: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
       CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
-      CR_CONF_Redis.Server: redis-proxy:6379
+      CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-proxy:6379}
       CR_CONF_Redis.Password: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+      CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-true}
+      CR_CONF_Redis.TLSSkipVerify: ${CLOUDREVE_REDIS_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
       CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
       CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
-      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-SSL}
+      CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
+      CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
+      CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
       CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:?set CLOUDREVE_SITE_URL}
       CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
-      CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-http://minio:9000}
+      CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-https://minio:9000}
       CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
       CR_INIT_S3_ACCESS_KEY: ${CR_INIT_S3_ACCESS_KEY:-minio}
       CR_INIT_S3_SECRET_KEY: ${CR_INIT_S3_SECRET_KEY:?set CR_INIT_S3_SECRET_KEY}
@@ -51,6 +104,8 @@ services:
       CR_INIT_S3_IS_PRIVATE: ${CR_INIT_S3_IS_PRIVATE:-true}
       CR_INIT_S3_CHUNK_SIZE: ${CR_INIT_S3_CHUNK_SIZE:-26214400}
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${CLOUDREVE_MASTER_RUNTIME_MOUNT_TYPE:-volume}
         source: ${CLOUDREVE_MASTER_RUNTIME_MOUNT_SOURCE:-cloudreve_master_runtime}
         target: /cloudreve/data
@@ -64,18 +119,9 @@ services:
       start_period: 30s
     deploy:
       replicas: ${CLOUDREVE_MASTER_REPLICAS:-1}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -89,44 +135,43 @@ services:
           memory: "${CLOUDREVE_MASTER_MEM_LIMIT:-4G}"
 
   cloudreve-master-proxy:
+    <<: *service-base
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
     hostname: "{{.Node.Hostname}}-cr-master-proxy-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       SERVER_NAME: ${CLOUDREVE_MASTER_SERVER_NAME:-_}
       UPSTREAM_SERVICE: cloudreve-master:5212
+      TLS_CERT_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/cloudreve-master-proxy/fullchain.crt
+      TLS_KEY_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/cloudreve-master-proxy/tls.key
       CLIENT_MAX_BODY_SIZE: ${CLOUDREVE_MASTER_CLIENT_MAX_BODY_SIZE:-0}
       PROXY_READ_TIMEOUT: ${CLOUDREVE_MASTER_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${CLOUDREVE_MASTER_PROXY_SEND_TIMEOUT:-3600s}
     configs:
-      - source: cloudreve_proxy_template_v2
+      - source: cloudreve_proxy_template_v3
         target: /etc/nginx/templates/default.conf.template
         mode: 0444
     ports:
-      - target: 80
-        published: ${CLOUDREVE_MASTER_HTTP_PORT:-80}
+      - target: 443
+        published: ${CLOUDREVE_MASTER_HTTP_PORT:-18081}
         protocol: tcp
         mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
       start_period: 15s
     deploy:
       replicas: ${CLOUDREVE_MASTER_PROXY_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -140,9 +185,14 @@ services:
           memory: "${CLOUDREVE_MASTER_PROXY_MEM_LIMIT:-512M}"
 
   cloudreve-slave:
+    <<: *service-base
     image: ${CLOUDREVE_SLAVE_IMAGE:-cloudreve/cloudreve:4.15.0}
     hostname: "{{.Node.Hostname}}-cr-slave-{{.Task.Slot}}"
     environment:
+      <<: *default-env
+      SSL_CERT_FILE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
+      SSL_CERT_DIR: ${CLOUDREVE_CA_CERT_DIR:-/run/swarm-pki/ca}
+      CURL_CA_BUNDLE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       CR_CONF_System.Mode: slave
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
@@ -154,8 +204,13 @@ services:
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
       CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
       CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
-      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-SSL}
+      CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
+      CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
+      CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_TYPE:-volume}
         source: ${CLOUDREVE_SLAVE_RUNTIME_MOUNT_SOURCE:-cloudreve_slave_runtime}
         target: /cloudreve/data
@@ -169,18 +224,9 @@ services:
       start_period: 30s
     deploy:
       replicas: ${CLOUDREVE_SLAVE_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -194,44 +240,43 @@ services:
           memory: "${CLOUDREVE_SLAVE_MEM_LIMIT:-2G}"
 
   cloudreve-slave-proxy:
+    <<: *service-base
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
     hostname: "{{.Node.Hostname}}-cr-slave-proxy-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       SERVER_NAME: ${CLOUDREVE_SLAVE_SERVER_NAME:-_}
       UPSTREAM_SERVICE: cloudreve-slave:5212
+      TLS_CERT_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/cloudreve-slave-proxy/fullchain.crt
+      TLS_KEY_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/cloudreve-slave-proxy/tls.key
       CLIENT_MAX_BODY_SIZE: ${CLOUDREVE_SLAVE_CLIENT_MAX_BODY_SIZE:-0}
       PROXY_READ_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${CLOUDREVE_SLAVE_PROXY_SEND_TIMEOUT:-3600s}
     configs:
-      - source: cloudreve_proxy_template_v2
+      - source: cloudreve_proxy_template_v3
         target: /etc/nginx/templates/default.conf.template
         mode: 0444
     ports:
-      - target: 80
-        published: ${CLOUDREVE_SLAVE_HTTP_PORT:-5213}
+      - target: 443
+        published: ${CLOUDREVE_SLAVE_HTTP_PORT:-18082}
         protocol: tcp
         mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
       start_period: 15s
     deploy:
       replicas: ${CLOUDREVE_SLAVE_PROXY_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -247,7 +292,9 @@ services:
 networks:
   cloudreve_backend:
     driver: overlay
-    attachable: true
+    driver_opts:
+      encrypted: "true"
+    attachable: false
     ipam:
       config:
         - subnet: ${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}
@@ -257,5 +304,5 @@ volumes:
   cloudreve_slave_runtime:
 
 configs:
-  cloudreve_proxy_template_v2:
+  cloudreve_proxy_template_v3:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template

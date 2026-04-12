@@ -16,8 +16,8 @@ usage() {
 说明：
   这个脚本用于在宿主机上预创建 Swarm bind 路径，并修正常见权限。
   它不会替你执行 `docker stack deploy`，只负责准备宿主机目录。
-  如果 `.env.swarm` 里设置了 `SWARM_WITH_CLUSTER=yes`，`minio` / `elasticsearch` / `kafka`
-  会自动切换为处理各自集群节点的路径。
+  `minio` / `elasticsearch` / `kafka` 会自动优先处理各自的集群 bind 路径；
+  如果没有配置集群 bind，再回退到单节点 bind 路径。
 
 参数：
   --env-file FILE       读取的环境变量文件，默认是 .env.swarm
@@ -30,7 +30,8 @@ usage() {
 示例：
   sudo docker/swarm/prepare-bind-paths.sh --check
   sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
-  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka,tika,onlyoffice,registry,authverse
+  sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
+  sudo docker/swarm/prepare-bind-paths.sh --services tika,onlyoffice,registry,authverse
 EOF
 }
 
@@ -103,19 +104,86 @@ if [[ -n "${TIKA_CUSTOM_FONTS_HOST_PATH:-}" && -z "${TIKA_CUSTOM_FONTS_MOUNT_SOU
   TIKA_CUSTOM_FONTS_MOUNT_TYPE="${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-bind}"
   TIKA_CUSTOM_FONTS_MOUNT_SOURCE="$TIKA_CUSTOM_FONTS_HOST_PATH"
 fi
+if [[ -n "${SHARED_CUSTOM_FONTS_HOST_PATH:-}" && -z "${SHARED_CUSTOM_FONTS_MOUNT_SOURCE:-}" ]]; then
+  SHARED_CUSTOM_FONTS_MOUNT_TYPE="${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-bind}"
+  SHARED_CUSTOM_FONTS_MOUNT_SOURCE="$SHARED_CUSTOM_FONTS_HOST_PATH"
+fi
+if [[ -n "${SHARED_CUSTOM_FONTS_MOUNT_SOURCE:-}" ]]; then
+  TIKA_CUSTOM_FONTS_MOUNT_TYPE="${TIKA_CUSTOM_FONTS_MOUNT_TYPE:-${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-bind}}"
+  TIKA_CUSTOM_FONTS_MOUNT_SOURCE="${TIKA_CUSTOM_FONTS_MOUNT_SOURCE:-$SHARED_CUSTOM_FONTS_MOUNT_SOURCE}"
+  ONLYOFFICE_CUSTOM_FONTS_MOUNT_TYPE="${ONLYOFFICE_CUSTOM_FONTS_MOUNT_TYPE:-${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-bind}}"
+  ONLYOFFICE_CUSTOM_FONTS_MOUNT_SOURCE="${ONLYOFFICE_CUSTOM_FONTS_MOUNT_SOURCE:-$SHARED_CUSTOM_FONTS_MOUNT_SOURCE}"
+fi
+SWARM_PKI_MOUNT_TYPE="${SWARM_PKI_MOUNT_TYPE:-bind}"
+SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
 
-service_enabled() {
+service_list_contains() {
   local name="$1"
   local item
-  if [[ "$SERVICES" == "all" ]]; then
-    return 0
-  fi
   IFS=',' read -r -a _selected_services <<<"$SERVICES"
   for item in "${_selected_services[@]}"; do
+    item="${item//[[:space:]]/}"
     if [[ "$item" == "$name" || "$item" == "all" ]]; then
       return 0
     fi
   done
+  return 1
+}
+
+validate_services() {
+  local item
+  IFS=',' read -r -a _selected_services <<<"$SERVICES"
+  for item in "${_selected_services[@]}"; do
+    item="${item//[[:space:]]/}"
+    case "$item" in
+      all|pg|redis|cloudreve|minio|elasticsearch|kafka|tika|onlyoffice|registry|authverse)
+        ;;
+      *)
+        echo "[$HOST_NAME] 不支持的服务名: $item" >&2
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
+cluster_bind_enabled() {
+  local prefix="$1"
+  local last_index="$2"
+  local index type_var
+
+  for ((index = 1; index <= last_index; index++)); do
+    type_var="${prefix}_${index}_DATA_MOUNT_TYPE"
+    if [[ "${!type_var:-volume}" == "bind" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+service_enabled() {
+  local name="$1"
+  if [[ "$SERVICES" == "all" ]]; then
+    return 0
+  fi
+  if service_list_contains "$name"; then
+    return 0
+  fi
+  return 1
+}
+
+shared_assets_enabled() {
+  service_enabled pg && return 0
+  service_enabled redis && return 0
+  service_enabled cloudreve && return 0
+  service_enabled minio && return 0
+  service_enabled elasticsearch && return 0
+  service_enabled kafka && return 0
+  service_enabled tika && return 0
+  service_enabled onlyoffice && return 0
+  service_enabled registry && return 0
+  service_enabled authverse && return 0
   return 1
 }
 
@@ -134,6 +202,8 @@ stat_owner() {
 
 entries=()
 
+validate_services
+
 add_entry() {
   local label="$1"
   local path="$2"
@@ -146,6 +216,18 @@ add_entry() {
 }
 
 collect_entries() {
+  if shared_assets_enabled; then
+    if [[ "${SWARM_PKI_MOUNT_TYPE:-bind}" == "bind" ]]; then
+      add_entry "SWARM_PKI_MOUNT_SOURCE" "${SWARM_PKI_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+      add_entry "SWARM_PKI_CA_MOUNT_SOURCE" "${SWARM_PKI_MOUNT_SOURCE:-}/ca" "" "0755" "mkdir_only"
+      add_entry "SWARM_PKI_SERVICES_MOUNT_SOURCE" "${SWARM_PKI_MOUNT_SOURCE:-}/services" "" "0755" "mkdir_only"
+    fi
+
+    if [[ "${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "SHARED_CUSTOM_FONTS_MOUNT_SOURCE" "${SHARED_CUSTOM_FONTS_MOUNT_SOURCE:-}" "" "0755" "readable_recursive"
+    fi
+  fi
+
   if service_enabled pg; then
     if [[ "${PG_1_DATA_MOUNT_TYPE:-bind}" == "bind" ]]; then
       add_entry "PG_1_DATA_MOUNT_SOURCE" "${PG_1_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
@@ -180,7 +262,7 @@ collect_entries() {
   fi
 
   if service_enabled minio; then
-    if [[ "${SWARM_WITH_CLUSTER:-no}" == "yes" ]]; then
+    if cluster_bind_enabled "MINIO" 4; then
       if [[ "${MINIO_1_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
         add_entry "MINIO_1_DATA_MOUNT_SOURCE" "${MINIO_1_DATA_MOUNT_SOURCE:-}" "1001:1001" "0755" "chown_recursive"
       fi
@@ -199,7 +281,7 @@ collect_entries() {
   fi
 
   if service_enabled elasticsearch; then
-    if [[ "${SWARM_WITH_CLUSTER:-no}" == "yes" ]]; then
+    if cluster_bind_enabled "ELASTICSEARCH" 3; then
       if [[ "${ELASTICSEARCH_1_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
         add_entry "ELASTICSEARCH_1_DATA_MOUNT_SOURCE" "${ELASTICSEARCH_1_DATA_MOUNT_SOURCE:-}" "1000:0" "0775" "chown_recursive"
       fi
@@ -215,7 +297,7 @@ collect_entries() {
   fi
 
   if service_enabled kafka; then
-    if [[ "${SWARM_WITH_CLUSTER:-no}" == "yes" ]]; then
+    if cluster_bind_enabled "KAFKA" 3; then
       if [[ "${KAFKA_1_DATA_MOUNT_TYPE:-volume}" == "bind" ]]; then
         add_entry "KAFKA_1_DATA_MOUNT_SOURCE" "${KAFKA_1_DATA_MOUNT_SOURCE:-}" "1000:1000" "0775" "chown_recursive"
       fi
@@ -244,11 +326,11 @@ collect_entries() {
     if [[ "${ONLYOFFICE_LOG_MOUNT_TYPE:-volume}" == "bind" ]]; then
       add_entry "ONLYOFFICE_LOG_MOUNT_SOURCE" "${ONLYOFFICE_LOG_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
     fi
-    if [[ "${ONLYOFFICE_DB_MOUNT_TYPE:-volume}" == "bind" ]]; then
-      add_entry "ONLYOFFICE_DB_MOUNT_SOURCE" "${ONLYOFFICE_DB_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+    if [[ "${ONLYOFFICE_CUSTOM_FONTS_MOUNT_TYPE:-volume}" == "bind" ]]; then
+      add_entry "ONLYOFFICE_CUSTOM_FONTS_MOUNT_SOURCE" "${ONLYOFFICE_CUSTOM_FONTS_MOUNT_SOURCE:-}" "" "0755" "readable_recursive"
     fi
     if [[ "${ONLYOFFICE_RABBITMQ_MOUNT_TYPE:-volume}" == "bind" ]]; then
-      add_entry "ONLYOFFICE_RABBITMQ_MOUNT_SOURCE" "${ONLYOFFICE_RABBITMQ_MOUNT_SOURCE:-}" "" "0755" "mkdir_only"
+      add_entry "ONLYOFFICE_RABBITMQ_MOUNT_SOURCE" "${ONLYOFFICE_RABBITMQ_MOUNT_SOURCE:-}" "999:999" "0775" "chown_recursive"
     fi
   fi
 

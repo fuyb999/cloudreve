@@ -19,12 +19,56 @@
 # - 默认共享网络名来自 `AUTHVERSE_SHARED_NETWORK`，通常是 `cloudreve_cloudreve_backend`。
 # - 如果要覆盖 OIDC RSA 密钥，支持 bind / volume 两种挂载模式；默认仍使用镜像内 classpath 密钥。
 
+x-default-env: &default-env
+  TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
+
+x-localtime-volume: &localtime-volume
+  type: ${SWARM_LOCALTIME_MOUNT_TYPE:-bind}
+  source: ${SWARM_LOCALTIME_MOUNT_SOURCE:-/etc/localtime}
+  target: /etc/localtime
+  read_only: true
+
+x-pki-volume: &pki-volume
+  type: ${SWARM_PKI_MOUNT_TYPE:-bind}
+  source: ${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}
+  target: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}
+  read_only: true
+
+x-default-logging: &default-logging
+  driver: ${SWARM_LOGGING_DRIVER:-json-file}
+  options:
+    max-size: "${SWARM_LOGGING_MAX_SIZE:-20m}"
+    max-file: "${SWARM_LOGGING_MAX_FILE:-5}"
+    compress: "${SWARM_LOGGING_COMPRESS:-true}"
+
+x-service-base: &service-base
+  logging: *default-logging
+
+x-delayed-update-config: &delayed-update-config
+  parallelism: 1
+  order: ${SWARM_ROLLING_ORDER:-start-first}
+  failure_action: rollback
+  delay: 10s
+
+x-default-rollback-config: &default-rollback-config
+  parallelism: 1
+  order: stop-first
+
+x-default-restart-policy: &default-restart-policy
+  condition: on-failure
+  delay: 5s
+  window: 2m
+
 services:
   authverse-web:
+    <<: *service-base
     image: ${AUTHVERSE_WEB_IMAGE:?set AUTHVERSE_WEB_IMAGE}
     hostname: "{{.Node.Hostname}}-authverse-web-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       SERVER_NAME: ${AUTHVERSE_SERVER_NAME:-_}
+      TLS_CERT_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/authverse-web/fullchain.crt
+      TLS_KEY_PATH: ${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/services/authverse-web/tls.key
       CLIENT_MAX_BODY_SIZE: ${AUTHVERSE_CLIENT_MAX_BODY_SIZE:-0}
       PROXY_READ_TIMEOUT: ${AUTHVERSE_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${AUTHVERSE_PROXY_SEND_TIMEOUT:-3600s}
@@ -32,33 +76,31 @@ services:
       UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$host}
       UPSTREAM_CLOUDREVE: ${AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM:?set AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM}
       UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$host}
+    configs:
+      - source: authverse_proxy_template_v1
+        target: /etc/nginx/templates/default.conf.template
+        mode: 0444
     ports:
-      - target: 80
+      - target: 443
         published: ${AUTHVERSE_HTTP_PORT:-18080}
         protocol: tcp
         mode: ingress
+    volumes:
+      - *localtime-volume
+      - *pki-volume
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
       start_period: 20s
     deploy:
       replicas: ${AUTHVERSE_WEB_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -72,11 +114,14 @@ services:
           memory: "${AUTHVERSE_WEB_MEM_LIMIT:-512M}"
 
   authverse-backend:
+    <<: *service-base
     image: ${AUTHVERSE_BACKEND_IMAGE:?set AUTHVERSE_BACKEND_IMAGE}
     hostname: "{{.Node.Hostname}}-authverse-backend-{{.Task.Slot}}"
     environment:
+      <<: *default-env
       SPRING_PROFILES_ACTIVE: local
       JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}
+      JAVA_TOOL_OPTIONS: ${AUTHVERSE_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
       ARGS: >-
         --server.port=48080
         --server.forward-headers-strategy=framework
@@ -90,6 +135,7 @@ services:
         --spring.data.redis.port=${AUTHVERSE_REDIS_PORT:-6379}
         --spring.data.redis.password=${AUTHVERSE_REDIS_PASSWORD:?set AUTHVERSE_REDIS_PASSWORD}
         --spring.data.redis.database=${AUTHVERSE_REDIS_DATABASE:-0}
+        --spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true}
         --spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB}
         --spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB}
         --yudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false}
@@ -112,6 +158,8 @@ services:
         --yudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000}
         --yudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}
     volumes:
+      - *localtime-volume
+      - *pki-volume
       - type: ${AUTHVERSE_OIDC_KEYS_MOUNT_TYPE:-volume}
         source: ${AUTHVERSE_OIDC_KEYS_MOUNT_SOURCE:-authverse_oidc_keys}
         target: /run/authverse/oidc
@@ -123,21 +171,12 @@ services:
       interval: 20s
       timeout: 5s
       retries: 10
-      start_period: 60s
+      start_period: 15m
     deploy:
       replicas: ${AUTHVERSE_BACKEND_REPLICAS:-2}
-      update_config:
-        parallelism: 1
-        order: ${SWARM_ROLLING_ORDER:-start-first}
-        failure_action: rollback
-        delay: 10s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        window: 2m
+      update_config: *delayed-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -157,3 +196,7 @@ networks:
 
 volumes:
   authverse_oidc_keys:
+
+configs:
+  authverse_proxy_template_v1:
+    file: ./docker/swarm/nginx/authverse-proxy.conf.template

@@ -13,17 +13,17 @@
 原因很简单：
 
 1. 部署脚本会先在本地 `source .env.swarm`
-2. 然后把 `docker-compose.swarm.yml + docker-compose.swarm.foundation.yml`
-   渲染成最终 stack 配置；如果启用了 `SWARM_WITH_CLUSTER=yes`，再额外叠加
-   `docker-compose.swarm.cluster.yml`
+2. 然后把某个 `docker-compose.swarm.<name>.yml`
+   渲染成最终 stack 配置；如果你是拆分发布，就对同一个 stack name
+   依次执行 `cloudreve`、`foundation`、`infra`
 3. 最后把渲染后的 service spec 提交给 Swarm
 
 所以：
 
 - `.env.swarm` 不会自动同步到其他节点
 - 但它渲染出来的变量值会被固化进最终部署配置
-- `authverse` 栈也是同理，只是它单独由 `docker/swarm/deploy-auth-stack.sh`
-  渲染 `docker-compose.swarm.auth.yml`
+- `authverse` 栈也是同理，只是推荐改成
+  `docker/swarm/deploy-stack.sh auth`
 
 ## 2. 哪些节点需要 `.env.swarm`
 
@@ -58,10 +58,10 @@ Swarm 里最常看的两个命令：
 
 推荐方式：
 
-- `cr-prod-mgr-1`
-- `cr-prod-wkr-1`
-- `cr-prod-wkr-2`
-- `cr-prod-wkr-3`
+- `cr-prod-mgr-11`
+- `cr-prod-wkr-12`
+- `cr-prod-wkr-13`
+- `cr-prod-wkr-14`
 
 如果你更喜欢带角色，也可以：
 
@@ -137,8 +137,10 @@ Swarm 多机环境里更常见的问题其实是：
 
 - PostgreSQL / Redis 的物理路径
 - 你切成 `bind` 的 `cloudreve-master`
-- 你切成 `bind` 的 `minio`
-- 你切成 `bind` 的 `elasticsearch`
+- 你切成 `bind` 的 `minio-internal`
+- 你切成 `bind` 的 `elasticsearch-internal`
+- `SWARM_PKI_MOUNT_SOURCE`
+- `SHARED_CUSTOM_FONTS_MOUNT_SOURCE`
 
 所以多机时要同时满足两件事：
 
@@ -230,31 +232,32 @@ docker node update --label-add cloudreve.registry=true <node-name>
 1. 固定一台 `manager` 作为部署入口
 2. `.env.swarm` 只在这台机器维护，或者通过自动化同步到全部 manager
 3. 在每台节点先执行 `docker/swarm/prepare-private-registry.sh`
-4. 在每台节点再执行 `docker/swarm/prepare-bitnami-images.sh`
+4. 如果使用 `SWARM_IMAGE_SOURCE=local`，再在每台节点执行 `docker/swarm/prepare-bitnami-images.sh`；如果使用 `remote`，只在固定部署 manager 执行它，并随后执行 `publish-private-images.sh`
 5. `PG / Redis` 一律使用宿主机物理路径
 6. 可选 `bind` 服务一旦切成绝对路径，就同时加节点标签和约束
 7. 如果不确定某个路径能否在多机上保持一致，就继续使用默认 `volume` 模式
-8. 如果启用 `SWARM_WITH_CLUSTER=yes`，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
-9. 集群模式下，Cloudreve 默认 S3 地址仍用 `http://minio:9000`，FTS Elasticsearch 地址填 `http://elasticsearch:9200`
+8. 如果启用 `infra` 模板，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
+9. 集群模式下，Cloudreve 默认 S3 地址仍用 `http://minio-internal:9000`，FTS Elasticsearch 地址填 `http://elasticsearch-internal:9200`
 10. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `kafka:9092`
-11. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui` 对外端口；UI 本身仍然走内部 `kafka:9092`
+11. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui-public` 对外 TLS 端口；UI 本身仍然走内部 `kafka:9092`
 12. 自定义镜像统一先 push 到固定 manager 上的 `registry:2`，再部署主业务栈，不要逐台 `docker load`
+13. 如果 `SWARM_PKI_MOUNT_TYPE=bind` 或 `SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind`，要把对应目录同步到所有可能落任务的节点；Swarm 只会分发 `configs`，不会自动分发宿主机 bind 目录
+14. 仓库内已经提供 `docker/swarm/sync-swarm-assets.sh`，可以统一同步 `.env.swarm`、PKI 目录、共享字体目录
 
 ## 8. 相关文件
 
 - `docker-compose.swarm.registry.yml`
-- `docker-compose.swarm.yml`
+- `docker-compose.swarm.cloudreve.yml`
 - `docker-compose.swarm.foundation.yml`
-- `docker-compose.swarm.cluster.yml`
+- `docker-compose.swarm.infra.yml`
 - `docker-compose.swarm.auth.yml`
 - `.env.swarm.example`
 - `.env.swarm.prod-4x128g.example`
-- `docker/swarm/deploy-private-registry.sh`
 - `docker/swarm/deploy-stack.sh`
-- `docker/swarm/deploy-auth-stack.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
 - `docker/swarm/prepare-private-registry.sh`
 - `docker/swarm/publish-private-images.sh`
+- `docker/swarm/sync-swarm-assets.sh`
 - `docs/docker-swarm-deployment.md`
 - `docs/docker-swarm-quickstart.md`

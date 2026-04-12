@@ -180,6 +180,7 @@ require_default_images() {
   require_image "${KAFKA_PROXY_IMAGE:-haproxy:3.0-alpine}"
   require_image "${KAFKA_UI_IMAGE:-provectuslabs/kafka-ui:v0.7.2}"
   require_image "${ONLYOFFICE_IMAGE:-onlyoffice/documentserver:8.2.2}"
+  require_image "${ONLYOFFICE_RABBITMQ_IMAGE:-rabbitmq:3.13.7-alpine}"
   require_image "${PRIVATE_REGISTRY_IMAGE:-registry:2.8.3}"
 }
 

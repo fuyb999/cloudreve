@@ -1,0 +1,197 @@
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${SERVER_NAME};
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $upstream_authverse_backend ${UPSTREAM_AUTHVERSE_BACKEND};
+    set $upstream_cloudreve ${UPSTREAM_CLOUDREVE};
+
+    ssl_certificate ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:AuthverseSSL:10m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+    charset utf-8;
+
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    location ^~ /admin-api/ {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /app-api/ {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /.well-known/ {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /oidc/ {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /swagger-ui {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /v3/api-docs {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /infra/ws {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /api/ {
+        proxy_pass http://$upstream_cloudreve;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_CLOUDREVE_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location = /manifest.json {
+        proxy_pass http://$upstream_cloudreve;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_CLOUDREVE_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /s/ {
+        proxy_pass http://$upstream_cloudreve;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_CLOUDREVE_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location ^~ /f/ {
+        proxy_pass http://$upstream_cloudreve;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_CLOUDREVE_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
