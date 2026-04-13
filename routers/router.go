@@ -896,6 +896,14 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 			middleware.RequiredScopes(types.ScopeFilesRead),
 		)
 		{
+			public.GET("resource",
+				controllers.FromQuery[publicsvc.PublicResourceService](publicsvc.PublicResourceParamCtx{}),
+				controllers.PublicGetResource,
+			)
+			public.GET("resource/children",
+				controllers.FromQuery[publicsvc.PublicChildrenService](publicsvc.PublicChildrenParamCtx{}),
+				controllers.PublicListResourceChildren,
+			)
 			remote := public.Group("remote")
 			{
 				remote.GET("visibility",

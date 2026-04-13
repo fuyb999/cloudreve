@@ -30,6 +30,30 @@ func PublicRemoteCheck(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
+func PublicGetResource(c *gin.Context) {
+	service := ParametersFromContext[*publicsvc.PublicResourceService](c, publicsvc.PublicResourceParamCtx{})
+	res, err := service.Get(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
+func PublicListResourceChildren(c *gin.Context) {
+	service := ParametersFromContext[*publicsvc.PublicChildrenService](c, publicsvc.PublicChildrenParamCtx{})
+	res, err := service.List(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
 func AdminGetPublicRoot(c *gin.Context) {
 	service := ParametersFromContext[*publicsvc.AdminPublicRootService](c, publicsvc.AdminPublicRootParamCtx{})
 	res, err := service.Get(c)

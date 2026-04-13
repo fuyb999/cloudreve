@@ -412,6 +412,15 @@ func uniqueFTSTopics(items ...string) []string {
 	return res
 }
 
+func isExternalFTSErrorStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "error", "failed", "failure":
+		return true
+	default:
+		return false
+	}
+}
+
 func handleFTSExternalResultMessage(ctx context.Context, dep dependency.Dep, payload []byte) error {
 	var message externalFTSResultMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -423,7 +432,14 @@ func handleFTSExternalResultMessage(ctx context.Context, dep dependency.Dep, pay
 		return nil
 	}
 
-	return upsertFTSExternalJobPayload(ctx, dep, message.RequestID, message.SnapshotToken, string(payload), true)
+	return upsertFTSExternalJobPayload(
+		ctx,
+		dep,
+		message.RequestID,
+		message.SnapshotToken,
+		string(payload),
+		!isExternalFTSErrorStatus(message.Status),
+	)
 }
 
 func handleFTSExternalErrorMessage(ctx context.Context, dep dependency.Dep, payload []byte) error {

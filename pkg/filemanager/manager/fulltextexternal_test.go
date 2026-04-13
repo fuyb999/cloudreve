@@ -372,6 +372,41 @@ func TestUpsertFTSExternalJobPayloadKeepsSuccessTerminal(t *testing.T) {
 	}
 }
 
+func TestHandleFTSExternalResultMessageTreatsErrorStatusAsFailure(t *testing.T) {
+	ctx := context.Background()
+	client := newFTSExternalTestClient(t, ctx)
+	defer client.Close()
+
+	createFTSExternalJob(t, ctx, client, "req-result-error", "snapshot-a")
+
+	dep := ftsExternalIntegrationDep{
+		dbClient: client,
+		logger:   logging.NewConsoleLogger(logging.LevelError),
+	}
+
+	payload := []byte(`{"version":1,"request_id":"req-result-error","snapshot_token":"snapshot-a","status":"error","code":"provider_error","detail":"returned from result topic"}`)
+	if err := handleFTSExternalResultMessage(ctx, dep, payload); err != nil {
+		t.Fatalf("expected error status on result topic to be accepted, got error: %v", err)
+	}
+
+	job, err := client.FTSExternalJob.Query().Where(ftsexternaljob.RequestIDEQ("req-result-error")).Only(ctx)
+	if err != nil {
+		t.Fatalf("failed to reload external job: %v", err)
+	}
+	if job.Status != ftsExternalJobStatusError {
+		t.Fatalf("expected job status to be error, got %s", job.Status)
+	}
+	if job.ResultPayload != "" {
+		t.Fatalf("expected result payload to stay empty for error status, got %q", job.ResultPayload)
+	}
+	if job.ErrorPayload == "" {
+		t.Fatal("expected error payload to be captured from result topic")
+	}
+	if job.CompletedAt == nil {
+		t.Fatal("expected completed_at to be set after result-topic error")
+	}
+}
+
 func TestEvaluateFTSExtractionQualityRejectsGarbleAndControlChars(t *testing.T) {
 	cfg := &setting.FTSExternalExtractorSetting{
 		Quality: setting.FTSExternalQualitySetting{
@@ -713,6 +748,9 @@ func TestRetryOrFallbackExternalFallsBackToLocalWhenRetryBudgetExhausted(t *test
 	if taskModel.Model().PublicState == nil || len(taskModel.Model().PublicState.ErrorHistory) != 1 {
 		t.Fatalf("expected timeout failure to be recorded in task history, got %+v", taskModel.Model().PublicState)
 	}
+	if !strings.Contains(taskModel.Model().PublicState.Error, "external job timed out") {
+		t.Fatalf("expected timeout failure to be written to task error, got %q", taskModel.Model().PublicState.Error)
+	}
 	if !strings.Contains(taskModel.Model().PublicState.ErrorHistory[0], "external fts extraction failed") ||
 		!strings.Contains(taskModel.Model().PublicState.ErrorHistory[0], "external job timed out") {
 		t.Fatalf("unexpected timeout history entry: %q", taskModel.Model().PublicState.ErrorHistory[0])
@@ -781,6 +819,10 @@ func TestRetryOrFallbackExternalRecordsProviderErrorDetailsInTaskHistory(t *test
 	}
 	if taskModel.Model().PublicState == nil || len(taskModel.Model().PublicState.ErrorHistory) != 1 {
 		t.Fatalf("expected provider error to be recorded in task history, got %+v", taskModel.Model().PublicState)
+	}
+	if !strings.Contains(taskModel.Model().PublicState.Error, "req-provider-error") ||
+		!strings.Contains(taskModel.Model().PublicState.Error, "provider_error") {
+		t.Fatalf("expected provider error to be written to task error, got %q", taskModel.Model().PublicState.Error)
 	}
 
 	history := taskModel.Model().PublicState.ErrorHistory[0]

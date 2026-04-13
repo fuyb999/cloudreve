@@ -30,6 +30,17 @@ type (
 		Action acl.Action `json:"action" binding:"required,oneof=list download direct_link archive upload create rename delete delete_root share copy move metadata"`
 	}
 
+	PublicResourceParamCtx struct{}
+	PublicResourceService  struct {
+		Uri string `form:"uri"`
+	}
+
+	PublicChildrenParamCtx struct{}
+	PublicChildrenService  struct {
+		Uri      string `form:"uri"`
+		PageSize int    `form:"page_size"`
+	}
+
 	AdminPublicRootParamCtx struct{}
 	AdminPublicRootService  struct{}
 
@@ -370,6 +381,39 @@ func resolveManagedPublicFile(c *gin.Context, raw string) (*ent.File, *fs.URI, *
 	return current, uri, ownerBase, nil
 }
 
+func resolveVisiblePublicFile(c *gin.Context, raw string) (*dbfs.File, *fs.URI, *fs.URI, error) {
+	file, uri, err := resolvePublicFile(c, defaultPublicURI(raw))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	service := newService(c)
+	root, rootErr := service.Root(c)
+	if rootErr != nil {
+		return nil, nil, nil, serializer.NewError(serializer.CodeNotFound, "public root not found", rootErr)
+	}
+
+	ownerBase, ownerErr := service.RootOwnerURI(c, root)
+	if ownerErr != nil {
+		ownerBase = acl.BuildPublicURI()
+	}
+
+	return file, uri, ownerBase, nil
+}
+
+func buildResourceSnapshotFromFile(c *gin.Context, file fs.File, uri *fs.URI, ownerBase *fs.URI) (*ResourceSnapshotResponse, error) {
+	if file == nil || file.IsNil() {
+		return nil, serializer.NewError(serializer.CodeNotFound, "public file not found", nil)
+	}
+
+	dbFile, ok := file.(*dbfs.File)
+	if !ok || dbFile.Model == nil {
+		return nil, serializer.NewError(serializer.CodeInternalSetting, "unexpected public file implementation", fmt.Errorf("type %T", file))
+	}
+
+	return buildResourceSnapshot(c, dbFile.Model, uri, ownerBase), nil
+}
+
 func legacyLocalAuthzDisabledErr() error {
 	return serializer.NewError(serializer.CodeFeatureNotEnabled, "public authorization is managed by unified auth when OIDC is enabled", nil)
 }
@@ -430,6 +474,51 @@ func (s *RemoteCheckService) Check(c *gin.Context) (*RemoteCheckResponse, error)
 		Uri:      s.Uri,
 		Decision: decision,
 	}, nil
+}
+
+func (s *PublicResourceService) Get(c *gin.Context) (*ResourceSnapshotResponse, error) {
+	file, uri, ownerBase, err := resolveVisiblePublicFile(c, s.Uri)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildResourceSnapshotFromFile(c, file, uri, ownerBase)
+}
+
+func (s *PublicChildrenService) List(c *gin.Context) ([]ResourceSnapshotResponse, error) {
+	parent, uri, ownerBase, err := resolveVisiblePublicFile(c, s.Uri)
+	if err != nil {
+		return nil, err
+	}
+	if parent.Type() != types.FileTypeFolder {
+		return nil, serializer.NewError(serializer.CodeParamErr, "target must be a folder", nil)
+	}
+
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+	m := manager.NewFileManager(dep, user)
+	defer m.Recycle()
+
+	pageSize := s.PageSize
+	if pageSize <= 0 {
+		pageSize = 200
+	}
+	_, result, err := m.List(c, uri, &manager.ListArgs{
+		PageSize: pageSize,
+	})
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeDBError, "failed to list public children", err)
+	}
+
+	res := make([]ResourceSnapshotResponse, 0, len(result.Files))
+	for _, item := range result.Files {
+		snapshot, snapshotErr := buildResourceSnapshotFromFile(c, item, uri.Join(item.Name()), ownerBase)
+		if snapshotErr != nil {
+			return nil, snapshotErr
+		}
+		res = append(res, *snapshot)
+	}
+	return res, nil
 }
 
 func (s *AdminPublicRootService) Get(c *gin.Context) (*PublicRootResponse, error) {

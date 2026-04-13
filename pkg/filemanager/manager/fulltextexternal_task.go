@@ -387,6 +387,8 @@ func appendExternalExtractionFailureHistory(t *FullTextIndexTask, job *ent.FTSEx
 		t.Task.PublicState = &inventorytypes.TaskPublicState{}
 	}
 
+	t.Task.PublicState.Error = message
+
 	history := t.Task.PublicState.ErrorHistory
 	if len(history) > 0 && history[len(history)-1] == message {
 		return
