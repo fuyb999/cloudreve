@@ -328,25 +328,25 @@ build_authverse_backend_args() {
 --spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true} \
 --spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB} \
 --spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB} \
---yudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
---yudao.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
---yudao.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
---yudao.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
---yudao.search.elasticsearch.uris[0]=${elasticsearch_uri} \
---yudao.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
---yudao.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
---yudao.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
---yudao.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
---yudao.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
---yudao.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
---yudao.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
---yudao.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
---yudao.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
---yudao.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
---yudao.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
---yudao.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
---yudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
---yudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
+--authverse.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
+--authverse.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+--authverse.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
+--authverse.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
+--authverse.search.elasticsearch.uris[0]=${elasticsearch_uri} \
+--authverse.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
+--authverse.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
+--authverse.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
+--authverse.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
+--authverse.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+--authverse.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
+--authverse.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
+--authverse.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
+--authverse.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
+--authverse.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
+--authverse.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
+--authverse.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
+--authverse.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
+--authverse.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
 }
 
 build_stack_secret_name() {
