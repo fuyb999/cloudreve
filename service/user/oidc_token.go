@@ -45,6 +45,7 @@ type oidcIntrospectionPayload struct {
 	Active      *bool    `json:"active,omitempty"`
 	Subject     string   `json:"sub"`
 	ClientID    string   `json:"client_id"`
+	GrantType   string   `json:"grant_type"`
 	Scope       string   `json:"scope"`
 	Scopes      []string `json:"scopes"`
 	AccessToken string   `json:"access_token"`
@@ -142,6 +143,8 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 		if issuedAt == 0 {
 			issuedAt = time.Now().Unix()
 		}
+		scopes := normalizeOIDCScopes(introspection.Scope, introspection.Scopes)
+		entry.Scopes = append([]string(nil), scopes...)
 		if isOIDCLogoutAfter(getOIDCSubjectLogoutAt(c, dep, entry.Issuer, entry.Subject), issuedAt) {
 			_ = dep.KV().Delete("", oidcAccessTokenCacheKey(token))
 			return false, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token has been logged out", nil)
@@ -149,6 +152,8 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 		entry.ExpiresAt = introspection.Exp
 		entry.IssuedAt = issuedAt
 		_ = cacheOIDCAccessToken(c, dep, token, entry)
+		util.WithValue(c, auth.ScopeContextKey{}, scopes)
+		util.WithValue(c, inventory.OIDCGrantTypeCtx{}, strings.TrimSpace(introspection.GrantType))
 		util.WithValue(c, inventory.UserIDCtx{}, entry.LocalUserID)
 		return true, nil
 	}
@@ -184,15 +189,19 @@ func TryVerifyOIDCAccessToken(c *gin.Context) (bool, error) {
 	}
 
 	util.WithValue(c, inventory.UserIDCtx{}, loginUser.ID)
+	util.WithValue(c, inventory.OIDCGrantTypeCtx{}, strings.TrimSpace(introspection.GrantType))
 	issuedAt := introspection.Iat
 	if issuedAt == 0 {
 		issuedAt = time.Now().Unix()
 	}
+	scopes := normalizeOIDCScopes(introspection.Scope, introspection.Scopes)
+	util.WithValue(c, auth.ScopeContextKey{}, scopes)
 	if isOIDCLogoutAfter(getOIDCSubjectLogoutAt(c, dep, profile.Issuer, profile.Subject), issuedAt) {
 		return false, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token has been logged out", nil)
 	}
 	if err := cacheOIDCAccessToken(c, dep, token, &oidcAccessTokenCacheEntry{
 		LocalUserID: loginUser.ID,
+		Scopes:      append([]string(nil), scopes...),
 		ExpiresAt:   introspection.Exp,
 		IssuedAt:    issuedAt,
 		Issuer:      profile.Issuer,

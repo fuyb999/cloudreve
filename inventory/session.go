@@ -14,3 +14,12 @@ func OIDCAccessTokenFromContext(ctx context.Context) string {
 	token, _ := ctx.Value(OIDCAccessTokenCtx{}).(string)
 	return strings.TrimSpace(token)
 }
+
+// OIDCGrantTypeCtx 在当前请求上下文中保存上游统一认证中心 introspection 返回的 grant_type。
+type OIDCGrantTypeCtx struct{}
+
+// OIDCGrantTypeFromContext 读取当前请求上下文中的 grant_type。
+func OIDCGrantTypeFromContext(ctx context.Context) string {
+	grantType, _ := ctx.Value(OIDCGrantTypeCtx{}).(string)
+	return strings.TrimSpace(grantType)
+}

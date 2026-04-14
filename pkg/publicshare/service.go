@@ -381,6 +381,10 @@ func isAdminUser(user *ent.User) bool {
 }
 
 func (s *Service) ResolveVisibility(ctx context.Context, user *ent.User) (*VisibilityResult, error) {
+	if isAdminUser(user) {
+		return s.resolveVisibilityLocal(ctx, user)
+	}
+
 	if s.UnifiedAuthzEnabled(ctx) {
 		accessToken := oidcAccessTokenFromContext(ctx)
 		if accessToken == "" {
@@ -473,6 +477,10 @@ func (s *Service) resolveVisibilityLocal(ctx context.Context, user *ent.User) (*
 }
 
 func (s *Service) CheckActionByFile(ctx context.Context, user *ent.User, target *ent.File, action Action) (*ActionDecision, error) {
+	if isAdminUser(user) {
+		return s.checkActionByFileLocal(ctx, user, target, action)
+	}
+
 	if s.UnifiedAuthzEnabled(ctx) {
 		accessToken := oidcAccessTokenFromContext(ctx)
 		if accessToken == "" {

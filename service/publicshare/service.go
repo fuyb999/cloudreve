@@ -11,6 +11,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	cloudauth "github.com/cloudreve/Cloudreve/v4/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
@@ -401,6 +402,29 @@ func resolveVisiblePublicFile(c *gin.Context, raw string) (*dbfs.File, *fs.URI, 
 	return file, uri, ownerBase, nil
 }
 
+func hasPublicManagedReadScope(c *gin.Context) bool {
+	user := inventory.UserFromContext(c)
+	if user != nil && user.Edges.Group != nil && user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+		return true
+	}
+	if inventory.OIDCGrantTypeFromContext(c) != "client_credentials" {
+		return false
+	}
+
+	hasScopes, scopes := cloudauth.GetScopesFromContext(c)
+	if !hasScopes {
+		return false
+	}
+
+	for _, scope := range scopes {
+		if scope == types.ScopeAdminRead || scope == types.ScopeAdminWrite {
+			return true
+		}
+	}
+
+	return false
+}
+
 func buildResourceSnapshotFromFile(c *gin.Context, file fs.File, uri *fs.URI, ownerBase *fs.URI) (*ResourceSnapshotResponse, error) {
 	if file == nil || file.IsNil() {
 		return nil, serializer.NewError(serializer.CodeNotFound, "public file not found", nil)
@@ -477,6 +501,14 @@ func (s *RemoteCheckService) Check(c *gin.Context) (*RemoteCheckResponse, error)
 }
 
 func (s *PublicResourceService) Get(c *gin.Context) (*ResourceSnapshotResponse, error) {
+	if hasPublicManagedReadScope(c) {
+		file, uri, ownerBase, err := resolveManagedPublicFile(c, s.Uri)
+		if err != nil {
+			return nil, err
+		}
+		return buildResourceSnapshot(c, file, uri, ownerBase), nil
+	}
+
 	file, uri, ownerBase, err := resolveVisiblePublicFile(c, s.Uri)
 	if err != nil {
 		return nil, err
@@ -486,6 +518,42 @@ func (s *PublicResourceService) Get(c *gin.Context) (*ResourceSnapshotResponse, 
 }
 
 func (s *PublicChildrenService) List(c *gin.Context) ([]ResourceSnapshotResponse, error) {
+	if hasPublicManagedReadScope(c) {
+		parent, uri, ownerBase, err := resolveManagedPublicFile(c, s.Uri)
+		if err != nil {
+			return nil, err
+		}
+		if parent.Type != int(types.FileTypeFolder) {
+			return nil, serializer.NewError(serializer.CodeParamErr, "target must be a folder", nil)
+		}
+
+		dep := dependency.FromContext(c)
+		ctx := context.WithValue(c, inventory.LoadFileMetadata{}, true)
+		pageSize := s.PageSize
+		if pageSize <= 0 {
+			pageSize = 200
+		}
+		result, err := dep.FileClient().GetChildFiles(ctx, &inventory.ListFileParameters{
+			PaginationArgs: &inventory.PaginationArgs{
+				PageSize:            pageSize,
+				UseCursorPagination: true,
+			},
+		}, 0, parent)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeDBError, "failed to list public children", err)
+		}
+
+		res := make([]ResourceSnapshotResponse, 0, len(result.Files))
+		for _, item := range result.Files {
+			childURI := uri
+			if childURI == nil {
+				childURI = acl.BuildPublicURI()
+			}
+			res = append(res, *buildResourceSnapshot(c, item, childURI.Join(item.Name), ownerBase))
+		}
+		return res, nil
+	}
+
 	parent, uri, ownerBase, err := resolveVisiblePublicFile(c, s.Uri)
 	if err != nil {
 		return nil, err
