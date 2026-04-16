@@ -245,17 +245,19 @@ docker node update --label-add cloudreve.registry=true <node-name>
 1. 固定一台 `manager` 作为部署入口
 2. `.env.swarm` 只在这台机器维护，或者通过自动化同步到全部 manager
 3. 在每台节点先执行 `docker/swarm/prepare-private-registry.sh`
-4. 如果使用 `SWARM_IMAGE_SOURCE=local`，再在每台节点执行 `docker/swarm/prepare-bitnami-images.sh`；如果使用 `remote`，只在固定部署 manager 执行它，并随后执行 `publish-private-images.sh`
+4. 推荐使用 `SWARM_IMAGE_SOURCE=remote`；固定部署 manager 先确认本地源镜像齐备，再先推 authverse 构建基镜像、再构建 authverse、最后执行 `publish-private-images.sh`
 5. `PG / Redis` 一律使用宿主机物理路径
 6. 可选 `bind` 服务一旦切成绝对路径，就同时加节点标签和约束
 7. 如果不确定某个路径能否在多机上保持一致，就继续使用默认 `volume` 模式
 8. 如果启用 `infra` 模板，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
 9. 集群模式下，Cloudreve 默认 S3 地址仍用 `http://minio-internal:9000`，FTS Elasticsearch 地址填 `http://elasticsearch-internal:9200`
 10. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `kafka:9092`
-11. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui-public` 对外 TLS 端口；UI 本身仍然走内部 `kafka:9092`
-12. 自定义镜像统一先 push 到固定 manager 上的 `registry:2`，再部署主业务栈，不要逐台 `docker load`
-13. 如果 `SWARM_PKI_MOUNT_TYPE=bind` 或 `SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind`，要把对应目录同步到所有可能落任务的节点；Swarm 只会分发 `configs`，不会自动分发宿主机 bind 目录
-14. 仓库内已经提供 `docker/swarm/sync-swarm-assets.sh`，可以统一同步 `.env.swarm`、PKI 目录、共享字体目录
+11. 同时把 `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
+12. 如果 `SWARM_OVERLAY_ENCRYPT=true`，跨主机 Kafka 流量会由 Swarm overlay 加密；当前模板依赖这一层
+13. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui-public` 对外 TLS 端口；UI 本身仍然走内部 `kafka:9092`
+14. 自定义镜像统一先 push 到固定 manager 上的 `registry:2`，再部署主业务栈，不要逐台 `docker load`
+15. 如果 `SWARM_PKI_MOUNT_TYPE=bind` 或 `SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind`，要把对应目录同步到所有可能落任务的节点；Swarm 只会分发 `configs`，不会自动分发宿主机 bind 目录
+16. 仓库内已经提供 `docker/swarm/sync-swarm-assets.sh`，可以统一同步 `.env.swarm`、PKI 目录、共享字体目录
 
 ## 8. 相关文件
 

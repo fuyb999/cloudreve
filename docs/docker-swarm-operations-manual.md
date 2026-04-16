@@ -26,6 +26,7 @@
 如果你现在只想先跑起来，再回来看细节：
 
 - 快速清单：`docs/docker-swarm-quickstart.md`
+- Parallels 3 节点真实联调全记录：`docs/docker-swarm-parallels-3node-full-runbook.md`
 - 4 台 Linux 上线清单：`docs/docker-swarm-production-checklist.md`
 - 部署说明：`docs/docker-swarm-deployment.md`
 - 多 manager 下 `.env.swarm` 同步：`docs/docker-swarm-env-sync.md`
@@ -400,6 +401,10 @@ docker node inspect cr-prod-wkr-12 --format '{{json .Spec.Labels}}'
 - `bitnamilegacy/redis:8.2.1-debian-12-r0`
 - `bitnamilegacy/redis-sentinel:8.2.1-debian-12-r0`
 - `bitnamilegacy/minio:2024.10.2-debian-12-r0`
+- `node:22.14.0-alpine3.21`
+- `nginx:1.27.5-alpine`
+- `maven:3.9.9-eclipse-temurin-21`
+- `eclipse-temurin:21-jre-jammy`
 
 需要明确说明：
 
@@ -408,7 +413,10 @@ docker node inspect cr-prod-wkr-12 --format '{{json .Spec.Labels}}'
 - `bitnami/*` 公开可直接 `pull` 的对应固定版本 tag 并不完整
 - 所以当前模板没有用 `latest`
 - 也没有依赖“本地临时 retag 成 `bitnami/*`”
-- `TIKA_IMAGE` 与 `AUTHVERSE_*_IMAGE` 都是自定义镜像，必须提前推到私有仓库，再让其它节点远程拉取
+- `TIKA_IMAGE`、`AUTHVERSE_*_IMAGE` 与 `AUTHVERSE_*_BASE_IMAGE` 都必须提前推到私有仓库，再让其它节点远程拉取或用于构建
+- `publish-private-images.sh` 默认不会自动外部拉取缺失镜像
+- `build-auth-images.sh` 默认也不会自动 `--pull` 基础镜像
+- 但 authverse 源码构建本身仍可能访问外部 npm / Maven 依赖源；如果要做到源码构建完全不出网，需要再补内部依赖镜像或直接使用预构建镜像
 
 如果你选择 `SWARM_IMAGE_SOURCE=remote`，上线前建议所有节点先执行：
 
@@ -416,14 +424,17 @@ docker node inspect cr-prod-wkr-12 --format '{{json .Spec.Labels}}'
 sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker
 ```
 
-然后只在固定部署 manager 上准备 local 源镜像：
+然后只在固定部署 manager 上核对本地源镜像：
 
 ```bash
 docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --check
-docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
 ```
 
-如果你选择 `SWARM_IMAGE_SOURCE=local`，再把上面这组 `prepare-bitnami-images.sh` 命令补到每台目标节点执行。
+如果你只是一次性引导固定 manager，并且明确允许从 Docker Hub 拉取源镜像，再显式执行：
+
+```bash
+docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --pull
+```
 
 补充：
 
@@ -437,6 +448,8 @@ docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
 
 ```bash
 docker/swarm/deploy-stack.sh registry --env-file .env.swarm
+docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVERSE_WEB_BUILDER_BASE,AUTHVERSE_WEB_RUNTIME_BASE,AUTHVERSE_BACKEND_BUILDER_BASE,AUTHVERSE_BACKEND_RUNTIME_BASE
+docker/swarm/build-auth-images.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
@@ -704,19 +717,25 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka --a
 在管理节点执行：
 
 ```bash
-docker swarm init --advertise-addr <manager-ip>
+docker swarm init --advertise-addr <manager-cluster-ip> --data-path-addr <manager-cluster-ip>
 ```
 
 查看加入 token：
 
 ```bash
-docker swarm join-token manager
-docker swarm join-token worker
+docker swarm join-token -q manager
+docker swarm join-token -q worker
 ```
 
 ### 11.2 worker 加入
 
-在 worker 节点执行上面输出的 `docker swarm join ...`
+在 worker 节点执行：
+
+```bash
+docker swarm join --token <worker-token> --advertise-addr <worker-cluster-ip> --data-path-addr <worker-cluster-ip> <manager-cluster-ip>:2377
+```
+
+如果机器有多网卡，`advertise-addr` 和 `data-path-addr` 都要固定到节点间互通的集群网卡。
 
 如果你启用了业务 overlay 加密，节点间防火墙 / 安全组还要放通：
 

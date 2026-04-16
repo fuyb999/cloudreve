@@ -45,7 +45,7 @@
 4. 在 manager 先生成默认根 CA 和整套业务服务证书，再把根 CA 下发到所有节点。
 5. 在所有节点执行 `prepare-private-registry.sh`，把固定 manager 上的 `registry:2` 写入 Docker `insecure-registries`。
 6. 在所有目标节点分别执行目录准备，先把 `PKI / 共享字体 / bind` 目录建好。
-7. 在 manager 部署私有仓库，再构建并推送 `Tika`、`authverse-web`、`authverse-backend`。
+7. 在 manager 部署私有仓库，先推 authverse 构建基镜像，再构建并推送 `Tika`、`authverse-web`、`authverse-backend`。
 8. 在 manager 按 `cloudreve / foundation / infra` 三个模板分别执行 `render-only`，确认无误后正式部署到同一个 `cloudreve-prod` 栈。
 9. 主栈稳定后执行 `docker/swarm/init-authverse-db.sh`，再对 `authverse-prod` 先 `render-only`，最后正式部署。
 10. 做外部入口、数据库、Redis、MinIO、Elasticsearch、OIDC discovery、`/app-api` 的整体验收。
@@ -56,15 +56,17 @@
 在 manager：
 
 ```bash
-docker swarm init --advertise-addr <manager-ip>
-docker swarm join-token worker
+docker swarm init --advertise-addr <manager-cluster-ip> --data-path-addr <manager-cluster-ip>
+docker swarm join-token -q worker
 ```
 
 在 3 台 worker：
 
 ```bash
-docker swarm join --token <worker-token> <manager-ip>:2377
+docker swarm join --token <worker-token> --advertise-addr <worker-cluster-ip> --data-path-addr <worker-cluster-ip> <manager-cluster-ip>:2377
 ```
+
+如果机器有多网卡，这两个地址必须明确指定到节点间互通的集群网卡，不能只配 `advertise-addr`。
 
 放通节点间网络：
 
@@ -337,20 +339,31 @@ sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --re
 - 两者都没有时，需要先在节点安装其中一个
 - `publish-private-images.sh` 在 `https` 模式下会自动使用 `PRIVATE_REGISTRY_CA_FILE` 验证 registry 证书
 
-如果你想在固定部署 manager 先把 PostgreSQL / Redis / MinIO 的 local 源镜像预拉齐，再执行：
+默认严格模式不会自动外部拉取缺失镜像。上线前先核对固定 manager 本地是否已具备源镜像：
 
 ```bash
 docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --check
-docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
+```
+
+如果你只是一次性引导固定 manager，并且明确允许从 Docker Hub 拉取源镜像，再显式执行：
+
+```bash
+docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --pull
 ```
 
 然后在 manager 上部署私有仓库，并把整套业务镜像推进去：
 
 ```bash
 docker/swarm/deploy-stack.sh registry --env-file .env.swarm --stack-name cloudreve-registry
+docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVERSE_WEB_BUILDER_BASE,AUTHVERSE_WEB_RUNTIME_BASE,AUTHVERSE_BACKEND_BUILDER_BASE,AUTHVERSE_BACKEND_RUNTIME_BASE
 docker/swarm/build-auth-images.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
+
+注意：
+
+- 上面这一步已经不再依赖镜像外拉
+- 但 `authverse` 源码构建仍可能访问外部 npm / Maven 依赖源；如果生产环境要求完全不出网，需额外准备内部依赖镜像源，或直接使用预构建好的 `AUTHVERSE_*_LOCAL_IMAGE`
 
 如果你要在上线前把这一套镜像固化成离线包，再执行：
 

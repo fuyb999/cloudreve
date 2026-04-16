@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 IMAGE_KEYS="${IMAGE_KEYS:-AUTHVERSE_WEB,AUTHVERSE_BACKEND}"
-PULL_BASE="yes"
+PULL_BASE="no"
 HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
 
 usage() {
@@ -20,7 +20,7 @@ usage() {
 参数：
   --env-file FILE       读取的环境变量文件，默认是 .env.swarm
   --image-keys LIST     要构建的镜像列表，默认是 AUTHVERSE_WEB,AUTHVERSE_BACKEND
-  --pull                构建前主动拉取基础镜像，默认开启
+  --pull                构建前主动拉取基础镜像
   --no-pull             不主动拉取基础镜像
   -h, --help            显示帮助
 
@@ -74,6 +74,7 @@ AUTHVERSE_FRONTEND_DIR="${AUTHVERSE_FRONTEND_DIR:-$ROOT_DIR/../authverse}"
 AUTHVERSE_BACKEND_DIR="${AUTHVERSE_BACKEND_DIR:-$ROOT_DIR/../authverse-backend}"
 AUTHVERSE_FRONTEND_DOCKERFILE="${AUTHVERSE_FRONTEND_DOCKERFILE:-$AUTHVERSE_FRONTEND_DIR/Dockerfile.swarm}"
 AUTHVERSE_BACKEND_DOCKERFILE="${AUTHVERSE_BACKEND_DOCKERFILE:-$AUTHVERSE_BACKEND_DIR/Dockerfile.swarm}"
+SWARM_IMAGE_SOURCE="${SWARM_IMAGE_SOURCE:-remote}"
 build_args=()
 
 if [[ "$PULL_BASE" == "yes" ]]; then
@@ -88,8 +89,48 @@ docker_build() {
   fi
 }
 
+resolve_image_by_source() {
+  local image_key="$1"
+  local default_image="$2"
+  local image_var="${image_key}_IMAGE"
+  local local_var="${image_key}_LOCAL_IMAGE"
+  local remote_var="${image_key}_REMOTE_IMAGE"
+
+  case "$SWARM_IMAGE_SOURCE" in
+    remote)
+      printf '%s' "${!image_var:-${!remote_var:-${!local_var:-$default_image}}}"
+      ;;
+    local|"")
+      printf '%s' "${!image_var:-${!local_var:-${!remote_var:-$default_image}}}"
+      ;;
+    *)
+      echo "[$HOST_NAME] 不支持的 SWARM_IMAGE_SOURCE=$SWARM_IMAGE_SOURCE" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_private_remote_image() {
+  local image_key="$1"
+  local image_value="$2"
+
+  if [[ "$SWARM_IMAGE_SOURCE" != "remote" ]]; then
+    return 0
+  fi
+  if [[ -z "${PRIVATE_REGISTRY_ADDR:-}" ]]; then
+    echo "[$HOST_NAME] SWARM_IMAGE_SOURCE=remote 时缺少 PRIVATE_REGISTRY_ADDR。" >&2
+    exit 1
+  fi
+  if [[ "$image_value" != "${PRIVATE_REGISTRY_ADDR}/"* ]]; then
+    echo "[$HOST_NAME] $image_key 必须走私有仓库，当前值为：$image_value" >&2
+    exit 1
+  fi
+}
+
 build_authverse_web() {
   local image="${AUTHVERSE_WEB_LOCAL_IMAGE:-${AUTHVERSE_WEB_IMAGE:-}}"
+  local builder_base_image
+  local runtime_base_image
 
   if [[ -z "$image" ]]; then
     echo "[$HOST_NAME] 缺少 AUTHVERSE_WEB_LOCAL_IMAGE 或 AUTHVERSE_WEB_IMAGE。" >&2
@@ -100,10 +141,17 @@ build_authverse_web() {
     exit 1
   fi
 
+  builder_base_image="$(resolve_image_by_source "AUTHVERSE_WEB_BUILDER_BASE" "node:22.14.0-alpine3.21")"
+  runtime_base_image="$(resolve_image_by_source "AUTHVERSE_WEB_RUNTIME_BASE" "nginx:1.27.5-alpine")"
+  require_private_remote_image "AUTHVERSE_WEB_BUILDER_BASE_IMAGE" "$builder_base_image"
+  require_private_remote_image "AUTHVERSE_WEB_RUNTIME_BASE_IMAGE" "$runtime_base_image"
+
   echo "[$HOST_NAME] [BUILD] AUTHVERSE_WEB -> $image"
   docker_build \
     -f "$AUTHVERSE_FRONTEND_DOCKERFILE" \
     -t "$image" \
+    --build-arg "BUILDER_BASE_IMAGE=${builder_base_image}" \
+    --build-arg "RUNTIME_BASE_IMAGE=${runtime_base_image}" \
     --build-arg "NODE_OPTIONS=${AUTHVERSE_WEB_BUILD_NODE_OPTIONS:---max-old-space-size=4096}" \
     --build-arg "VITE_YUDAO_AUTH_ENABLED=true" \
     --build-arg "VITE_YUDAO_API_BASE=/admin-api" \
@@ -123,6 +171,8 @@ build_authverse_web() {
 
 build_authverse_backend() {
   local image="${AUTHVERSE_BACKEND_LOCAL_IMAGE:-${AUTHVERSE_BACKEND_IMAGE:-}}"
+  local builder_base_image
+  local runtime_base_image
 
   if [[ -z "$image" ]]; then
     echo "[$HOST_NAME] 缺少 AUTHVERSE_BACKEND_LOCAL_IMAGE 或 AUTHVERSE_BACKEND_IMAGE。" >&2
@@ -133,10 +183,17 @@ build_authverse_backend() {
     exit 1
   fi
 
+  builder_base_image="$(resolve_image_by_source "AUTHVERSE_BACKEND_BUILDER_BASE" "maven:3.9.9-eclipse-temurin-21")"
+  runtime_base_image="$(resolve_image_by_source "AUTHVERSE_BACKEND_RUNTIME_BASE" "eclipse-temurin:21-jre-jammy")"
+  require_private_remote_image "AUTHVERSE_BACKEND_BUILDER_BASE_IMAGE" "$builder_base_image"
+  require_private_remote_image "AUTHVERSE_BACKEND_RUNTIME_BASE_IMAGE" "$runtime_base_image"
+
   echo "[$HOST_NAME] [BUILD] AUTHVERSE_BACKEND -> $image"
   docker_build \
     -f "$AUTHVERSE_BACKEND_DOCKERFILE" \
     -t "$image" \
+    --build-arg "BUILDER_BASE_IMAGE=${builder_base_image}" \
+    --build-arg "RUNTIME_BASE_IMAGE=${runtime_base_image}" \
     "$AUTHVERSE_BACKEND_DIR"
 }
 

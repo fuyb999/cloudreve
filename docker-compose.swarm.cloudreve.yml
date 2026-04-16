@@ -86,11 +86,22 @@ services:
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
       CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
       CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
-      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-SSL}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
       CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
       CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
       CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:?set CLOUDREVE_SITE_URL}
+      CR_SETTING_fts_enabled: ${CLOUDREVE_FTS_ENABLED:-1}
+      CR_SETTING_fts_index_type: ${CLOUDREVE_FTS_INDEX_TYPE:-elasticsearch}
+      CR_SETTING_fts_elasticsearch_endpoint: ${CLOUDREVE_FTS_ELASTICSEARCH_ENDPOINT:-http://elasticsearch-internal:9200}
+      CR_SETTING_fts_elasticsearch_index: ${CLOUDREVE_FTS_ELASTICSEARCH_INDEX:-cloudreve_files}
+      CR_SETTING_fts_elasticsearch_page_size: ${CLOUDREVE_FTS_ELASTICSEARCH_PAGE_SIZE:-5}
+      CR_SETTING_fts_elasticsearch_skip_tls_verify: ${CLOUDREVE_FTS_ELASTICSEARCH_SKIP_TLS_VERIFY:-0}
+      CR_SETTING_fts_extractor_type: ${CLOUDREVE_FTS_EXTRACTOR_TYPE:-tika}
+      CR_SETTING_fts_tika_endpoint: ${CLOUDREVE_FTS_TIKA_ENDPOINT:-http://tika:9998}
+      CR_SETTING_fts_tika_max_file_size: ${CLOUDREVE_FTS_TIKA_MAX_FILE_SIZE:-26214400}
+      CR_SETTING_fts_tika_document_enabled: ${CLOUDREVE_FTS_TIKA_DOCUMENT_ENABLED:-1}
+      CR_SETTING_fts_tika_archive_enabled: ${CLOUDREVE_FTS_TIKA_ARCHIVE_ENABLED:-1}
       CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
       CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-https://minio:9000}
       CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
@@ -215,10 +226,21 @@ services:
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
       CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
       CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
-      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-SSL}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
       CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
       CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
+      CR_SETTING_fts_enabled: ${CLOUDREVE_FTS_ENABLED:-1}
+      CR_SETTING_fts_index_type: ${CLOUDREVE_FTS_INDEX_TYPE:-elasticsearch}
+      CR_SETTING_fts_elasticsearch_endpoint: ${CLOUDREVE_FTS_ELASTICSEARCH_ENDPOINT:-http://elasticsearch-internal:9200}
+      CR_SETTING_fts_elasticsearch_index: ${CLOUDREVE_FTS_ELASTICSEARCH_INDEX:-cloudreve_files}
+      CR_SETTING_fts_elasticsearch_page_size: ${CLOUDREVE_FTS_ELASTICSEARCH_PAGE_SIZE:-5}
+      CR_SETTING_fts_elasticsearch_skip_tls_verify: ${CLOUDREVE_FTS_ELASTICSEARCH_SKIP_TLS_VERIFY:-0}
+      CR_SETTING_fts_extractor_type: ${CLOUDREVE_FTS_EXTRACTOR_TYPE:-tika}
+      CR_SETTING_fts_tika_endpoint: ${CLOUDREVE_FTS_TIKA_ENDPOINT:-http://tika:9998}
+      CR_SETTING_fts_tika_max_file_size: ${CLOUDREVE_FTS_TIKA_MAX_FILE_SIZE:-26214400}
+      CR_SETTING_fts_tika_document_enabled: ${CLOUDREVE_FTS_TIKA_DOCUMENT_ENABLED:-1}
+      CR_SETTING_fts_tika_archive_enabled: ${CLOUDREVE_FTS_TIKA_ARCHIVE_ENABLED:-1}
     configs:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
@@ -308,13 +330,8 @@ services:
 
 networks:
   cloudreve_backend:
-    driver: overlay
-    driver_opts:
-      encrypted: "true"
-    attachable: false
-    ipam:
-      config:
-        - subnet: ${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}
+    external: true
+    name: ${CLOUDREVE_STACK_NAME:?set CLOUDREVE_STACK_NAME}_cloudreve_backend
 
 volumes:
   cloudreve_master_runtime:

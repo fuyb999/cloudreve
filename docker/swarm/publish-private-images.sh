@@ -19,13 +19,14 @@ usage() {
   - PRIVATE_REGISTRY_ADDR
   - PRIVATE_REGISTRY_SCHEME
   - PRIVATE_REGISTRY_CA_FILE
-  - PRIVATE_REGISTRY_IMAGE_KEYS
+ - PRIVATE_REGISTRY_IMAGE_KEYS
   - <KEY>_LOCAL_IMAGE
   - <KEY>_REMOTE_IMAGE
   - <KEY>_IMAGE
 
-如果本地不存在 `<KEY>_LOCAL_IMAGE`，脚本会先尝试 `docker pull` 这个 local tag；
-对于自定义镜像，如果 pull 失败，说明你需要先本地构建。
+这个脚本不会自动从外部仓库拉取缺失镜像。
+如果本地缺少 `<KEY>_LOCAL_IMAGE`，请先通过 `docker load`、你自己的离线分发流程，
+或明确允许的独立准备步骤把镜像放到本机，再执行发布。
 
 示例：
   docker/swarm/publish-private-images.sh --env-file .env.swarm
@@ -123,11 +124,9 @@ for image_key in "${image_keys[@]}"; do
     exit 1
   fi
   if ! docker image inspect "$local_image" >/dev/null 2>&1; then
-    echo "[$HOST_NAME] 本地不存在镜像，尝试拉取：$local_image"
-    if ! docker pull "$local_image"; then
-      echo "[$HOST_NAME] 拉取失败，请先准备本地镜像：$local_image" >&2
-      exit 1
-    fi
+    echo "[$HOST_NAME] 本地不存在镜像，且当前流程禁止自动外部拉取：$local_image" >&2
+    echo "[$HOST_NAME] 请先准备本地镜像后再执行发布。" >&2
+    exit 1
   fi
 
   echo "[$HOST_NAME] [TAG]  $local_image -> $remote_image"

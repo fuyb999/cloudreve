@@ -115,7 +115,7 @@ services:
       placement:
         max_replicas_per_node: 1
         constraints:
-          - ${MINIO_PUBLIC_NODE_CONSTRAINT:-${MINIO_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${MINIO_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${MINIO_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -435,7 +435,7 @@ services:
       placement:
         max_replicas_per_node: 1
         constraints:
-          - ${ELASTICSEARCH_PUBLIC_NODE_CONSTRAINT:-${ELASTICSEARCH_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${ELASTICSEARCH_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -582,7 +582,7 @@ services:
     hostname: "{{.Node.Hostname}}-kafka-proxy-{{.Task.Slot}}"
     environment: *default-env
     configs:
-      - source: kafka_cluster_proxy_cfg_v2
+      - source: kafka_cluster_proxy_cfg_v3
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
     volumes:
@@ -633,7 +633,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-2}"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
     healthcheck:
-      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      test: ["CMD-SHELL", "pgrep -f 'kafka\\.Kafka' >/dev/null || pgrep -f 'kafka\\.KRaft' >/dev/null"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -686,7 +686,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-2}"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
     healthcheck:
-      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      test: ["CMD-SHELL", "pgrep -f 'kafka\\.Kafka' >/dev/null || pgrep -f 'kafka\\.KRaft' >/dev/null"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -739,7 +739,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-2}"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
     healthcheck:
-      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      test: ["CMD-SHELL", "pgrep -f 'kafka\\.Kafka' >/dev/null || pgrep -f 'kafka\\.KRaft' >/dev/null"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -777,7 +777,7 @@ services:
       JAVA_TOOL_OPTIONS: ${KAFKA_UI_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
       KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTER_NAME:-cloudreve-kafka}
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_UI_BOOTSTRAP_SERVERS:-kafka:9092}
-      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-SSL}
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-PLAINTEXT}
       KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_LOCATION: ${KAFKA_UI_TRUSTSTORE_LOCATION:-/run/swarm-pki/ca/truststore.p12}
       KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_UI_TRUSTSTORE_PASSWORD:-changeit}
       KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_TYPE: ${KAFKA_UI_TRUSTSTORE_TYPE:-PKCS12}
@@ -851,7 +851,7 @@ services:
       placement:
         max_replicas_per_node: 1
         constraints:
-          - ${KAFKA_UI_PUBLIC_NODE_CONSTRAINT:-${KAFKA_UI_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${KAFKA_UI_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${KAFKA_UI_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -871,21 +871,21 @@ configs:
     file: ./docker/swarm/minio-swarm-entrypoint.sh
   minio_init_v1:
     file: ./docker/swarm/minio-init.sh
-
-secrets:
-  minio_root_password:
-    external: true
-    name: ${SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME:?set SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME}
   elasticsearch_cluster_proxy_cfg_v2:
     file: ./docker/swarm/haproxy/elasticsearch-cluster.cfg
   elasticsearch_public_tls_cfg_v2:
     file: ./docker/swarm/haproxy/elasticsearch-public-tls.cfg
-  kafka_cluster_proxy_cfg_v2:
+  kafka_cluster_proxy_cfg_v3:
     file: ./docker/swarm/haproxy/kafka-cluster.cfg
   elasticsearch_swarm_entrypoint_v1:
     file: ./docker/swarm/elasticsearch-swarm-entrypoint.sh
   http_tls_proxy_template_v2:
     file: ./docker/swarm/nginx/http-tls-proxy.conf.template
+
+secrets:
+  minio_root_password:
+    external: true
+    name: ${SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME:?set SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME}
 
 volumes:
   minio_1_data:
@@ -898,3 +898,8 @@ volumes:
   kafka_1_data:
   kafka_2_data:
   kafka_3_data:
+
+networks:
+  cloudreve_backend:
+    external: true
+    name: ${CLOUDREVE_STACK_NAME:?set CLOUDREVE_STACK_NAME}_cloudreve_backend

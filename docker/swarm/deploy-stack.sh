@@ -238,6 +238,51 @@ prepare_image_source_env() {
   done
 }
 
+validate_remote_image_source_env() {
+  local image_source="${SWARM_IMAGE_SOURCE:-}"
+  local image_keys=(
+    CLOUDREVE
+    CLOUDREVE_SLAVE
+    NGINX
+    TIKA
+    AUTHVERSE_WEB
+    AUTHVERSE_BACKEND
+    POSTGRESQL_REPMGR
+    PGPOOL
+    REDIS
+    REDIS_SENTINEL
+    REDIS_PROXY
+    MINIO
+    MINIO_PROXY
+    ELASTICSEARCH
+    ELASTICSEARCH_PROXY
+    KAFKA
+    KAFKA_PROXY
+    KAFKA_UI
+    ONLYOFFICE
+    ONLYOFFICE_RABBITMQ
+  )
+  local key target_var image_value
+
+  if [[ "$image_source" != "remote" ]]; then
+    return 0
+  fi
+  if [[ -z "${PRIVATE_REGISTRY_ADDR:-}" ]]; then
+    echo "SWARM_IMAGE_SOURCE=remote 时缺少 PRIVATE_REGISTRY_ADDR。" >&2
+    exit 1
+  fi
+
+  for key in "${image_keys[@]}"; do
+    target_var="${key}_IMAGE"
+    image_value="${!target_var:-}"
+    [[ -n "$image_value" ]] || continue
+    if [[ "$image_value" != "${PRIVATE_REGISTRY_ADDR}/"* ]]; then
+      echo "SWARM_IMAGE_SOURCE=remote 时，${target_var} 必须以 ${PRIVATE_REGISTRY_ADDR}/ 开头，当前为：$image_value" >&2
+      exit 1
+    fi
+  done
+}
+
 prepare_auth_common_env() {
   AUTHVERSE_DB_NAME="${AUTHVERSE_DB_NAME:-authverse}"
   AUTHVERSE_DB_USERNAME="${AUTHVERSE_DB_USERNAME:-${POSTGRESQL_USERNAME:-cloudreve}}"
@@ -246,6 +291,7 @@ prepare_auth_common_env() {
   AUTHVERSE_DB_SLAVE_PASSWORD="${AUTHVERSE_DB_SLAVE_PASSWORD:-$AUTHVERSE_DB_PASSWORD}"
   AUTHVERSE_REDIS_PASSWORD="${AUTHVERSE_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
   AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL="${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:-${CLOUDREVE_SITE_URL:-}}"
+  AUTHVERSE_JAVA_OPTS_BASE="${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}"
 
   export AUTHVERSE_DB_NAME
   export AUTHVERSE_DB_USERNAME
@@ -254,6 +300,7 @@ prepare_auth_common_env() {
   export AUTHVERSE_DB_SLAVE_PASSWORD
   export AUTHVERSE_REDIS_PASSWORD
   export AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL
+  export AUTHVERSE_JAVA_OPTS_BASE
 }
 
 prepare_secret_value_env() {
@@ -328,25 +375,58 @@ build_authverse_backend_args() {
 --spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true} \
 --spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB} \
 --spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB} \
---authverse.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
---authverse.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
---authverse.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
---authverse.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
---authverse.search.elasticsearch.uris[0]=${elasticsearch_uri} \
---authverse.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
---authverse.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
---authverse.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
---authverse.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
---authverse.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
---authverse.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
---authverse.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
---authverse.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
---authverse.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
---authverse.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
---authverse.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
---authverse.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
---authverse.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
---authverse.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
+"
+}
+
+build_authverse_backend_java_opts() {
+  local elasticsearch_uri
+
+  if [[ "$COMPOSE_KIND" == "single" ]]; then
+    elasticsearch_uri="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:?set AUTHVERSE_SINGLE_ELASTICSEARCH_URI}"
+  else
+    elasticsearch_uri="${AUTHVERSE_ELASTICSEARCH_URI:?set AUTHVERSE_ELASTICSEARCH_URI}"
+  fi
+
+  printf '%s' "\
+${AUTHVERSE_JAVA_OPTS_BASE} \
+-Dauthverse.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
+-Dyudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
+-Dauthverse.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+-Dyudao.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+-Dauthverse.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
+-Dyudao.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
+-Dauthverse.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
+-Dyudao.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
+-Dauthverse.search.elasticsearch.uris[0]=${elasticsearch_uri} \
+-Dyudao.search.elasticsearch.uris[0]=${elasticsearch_uri} \
+-Dauthverse.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
+-Dyudao.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
+-Dauthverse.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
+-Dyudao.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
+-Dauthverse.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
+-Dyudao.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
+-Dauthverse.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
+-Dyudao.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
+-Dauthverse.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+-Dyudao.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
+-Dauthverse.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
+-Dyudao.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
+-Dauthverse.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
+-Dyudao.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
+-Dauthverse.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
+-Dyudao.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
+-Dauthverse.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
+-Dyudao.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
+-Dauthverse.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
+-Dyudao.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
+-Dauthverse.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
+-Dyudao.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
+-Dauthverse.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
+-Dyudao.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
+-Dauthverse.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
+-Dyudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
+-Dauthverse.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis} \
+-Dyudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
 }
 
 build_stack_secret_name() {
@@ -496,6 +576,41 @@ prepare_single_auth_env() {
   export AUTHVERSE_SINGLE_ELASTICSEARCH_URI
   export AUTHVERSE_SINGLE_DB_MASTER_URL
   export AUTHVERSE_SINGLE_DB_SLAVE_URL
+
+  AUTHVERSE_JAVA_OPTS_EFFECTIVE="$(build_authverse_backend_java_opts)"
+  export AUTHVERSE_JAVA_OPTS_EFFECTIVE
+}
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ensure_shared_overlay_network() {
+  local network_name="$1"
+  local subnet="${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}"
+  local cmd=(docker network create --driver overlay --subnet "$subnet")
+
+  if docker network inspect "$network_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if is_truthy "${SWARM_OVERLAY_ATTACHABLE:-false}"; then
+    cmd+=(--attachable)
+  fi
+  if is_truthy "${SWARM_OVERLAY_ENCRYPT:-true}"; then
+    cmd+=(--opt encrypted)
+  fi
+  cmd+=("$network_name")
+
+  echo "共享 overlay 网络不存在，开始创建：$network_name"
+  "${cmd[@]}" >/dev/null
 }
 
 prepare_external_auth_env() {
@@ -526,12 +641,12 @@ prepare_external_auth_env() {
   export AUTHVERSE_DB_SLAVE_URL
 
   AUTHVERSE_REDIS_SSL_ENABLED="${AUTHVERSE_REDIS_SSL_ENABLED:-false}"
+  AUTHVERSE_JAVA_OPTS_EFFECTIVE="$(build_authverse_backend_java_opts)"
   export AUTHVERSE_REDIS_SSL_ENABLED
+  export AUTHVERSE_JAVA_OPTS_EFFECTIVE
 
-  if [[ "$RENDER_ONLY" -eq 0 ]] && ! docker network inspect "$AUTHVERSE_SHARED_NETWORK" >/dev/null 2>&1; then
-    echo "共享 overlay 网络不存在：$AUTHVERSE_SHARED_NETWORK" >&2
-    echo "请先部署 Cloudreve 主栈，或者把 AUTHVERSE_SHARED_NETWORK 改成真实网络名。" >&2
-    exit 1
+  if [[ "$RENDER_ONLY" -eq 0 ]]; then
+    ensure_shared_overlay_network "$AUTHVERSE_SHARED_NETWORK"
   fi
 }
 
@@ -622,6 +737,7 @@ set +a
 
 prepare_common_mount_env
 prepare_image_source_env
+validate_remote_image_source_env
 prepare_auth_common_env
 prepare_secret_value_env
 
@@ -680,6 +796,14 @@ case "$COMPOSE_KIND" in
     STACK_NAME="${CLI_STACK_NAME:-${CLOUDREVE_STACK_NAME:-cloudreve}}"
     export CLOUDREVE_STACK_NAME="$STACK_NAME"
     prepare_single_auth_env
+    ;;
+esac
+
+case "$COMPOSE_KIND" in
+  cloudreve|foundation|infra)
+    if [[ "$RENDER_ONLY" -eq 0 ]]; then
+      ensure_shared_overlay_network "${CLOUDREVE_STACK_NAME}_cloudreve_backend"
+    fi
     ;;
 esac
 

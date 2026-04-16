@@ -239,6 +239,10 @@ AUTHVERSE_WEB_LOCAL_IMAGE=authverse/authverse-web:2024-local
 AUTHVERSE_WEB_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/authverse/authverse-web:2024-local"
 AUTHVERSE_BACKEND_LOCAL_IMAGE=authverse/authverse-backend:2024-local
 AUTHVERSE_BACKEND_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/authverse/authverse-backend:2024-local"
+AUTHVERSE_WEB_BUILDER_BASE_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/node:22.14.0-alpine3.21"
+AUTHVERSE_WEB_RUNTIME_BASE_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/nginx:1.27.5-alpine"
+AUTHVERSE_BACKEND_BUILDER_BASE_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/maven:3.9.9-eclipse-temurin-21"
+AUTHVERSE_BACKEND_RUNTIME_BASE_REMOTE_IMAGE="${PRIVATE_REGISTRY_ADDR}/eclipse-temurin:21-jre-jammy"
 ```
 
 ### 5.3 准备 OIDC 密钥目录
@@ -284,6 +288,7 @@ docker/swarm/init-authverse-db.sh --env-file .env.swarm
 在 manager 节点执行：
 
 ```bash
+docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVERSE_WEB_BUILDER_BASE,AUTHVERSE_WEB_RUNTIME_BASE,AUTHVERSE_BACKEND_BUILDER_BASE,AUTHVERSE_BACKEND_RUNTIME_BASE
 docker/swarm/build-auth-images.sh --env-file .env.swarm
 ```
 
@@ -291,12 +296,20 @@ docker/swarm/build-auth-images.sh --env-file .env.swarm
 
 - `AUTHVERSE_WEB_LOCAL_IMAGE`
 - `AUTHVERSE_BACKEND_LOCAL_IMAGE`
+- 构建阶段引用的 `AUTHVERSE_*_BASE_IMAGE`
 
 如果前端在 `vite build` 阶段出现 Node 堆内存不足，可以提高：
 
 ```env
 AUTHVERSE_WEB_BUILD_NODE_OPTIONS=--max-old-space-size=6144
 ```
+
+补充：
+
+- `build-auth-images.sh` 默认不会自动 `--pull` 基础镜像
+- 如果 `SWARM_IMAGE_SOURCE=remote`，`AUTHVERSE_*_BASE_IMAGE` 必须已经存在于私有仓库
+- 当前前端 `npm ci` 仍会访问外部源码依赖，后端 `mvn package` 也可能访问外部 Maven 仓库
+- 如果你的上线环境要求“源码构建也完全不出网”，还需要额外准备内部 npm / Maven 镜像源，或直接复用预构建好的 `AUTHVERSE_*_LOCAL_IMAGE`
 
 ### 5.6 推送到私有仓库
 

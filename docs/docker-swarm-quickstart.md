@@ -28,6 +28,10 @@
 
 - `docs/docker-swarm-operations-manual.md`
 
+如果你要复刻这次 Parallels 3 节点真实联调，从 ISO 重建、节点规划、私有仓库、分阶段部署到压测排障一步步照着做，直接看：
+
+- `docs/docker-swarm-parallels-3node-full-runbook.md`
+
 如果你这次还要把统一认证前后端一起挂进 Swarm，再看：
 
 - `docs/docker-swarm-auth-deployment.md`
@@ -81,6 +85,15 @@
 1. 初始化 Swarm 并把节点加入集群。
 2. 复制环境模板：
 
+如果机器有多网卡，初始化 / 加入 Swarm 时要同时指定：
+
+```bash
+docker swarm init --advertise-addr <manager-cluster-ip> --data-path-addr <manager-cluster-ip>
+docker swarm join --token <worker-token> --advertise-addr <worker-cluster-ip> --data-path-addr <worker-cluster-ip> <manager-cluster-ip>:2377
+```
+
+不要只写 `--advertise-addr`。
+
 如果你是多节点 Swarm，并且已经启用了业务 overlay 加密，还要确认节点间防火墙 / 安全组至少放通：
 
 - `2377/tcp`
@@ -106,10 +119,10 @@ cp .env.swarm.user-test.example .env.swarm
 这份模板的特点是：
 
 - 默认走 `docker-compose.swarm.single.yml`
-- 默认 `SWARM_IMAGE_SOURCE=local`
+- 默认 `SWARM_IMAGE_SOURCE=remote`
 - 已经把外部端口、TLS、Authverse、MinIO、ES、Kafka、Tika、OnlyOffice 全部收进一台机器
 - 默认 bind 路径统一落到 `/srv/cloudreve-user-test/...`
-- 如果后面你要验证私有仓库，只需要先部署 `registry`，再把 `SWARM_IMAGE_SOURCE` 改成 `remote`
+- 运行镜像与 authverse 构建基镜像默认都走私有仓库
 
 如果你的拓扑是 `1 manager + 3 worker`，并且每台机器都是 `128GB / 64 线程`，可以直接改用：
 
@@ -169,11 +182,16 @@ docker/swarm/sync-swarm-assets.sh --env-file .env.swarm --targets "node2,node3,n
 - 如果这些脚本是在其它 worker 节点执行，也要提前把同一份 `.env.swarm` 同步过去
 - `.env.swarm` 只在部署 manager 上是必须品，但准备脚本想复用同一套变量时，其它节点也需要拿到一份
 
-8. 如果你选择 `SWARM_IMAGE_SOURCE=local`，或者想在固定部署 manager 先把 PostgreSQL / Redis / MinIO 的 local 源镜像预拉齐，再执行：
+8. 默认严格模式不会自动从外部仓库补拉缺失镜像。上线前先确认 manager 本地已经具备待发布的源镜像：
 
 ```bash
 docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --check
-docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm
+```
+
+如果你只是做一次性引导，并且明确允许固定 manager 从 Docker Hub 拉取源镜像，再显式执行：
+
+```bash
+docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --pull
 ```
 
 9. 在各个有状态节点提前创建目录：
@@ -200,10 +218,12 @@ sudo docker/swarm/prepare-bind-paths.sh --services pg,redis
 sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services registry
 ```
 
-10. 先部署私有仓库栈，再发布自定义镜像：
+10. 先部署私有仓库栈，再先推 authverse 构建基镜像，最后推整套业务镜像：
 
 ```bash
 docker/swarm/deploy-stack.sh registry --env-file .env.swarm
+docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVERSE_WEB_BUILDER_BASE,AUTHVERSE_WEB_RUNTIME_BASE,AUTHVERSE_BACKEND_BUILDER_BASE,AUTHVERSE_BACKEND_RUNTIME_BASE
+docker/swarm/build-auth-images.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
@@ -233,9 +253,9 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 - `cloudreve-master` / `minio` / `elasticsearch` / `kafka` / `tika` 字体目录默认走命名卷
 - 如果你确实要改成宿主机绝对路径，就把对应的 `*_MOUNT_TYPE=bind`，并把 `*_MOUNT_SOURCE` 改成真实绝对路径
 - 如果是多 manager / 多机器部署，再看 `docs/docker-swarm-env-sync.md`
-- `SWARM_IMAGE_SOURCE=local` 时，PostgreSQL / Redis / MinIO 默认镜像就是 Docker Hub 可直接 pull 的名字与 tag
 - `SWARM_IMAGE_SOURCE=remote` 时，`*_REMOTE_IMAGE` 应统一指向 `${PRIVATE_REGISTRY_ADDR}`
-- 默认 `TIKA_IMAGE` 是自定义镜像，生产里建议写成 `${PRIVATE_REGISTRY_ADDR}/cloudreve/tika:...`
+- `publish-private-images.sh` 不会自动外部拉取缺失镜像；如果本地缺镜像，会直接失败
+- `build-auth-images.sh` 默认也不会自动 `--pull` 基础镜像；`AUTHVERSE_*_BASE_IMAGE` 应先推入私有仓库
 - 如果是 bind 模式，建议上线前先在目标节点执行 `docker/swarm/prepare-bind-paths.sh`
 - 如果是 Elasticsearch 集群节点，记得先在宿主机执行 `sysctl -w vm.max_map_count=262144`
 - 如果你准备让 Cloudreve 直接使用栈内 Kafka，再把 `CLOUDREVE_GLOBAL_KAFKA_ENABLED=true`
@@ -325,7 +345,9 @@ docker secret ls | grep '^cloudreve.*_secret_'
 
 - Cloudreve 全局 Kafka brokers：`kafka:9092`
 - 第三方抽取器如果也在 Swarm 内部网络，Kafka brokers 也填 `kafka:9092`
-- Kafka UI 也直接连 `kafka:9092`
+- `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`
+- Kafka UI 也直接连 `kafka:9092`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
+- 如果 `SWARM_OVERLAY_ENCRYPT=true`，跨主机 overlay 流量会由 Swarm 加密；当前 Kafka 模板就依赖这一层
 
 ## 6. 多节点模式才需要回填从节点密钥
 

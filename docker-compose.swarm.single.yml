@@ -101,7 +101,7 @@ services:
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
       CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
       CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve}
-      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-SSL}
+      CR_CONF_Kafka.SecurityProtocol: ${CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
       CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
       CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
@@ -294,7 +294,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
+      test: ["CMD", "/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -341,7 +341,7 @@ services:
       restart_policy: *default-restart-policy
       placement:
         constraints:
-          - ${PGPOOL_PUBLIC_NODE_CONSTRAINT:-${PGPOOL_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${PGPOOL_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${PGPOOL_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -462,7 +462,7 @@ services:
       restart_policy: *restart-policy-with-attempts
       placement:
         constraints:
-          - ${REDIS_PROXY_PUBLIC_NODE_CONSTRAINT:-${REDIS_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${REDIS_PROXY_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${REDIS_PROXY_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -550,7 +550,7 @@ services:
       restart_policy: *default-restart-policy
       placement:
         constraints:
-          - ${MINIO_PUBLIC_NODE_CONSTRAINT:-${MINIO_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${MINIO_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${MINIO_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -666,7 +666,7 @@ services:
       restart_policy: *default-restart-policy
       placement:
         constraints:
-          - ${ELASTICSEARCH_PUBLIC_NODE_CONSTRAINT:-${ELASTICSEARCH_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${ELASTICSEARCH_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${ELASTICSEARCH_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -681,7 +681,7 @@ services:
     hostname: "{{.Node.Hostname}}-kafka-proxy"
     environment: *default-env
     configs:
-      - source: kafka_single_proxy_cfg_v2
+      - source: kafka_single_proxy_cfg_v3
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
     volumes:
@@ -696,7 +696,7 @@ services:
       restart_policy: *default-restart-policy
       placement:
         constraints:
-          - ${KAFKA_PROXY_NODE_CONSTRAINT:-${KAFKA_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${KAFKA_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${KAFKA_PROXY_CPU_RESERVATION:-0.25}"
@@ -732,7 +732,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "${KAFKA_SINGLE_NODE_TRANSACTION_STATE_LOG_MIN_ISR:-1}"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "${KAFKA_SINGLE_NODE_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}"
     healthcheck:
-      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/9092'"]
+      test: ["CMD-SHELL", "pgrep -f 'kafka\\.Kafka' >/dev/null || pgrep -f 'kafka\\.KRaft' >/dev/null"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -769,7 +769,7 @@ services:
       JAVA_TOOL_OPTIONS: ${KAFKA_UI_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
       KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTER_NAME:-cloudreve-kafka}
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_UI_BOOTSTRAP_SERVERS:-kafka:9092}
-      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-SSL}
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: ${KAFKA_UI_SECURITY_PROTOCOL:-PLAINTEXT}
       KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_LOCATION: ${KAFKA_UI_TRUSTSTORE_LOCATION:-/run/swarm-pki/ca/truststore.p12}
       KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_UI_TRUSTSTORE_PASSWORD:-changeit}
       KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_TYPE: ${KAFKA_UI_TRUSTSTORE_TYPE:-PKCS12}
@@ -841,7 +841,7 @@ services:
       restart_policy: *default-restart-policy
       placement:
         constraints:
-          - ${KAFKA_UI_PUBLIC_NODE_CONSTRAINT:-${KAFKA_UI_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${KAFKA_UI_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${KAFKA_UI_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -1089,7 +1089,7 @@ services:
       restart_policy: *default-restart-policy
       placement:
         constraints:
-          - ${ONLYOFFICE_PUBLIC_NODE_CONSTRAINT:-${ONLYOFFICE_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${ONLYOFFICE_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${ONLYOFFICE_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -1111,9 +1111,9 @@ services:
       PROXY_READ_TIMEOUT: ${AUTHVERSE_PROXY_READ_TIMEOUT:-3600s}
       PROXY_SEND_TIMEOUT: ${AUTHVERSE_PROXY_SEND_TIMEOUT:-3600s}
       UPSTREAM_AUTHVERSE_BACKEND: ${AUTHVERSE_BACKEND_UPSTREAM:-authverse-backend:48080}
-      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$$$host}
+      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: ${AUTHVERSE_BACKEND_HOST_HEADER:-$$host}
       UPSTREAM_CLOUDREVE: ${AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM:?set AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM}
-      UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$$$host}
+      UPSTREAM_CLOUDREVE_HOST_HEADER: ${AUTHVERSE_CLOUDREVE_HOST_HEADER:-$$host}
     configs:
       - source: authverse_proxy_template_v1
         target: /etc/nginx/templates/default.conf.template
@@ -1182,7 +1182,7 @@ services:
       interval: 20s
       timeout: 5s
       retries: 10
-      start_period: 15m
+      start_period: ${AUTHVERSE_BACKEND_HEALTHCHECK_START_PERIOD:-180s}
     deploy:
       replicas: ${AUTHVERSE_SINGLE_BACKEND_REPLICAS:-1}
       update_config: *delayed-update-config
@@ -1203,8 +1203,8 @@ networks:
   cloudreve_backend:
     driver: overlay
     driver_opts:
-      encrypted: "true"
-    attachable: false
+      encrypted: "${SWARM_OVERLAY_ENCRYPT:-true}"
+    attachable: ${SWARM_OVERLAY_ATTACHABLE:-false}
     ipam:
       config:
         - subnet: ${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}
@@ -1244,7 +1244,7 @@ configs:
     file: ./docker/swarm/haproxy/minio-public-tls.cfg
   elasticsearch_public_tls_cfg_v2:
     file: ./docker/swarm/haproxy/elasticsearch-public-tls.cfg
-  kafka_single_proxy_cfg_v2:
+  kafka_single_proxy_cfg_v3:
     file: ./docker/swarm/haproxy/kafka-single.cfg
   http_tls_proxy_template_v2:
     file: ./docker/swarm/nginx/http-tls-proxy.conf.template

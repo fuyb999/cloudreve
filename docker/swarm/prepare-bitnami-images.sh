@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 MODE="apply"
-PULL_SOURCE="yes"
+PULL_SOURCE="no"
 HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
 
 usage() {
@@ -23,7 +23,8 @@ usage() {
   这个脚本不会做 retag，只负责：
 
   1. 检查本机是否已存在这些镜像
-  2. 缺失时执行 docker pull
+  2. 默认只校验，不自动从外部仓库拉取
+  3. 只有显式传 `--pull` 时，才允许缺失时执行 `docker pull`
 
   典型用法有两种：
 
@@ -37,13 +38,14 @@ usage() {
   --env-file FILE       读取的环境变量文件，默认是 .env.swarm
   --check               只检查，不改动
   --apply               执行拉取，默认就是 apply
-  --pull                允许缺失时自动拉取，默认开启
+  --pull                允许缺失时自动拉取
   --no-pull             缺失时不自动拉取，只报错
   -h, --help            显示帮助
 
 示例：
   docker/swarm/prepare-bitnami-images.sh --check
   docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm.prod-4x128g.example
+  docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --pull
 EOF
 }
 

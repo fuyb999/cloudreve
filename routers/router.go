@@ -214,6 +214,12 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 	r.GET("manifest.json", controllers.Manifest)
 
 	noAuth := r.Group(constants.APIPrefix)
+	siteNoAuth := noAuth.Group("site")
+	siteNoAuth.Use(middleware.CacheControl())
+	{
+		// 轻量健康检查，避免进入 Session / CurrentUser 链路。
+		siteNoAuth.GET("ping", controllers.Ping)
+	}
 	wopi := noAuth.Group("file/wopi", middleware.HashID(hashid.FileID), middleware.ViewerSessionValidation())
 	{
 		// 获取文件信息
@@ -271,8 +277,6 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 		// 全局设置相关
 		site := v4.Group("site")
 		{
-			// 测试用路由
-			site.GET("ping", controllers.Ping)
 			// 验证码
 			site.GET("captcha", controllers.Captcha)
 			// Syncthing upgrade metadata

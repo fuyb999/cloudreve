@@ -276,7 +276,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
+      test: ["CMD", "/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -325,7 +325,7 @@ services:
       placement:
         max_replicas_per_node: 1
         constraints:
-          - ${PGPOOL_PUBLIC_NODE_CONSTRAINT:-${PGPOOL_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${PGPOOL_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${PGPOOL_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -587,7 +587,7 @@ services:
       placement:
         max_replicas_per_node: 1
         constraints:
-          - ${REDIS_PROXY_PUBLIC_NODE_CONSTRAINT:-${REDIS_PROXY_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${REDIS_PROXY_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${REDIS_PROXY_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -840,7 +840,7 @@ services:
       placement:
         max_replicas_per_node: 1
         constraints:
-          - ${ONLYOFFICE_PUBLIC_NODE_CONSTRAINT:-${ONLYOFFICE_NODE_CONSTRAINT:-node.platform.os==linux}}
+          - ${ONLYOFFICE_PUBLIC_NODE_CONSTRAINT:-node.platform.os==linux}
       resources:
         reservations:
           cpus: "${ONLYOFFICE_PUBLIC_CPU_RESERVATION:-0.25}"
@@ -848,6 +848,11 @@ services:
         limits:
           cpus: "${ONLYOFFICE_PUBLIC_CPU_LIMIT:-1.0}"
           memory: "${ONLYOFFICE_PUBLIC_MEM_LIMIT:-512M}"
+
+networks:
+  cloudreve_backend:
+    external: true
+    name: ${CLOUDREVE_STACK_NAME:?set CLOUDREVE_STACK_NAME}_cloudreve_backend
 
 volumes:
   postgresql_1_data:

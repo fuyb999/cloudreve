@@ -143,21 +143,25 @@ YML 模板约定：
 - `bitnamilegacy/redis:8.2.1-debian-12-r0`
 - `bitnamilegacy/redis-sentinel:8.2.1-debian-12-r0`
 - `cloudreve/tika:3.2.3.0-full-unrar-charset`
+- `node:22.14.0-alpine3.21`
+- `nginx:1.27.5-alpine`
+- `maven:3.9.9-eclipse-temurin-21`
+- `eclipse-temurin:21-jre-jammy`
 
 原因很直接：
 
 - 这些默认值现在都和 Docker Hub 上实际可直接 `pull` 的仓库名与 tag 保持一致
 - 不再依赖本地 retag 成 `bitnami/*`
 - 截至 `2026-04-11`，已用 `docker manifest inspect` 复核，上述固定版本 tag 仍以 `bitnamilegacy/*` 可拉取为准
-- `TIKA_IMAGE` 是自定义镜像，不在 Docker Hub 公共仓库里，生产里应先推到固定私有仓库，再让其它节点远程拉取
-- 如果你选择 `SWARM_IMAGE_SOURCE=local`，建议在每台节点执行：
+- `TIKA_IMAGE`、`AUTHVERSE_*_IMAGE` 以及 `AUTHVERSE_*_BASE_IMAGE` 都应先进入固定私有仓库
+- 默认严格模式不会自动外部拉取缺失镜像；`prepare-bitnami-images.sh` 现在默认只检查
+- 如果你只是一次性引导固定 manager，并且明确允许对外拉取，再显式执行：
 
 ```bash
-docker/swarm/prepare-bitnami-images.sh --check
-docker/swarm/prepare-bitnami-images.sh
+docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --pull
 ```
 
-- 如果你选择 `SWARM_IMAGE_SOURCE=remote`，建议只在固定部署 manager 执行上面这一步，用来准备 local 源镜像，然后再推到私有仓库
+- 推荐的私有仓库顺序是：先推 authverse 构建基镜像，再构建 authverse，再推整套业务镜像
 
 如果你使用仓库内置的 `registry:2` 方案，推荐顺序是：
 
@@ -165,6 +169,8 @@ docker/swarm/prepare-bitnami-images.sh
 docker/swarm/generate-swarm-pki.sh --env-file .env.swarm --force-certs
 sudo docker/swarm/prepare-private-registry.sh --env-file .env.swarm --apply --restart-docker
 docker/swarm/deploy-stack.sh registry --env-file .env.swarm
+docker/swarm/publish-private-images.sh --env-file .env.swarm --image-keys AUTHVERSE_WEB_BUILDER_BASE,AUTHVERSE_WEB_RUNTIME_BASE,AUTHVERSE_BACKEND_BUILDER_BASE,AUTHVERSE_BACKEND_RUNTIME_BASE
+docker/swarm/build-auth-images.sh --env-file .env.swarm
 docker/swarm/publish-private-images.sh --env-file .env.swarm
 ```
 
@@ -425,6 +431,7 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 - Cloudreve 默认 S3 初始化地址仍是 `http://minio:9000`
 - Cloudreve 后台里的 FTS Elasticsearch 地址应填写 `http://elasticsearch:9200`
 - 如果 Cloudreve 要直接使用栈内 Kafka，全局 Kafka brokers 填 `kafka:9092`
+- `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL` 保持 `PLAINTEXT`
 - Elasticsearch 所在宿主机必须先执行 `sysctl -w vm.max_map_count=262144`
 - Kafka UI 默认访问地址是 `http://<node-or-lb>:18089`
 
@@ -448,7 +455,15 @@ Kafka 这里默认只提供 Swarm 内部入口，不直接给 Swarm 外部客户
 kafka:9092
 ```
 
-Kafka UI 本身也走这个内部 bootstrap 地址，所以它会自动看到 `kafka-1/2/3` 这组 broker。
+这里是 Swarm 内部明文 bootstrap 地址。
+
+Kafka UI 本身也走这个内部 bootstrap 地址，所以它会自动看到 `kafka-1/2/3` 这组 broker；`KAFKA_UI_SECURITY_PROTOCOL` 也应保持 `PLAINTEXT`。
+
+补充：
+
+- 当前模板依赖 `SWARM_OVERLAY_ENCRYPT=true` 对跨节点 overlay 流量加密
+- 这意味着 Kafka broker 之间、Cloudreve 到 Kafka 的跨机传输不再是裸明文
+- 如果你后续一定要做 Kafka 端到端 TLS，需要再单独为 broker 监听、证书挂载、advertised listeners 做一轮改造
 
 建议在每台 Elasticsearch 节点持久化：
 
@@ -552,13 +567,21 @@ sudo hostnamectl set-hostname cr-prod-wkr-12
 选择一台机器作为初始 manager：
 
 ```bash
-docker swarm init --advertise-addr <MANAGER_IP>
+docker swarm init --advertise-addr <MANAGER_CLUSTER_IP> --data-path-addr <MANAGER_CLUSTER_IP>
 ```
 
-在 manager 上获取 worker 加入命令：
+如果机器有多网卡，`advertise-addr` 和 `data-path-addr` 都要明确绑定到节点间互通的集群网卡，不要只配前者。否则控制面和 overlay 数据面可能漂到另一张网卡上，出现 `memberlist` 超时、节点会话重建、服务整批抖动。
+
+在 manager 上获取 worker token：
 
 ```bash
-docker swarm join-token worker
+docker swarm join-token -q worker
+```
+
+然后在 worker 上加入：
+
+```bash
+docker swarm join --token <WORKER_TOKEN> --advertise-addr <WORKER_CLUSTER_IP> --data-path-addr <WORKER_CLUSTER_IP> <MANAGER_CLUSTER_IP>:2377
 ```
 
 检查集群状态：
