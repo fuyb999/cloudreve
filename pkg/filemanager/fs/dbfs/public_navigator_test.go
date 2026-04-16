@@ -1,6 +1,7 @@
 package dbfs
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -26,6 +27,45 @@ func TestPublicNavigatorGrantForFileRejectsNilModel(t *testing.T) {
 	file := &File{}
 	if _, ok := n.grantForFile(file); ok {
 		t.Fatalf("expected nil model file to be rejected")
+	}
+}
+
+func TestPublicNavigatorGetViewUsesPublicFsViewMapWithoutEntDriver(t *testing.T) {
+	n := &publicNavigator{
+		user: &ent.User{
+			ID: 7,
+			Settings: &types.UserSetting{
+				FsViewMap: map[string]types.ExplorerView{
+					string(constants.FileSystemPublic): {
+						PageSize:  88,
+						View:      "list",
+						Thumbnail: false,
+					},
+				},
+			},
+		},
+	}
+
+	view := n.GetView(context.Background(), nil)
+	if view == nil {
+		t.Fatalf("expected public view")
+	}
+	if view.PageSize != 88 || view.View != "list" || view.Thumbnail {
+		t.Fatalf("unexpected public view: %+v", *view)
+	}
+}
+
+func TestPublicNavigatorGetViewFallsBackToDefault(t *testing.T) {
+	n := &publicNavigator{
+		user: &ent.User{ID: 7},
+	}
+
+	view := n.GetView(context.Background(), nil)
+	if view == nil {
+		t.Fatalf("expected default view")
+	}
+	if view.PageSize != defaultPageSize || view.View != "grid" || !view.Thumbnail {
+		t.Fatalf("unexpected default view: %+v", *view)
 	}
 }
 

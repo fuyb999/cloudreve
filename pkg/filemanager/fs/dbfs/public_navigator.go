@@ -1011,19 +1011,12 @@ func (n *publicNavigator) ExecuteHook(ctx context.Context, hookType fs.HookType,
 }
 
 func (n *publicNavigator) GetView(ctx context.Context, file *File) *types.ExplorerView {
-	if n.user == nil {
-		return getDefaultView()
+	if n.user != nil && n.user.Settings != nil {
+		if view, ok := n.user.Settings.FsViewMap[string(constants.FileSystemPublic)]; ok {
+			return &view
+		}
 	}
-
-	myRootModel, err := n.fileClient.Root(ctx, n.user)
-	if err != nil || myRootModel == nil {
-		return getDefaultView()
-	}
-
-	myRoot := newFile(nil, myRootModel)
-	myRoot.OwnerModel = n.user
-	myRoot.IsUserRoot = true
-	return myRoot.View()
+	return getDefaultView()
 }
 
 func newPublicUri() *fs.URI {

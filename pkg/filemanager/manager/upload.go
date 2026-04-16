@@ -423,8 +423,9 @@ func (m *manager) OnUploadFailed(ctx context.Context, session *fs.UploadSession)
 func (m *manager) updateStateless(ctx context.Context, req *fs.UploadRequest, o *fs.FsOption) (fs.File, error) {
 	// Prepare for upload
 	res, err := o.Node.PrepareUpload(ctx, &fs.StatelessPrepareUploadService{
-		UploadRequest: req,
-		UserID:        o.StatelessUserID,
+		UploadRequest:    req,
+		UserID:           o.StatelessUserID,
+		PublicVisibility: publicVisibilityPayload(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("faield to prepare uplaod: %w", err)
@@ -433,8 +434,9 @@ func (m *manager) updateStateless(ctx context.Context, req *fs.UploadRequest, o 
 	req.Props = res.Req.Props
 	if err := m.Upload(ctx, req, res.Session.Policy, res.Session); err != nil {
 		if err := o.Node.OnUploadFailed(ctx, &fs.StatelessOnUploadFailedService{
-			UploadSession: res.Session,
-			UserID:        o.StatelessUserID,
+			UploadSession:    res.Session,
+			UserID:           o.StatelessUserID,
+			PublicVisibility: publicVisibilityPayload(ctx),
 		}); err != nil {
 			m.l.Warning("Failed to call stateless OnUploadFailed: %s", err)
 		}
@@ -442,13 +444,15 @@ func (m *manager) updateStateless(ctx context.Context, req *fs.UploadRequest, o 
 	}
 
 	err = o.Node.CompleteUpload(ctx, &fs.StatelessCompleteUploadService{
-		UploadSession: res.Session,
-		UserID:        o.StatelessUserID,
+		UploadSession:    res.Session,
+		UserID:           o.StatelessUserID,
+		PublicVisibility: publicVisibilityPayload(ctx),
 	})
 	if err != nil {
 		if err := o.Node.OnUploadFailed(ctx, &fs.StatelessOnUploadFailedService{
-			UploadSession: res.Session,
-			UserID:        o.StatelessUserID,
+			UploadSession:    res.Session,
+			UserID:           o.StatelessUserID,
+			PublicVisibility: publicVisibilityPayload(ctx),
 		}); err != nil {
 			m.l.Warning("Failed to call stateless OnUploadFailed: %s", err)
 		}

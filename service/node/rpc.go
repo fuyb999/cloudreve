@@ -7,10 +7,21 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/credmanager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gin-gonic/gin"
 )
+
+func applyPublicVisibilityOverride(c *gin.Context, raw string) error {
+	visibility, err := publicshare.DecodeVisibilityOverride(raw)
+	if err != nil || visibility == nil {
+		return err
+	}
+
+	util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
+	return nil
+}
 
 type SlaveNotificationService struct {
 	Subject string `uri:"subject" binding:"required"`
@@ -51,6 +62,10 @@ func StatelessPrepareUpload(s *fs.StatelessPrepareUploadService, c *gin.Context)
 		return nil, err
 	}
 
+	if err := applyPublicVisibilityOverride(c, s.PublicVisibility); err != nil {
+		return nil, err
+	}
+
 	ctx := context.WithValue(c.Request.Context(), inventory.UserCtx{}, user)
 	fm := manager.NewFileManager(dep, user)
 	uploadSession, err := fm.PrepareUpload(ctx, s.UploadRequest)
@@ -75,6 +90,10 @@ func StatelessCompleteUpload(s *fs.StatelessCompleteUploadService, c *gin.Contex
 		return nil, err
 	}
 
+	if err := applyPublicVisibilityOverride(c, s.PublicVisibility); err != nil {
+		return nil, err
+	}
+
 	util.WithValue(c, inventory.UserCtx{}, user)
 	fm := manager.NewFileManager(dep, user)
 	return fm.CompleteUpload(c, s.UploadSession)
@@ -92,6 +111,10 @@ func StatelessOnUploadFailed(s *fs.StatelessOnUploadFailedService, c *gin.Contex
 		return err
 	}
 
+	if err := applyPublicVisibilityOverride(c, s.PublicVisibility); err != nil {
+		return err
+	}
+
 	util.WithValue(c, inventory.UserCtx{}, user)
 	fm := manager.NewFileManager(dep, user)
 	fm.OnUploadFailed(c, s.UploadSession)
@@ -105,6 +128,10 @@ func StatelessCreateFile(s *fs.StatelessCreateFileService, c *gin.Context) error
 	userClient := dep.UserClient()
 	user, err := userClient.GetLoginUserByID(c, s.UserID)
 	if err != nil {
+		return err
+	}
+
+	if err := applyPublicVisibilityOverride(c, s.PublicVisibility); err != nil {
 		return err
 	}
 

@@ -381,6 +381,10 @@ func isAdminUser(user *ent.User) bool {
 }
 
 func (s *Service) ResolveVisibility(ctx context.Context, user *ent.User) (*VisibilityResult, error) {
+	if visibility := VisibilityOverrideFromContext(ctx); visibility != nil {
+		return visibility, nil
+	}
+
 	if isAdminUser(user) {
 		return s.resolveVisibilityLocal(ctx, user)
 	}
@@ -477,6 +481,10 @@ func (s *Service) resolveVisibilityLocal(ctx context.Context, user *ent.User) (*
 }
 
 func (s *Service) CheckActionByFile(ctx context.Context, user *ent.User, target *ent.File, action Action) (*ActionDecision, error) {
+	if visibility := VisibilityOverrideFromContext(ctx); visibility != nil {
+		return decisionFromVisibility(target, action, visibility), nil
+	}
+
 	if isAdminUser(user) {
 		return s.checkActionByFileLocal(ctx, user, target, action)
 	}
@@ -522,16 +530,29 @@ func (s *Service) checkActionByFileLocal(ctx context.Context, user *ent.User, ta
 		return nil, err
 	}
 
+	return decisionFromVisibility(target, action, visibility), nil
+}
+
+func decisionFromVisibility(target *ent.File, action Action, visibility *VisibilityResult) *ActionDecision {
+	if target == nil {
+		return &ActionDecision{Allowed: false, Action: action, Reason: "target_not_found"}
+	}
+	if visibility == nil {
+		visibility = &VisibilityResult{}
+	}
+
 	rootGrant, found := rootGrantForAncestors(target, visibility.RootGrants)
 	if !found {
-		return &ActionDecision{Allowed: false, Action: action, Reason: "root_not_visible"}, nil
+		return &ActionDecision{Allowed: false, Action: action, Reason: "root_not_visible"}
 	}
 
-	allowed := RootGrantActionAllowed(target.ID, rootGrant, action)
-	if action == ActionList {
-		allowed = true
+	actions := make(map[Action]bool, len(ActionOrder))
+	for _, candidate := range ActionOrder {
+		actions[candidate] = candidate == ActionList || RootGrantActionAllowed(target.ID, rootGrant, candidate)
 	}
+	actions[ActionList] = true
 
+	allowed := actions[action]
 	reason := lo.If(allowed, "allowed").Else("action_denied")
 	if action == ActionDelete && target.ID == rootGrant.RootFileID && !allowed {
 		if _, ok := rootGrant.Actions[ActionDeleteRoot]; ok {
@@ -543,9 +564,9 @@ func (s *Service) checkActionByFileLocal(ctx context.Context, user *ent.User, ta
 		Allowed:    allowed,
 		Action:     action,
 		RootFileID: rootGrant.RootFileID,
-		Actions:    rootGrant.Actions,
+		Actions:    actions,
 		Reason:     reason,
-	}, nil
+	}
 }
 
 func rootGrantForAncestors(target *ent.File, grants []RootGrant) (RootGrant, bool) {

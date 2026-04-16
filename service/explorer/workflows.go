@@ -17,6 +17,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/workflows"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/gin-gonic/gin"
@@ -206,8 +207,18 @@ func (service *ArchiveWorkflowService) CreateExtractTask(c *gin.Context) (*TaskR
 		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid destination", err)
 	}
 
+	var visibility *publicshare.VisibilityResult
+	srcURI, _ := fs.NewUriFromString(service.Src[0])
+	if dst.FileSystem() == constants.FileSystemPublic || (srcURI != nil && srcURI.FileSystem() == constants.FileSystemPublic) {
+		visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
+		visibility, err = visibilityService.ResolveVisibility(c, user)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
+		}
+	}
+
 	// Create task
-	t, err := workflows.NewExtractArchiveTask(c, service.Src[0], service.Dst, service.Encoding, service.Password, service.FileMask)
+	t, err := workflows.NewExtractArchiveTask(c, service.Src[0], service.Dst, service.Encoding, service.Password, service.FileMask, visibility)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to create task", err)
 	}

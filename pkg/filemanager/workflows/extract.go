@@ -25,6 +25,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -43,17 +44,18 @@ type (
 	}
 	ExtractArchiveTaskPhase string
 	ExtractArchiveTaskState struct {
-		Uri             string   `json:"uri,omitempty"`
-		Encoding        string   `json:"encoding,omitempty"`
-		Dst             string   `json:"dst,omitempty"`
-		TempPath        string   `json:"temp_path,omitempty"`
-		TempZipFilePath string   `json:"temp_zip_file_path,omitempty"`
-		ProcessedCursor string   `json:"processed_cursor,omitempty"`
-		SlaveTaskID     int      `json:"slave_task_id,omitempty"`
-		Password        string   `json:"password,omitempty"`
-		FileMask        []string `json:"file_mask,omitempty"`
-		NodeState       `json:",inline"`
-		Phase           ExtractArchiveTaskPhase `json:"phase,omitempty"`
+		Uri              string                        `json:"uri,omitempty"`
+		Encoding         string                        `json:"encoding,omitempty"`
+		Dst              string                        `json:"dst,omitempty"`
+		TempPath         string                        `json:"temp_path,omitempty"`
+		TempZipFilePath  string                        `json:"temp_zip_file_path,omitempty"`
+		ProcessedCursor  string                        `json:"processed_cursor,omitempty"`
+		SlaveTaskID      int                           `json:"slave_task_id,omitempty"`
+		Password         string                        `json:"password,omitempty"`
+		FileMask         []string                      `json:"file_mask,omitempty"`
+		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
+		NodeState        `json:",inline"`
+		Phase            ExtractArchiveTaskPhase `json:"phase,omitempty"`
 	}
 )
 
@@ -99,14 +101,15 @@ func init() {
 }
 
 // NewExtractArchiveTask creates a new ExtractArchiveTask
-func NewExtractArchiveTask(ctx context.Context, src, dst, encoding, password string, mask []string) (queue.Task, error) {
+func NewExtractArchiveTask(ctx context.Context, src, dst, encoding, password string, mask []string, visibility *publicshare.VisibilityResult) (queue.Task, error) {
 	state := &ExtractArchiveTaskState{
-		Uri:       src,
-		Dst:       dst,
-		Encoding:  encoding,
-		NodeState: NodeState{},
-		Password:  password,
-		FileMask:  mask,
+		Uri:              src,
+		Dst:              dst,
+		Encoding:         encoding,
+		NodeState:        NodeState{},
+		Password:         password,
+		FileMask:         mask,
+		PublicVisibility: visibility,
 	}
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -151,6 +154,9 @@ func (m *ExtractArchiveTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 	m.state = state
+	if m.state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, m.state.PublicVisibility)
+	}
 
 	// select node
 	node, err := allocateNode(ctx, dep, &m.state.NodeState, types.NodeCapabilityExtractArchive)
@@ -543,14 +549,15 @@ func (m *ExtractArchiveTask) createSlaveExtractTask(ctx context.Context, dep dep
 	}
 
 	payload := &SlaveExtractArchiveTaskState{
-		FileName: archiveFile.DisplayName(),
-		Entity:   entityModel,
-		Policy:   policy,
-		Encoding: m.state.Encoding,
-		Dst:      m.state.Dst,
-		UserID:   user.ID,
-		Password: m.state.Password,
-		FileMask: m.state.FileMask,
+		FileName:         archiveFile.DisplayName(),
+		Entity:           entityModel,
+		Policy:           policy,
+		Encoding:         m.state.Encoding,
+		Dst:              m.state.Dst,
+		UserID:           user.ID,
+		Password:         m.state.Password,
+		FileMask:         m.state.FileMask,
+		PublicVisibility: m.state.PublicVisibility,
 	}
 
 	payloadStr, err := json.Marshal(payload)
@@ -827,17 +834,18 @@ type (
 	}
 
 	SlaveExtractArchiveTaskState struct {
-		FileName        string             `json:"file_name"`
-		Entity          *ent.Entity        `json:"entity"`
-		Policy          *ent.StoragePolicy `json:"policy"`
-		Encoding        string             `json:"encoding,omitempty"`
-		Dst             string             `json:"dst,omitempty"`
-		UserID          int                `json:"user_id"`
-		TempPath        string             `json:"temp_path,omitempty"`
-		TempZipFilePath string             `json:"temp_zip_file_path,omitempty"`
-		ProcessedCursor string             `json:"processed_cursor,omitempty"`
-		Password        string             `json:"password,omitempty"`
-		FileMask        []string           `json:"file_mask,omitempty"`
+		FileName         string                        `json:"file_name"`
+		Entity           *ent.Entity                   `json:"entity"`
+		Policy           *ent.StoragePolicy            `json:"policy"`
+		Encoding         string                        `json:"encoding,omitempty"`
+		Dst              string                        `json:"dst,omitempty"`
+		UserID           int                           `json:"user_id"`
+		TempPath         string                        `json:"temp_path,omitempty"`
+		TempZipFilePath  string                        `json:"temp_zip_file_path,omitempty"`
+		ProcessedCursor  string                        `json:"processed_cursor,omitempty"`
+		Password         string                        `json:"password,omitempty"`
+		FileMask         []string                      `json:"file_mask,omitempty"`
+		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 	}
 )
 
@@ -884,6 +892,9 @@ func (m *SlaveExtractArchiveTask) Do(ctx context.Context) (task.Status, error) {
 	}
 
 	m.state = state
+	if m.state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, m.state.PublicVisibility)
+	}
 	m.Lock()
 	if m.progress == nil {
 		m.progress = make(queue.Progresses)

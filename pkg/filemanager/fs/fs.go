@@ -355,21 +355,25 @@ type (
 	CreateArchiveDryRunFunc func(name string, e Entity)
 
 	StatelessPrepareUploadService struct {
-		UploadRequest *UploadRequest `json:"upload_request" binding:"required"`
-		UserID        int            `json:"user_id"`
+		UploadRequest    *UploadRequest `json:"upload_request" binding:"required"`
+		UserID           int            `json:"user_id"`
+		PublicVisibility string         `json:"public_visibility,omitempty"`
 	}
 	StatelessCompleteUploadService struct {
-		UploadSession *UploadSession `json:"upload_session" binding:"required"`
-		UserID        int            `json:"user_id"`
+		UploadSession    *UploadSession `json:"upload_session" binding:"required"`
+		UserID           int            `json:"user_id"`
+		PublicVisibility string         `json:"public_visibility,omitempty"`
 	}
 	StatelessOnUploadFailedService struct {
-		UploadSession *UploadSession `json:"upload_session" binding:"required"`
-		UserID        int            `json:"user_id"`
+		UploadSession    *UploadSession `json:"upload_session" binding:"required"`
+		UserID           int            `json:"user_id"`
+		PublicVisibility string         `json:"public_visibility,omitempty"`
 	}
 	StatelessCreateFileService struct {
-		Path   string         `json:"path" binding:"required"`
-		Type   types.FileType `json:"type" binding:"required"`
-		UserID int            `json:"user_id"`
+		Path             string         `json:"path" binding:"required"`
+		Type             types.FileType `json:"type" binding:"required"`
+		UserID           int            `json:"user_id"`
+		PublicVisibility string         `json:"public_visibility,omitempty"`
 	}
 	StatelessPrepareUploadResponse struct {
 		Session *UploadSession

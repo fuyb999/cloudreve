@@ -6,6 +6,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 )
 
 func withPublicBypass(ctx context.Context, uris ...*fs.URI) context.Context {
@@ -16,4 +17,8 @@ func withPublicBypass(ctx context.Context, uris ...*fs.URI) context.Context {
 	}
 
 	return ctx
+}
+
+func publicVisibilityPayload(ctx context.Context) string {
+	return publicshare.EncodeVisibilityOverride(publicshare.VisibilityOverrideFromContext(ctx))
 }

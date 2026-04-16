@@ -109,9 +109,10 @@ func (m *manager) Create(ctx context.Context, path *fs.URI, fileType types.FileT
 
 	if m.stateless {
 		return nil, o.Node.CreateFile(ctx, &fs.StatelessCreateFileService{
-			Path:   path.String(),
-			Type:   fileType,
-			UserID: o.StatelessUserID,
+			Path:             path.String(),
+			Type:             fileType,
+			UserID:           o.StatelessUserID,
+			PublicVisibility: publicVisibilityPayload(ctx),
 		})
 	}
 
