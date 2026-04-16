@@ -472,7 +472,7 @@ func (m *manager) applySlaveFTSSidecarResult(ctx context.Context, fileID int, ur
 		}
 	}
 
-	if err := m.fs.PatchMetadata(ctx, []*fs.URI{uri}, patches...); err != nil {
+	if err := m.fs.PatchMetadata(withPublicBypass(ctx, uri), []*fs.URI{uri}, patches...); err != nil {
 		return fmt.Errorf("failed to patch slave full text sidecar metadata: %w", err)
 	}
 

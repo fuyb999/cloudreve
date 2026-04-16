@@ -362,7 +362,7 @@ func introspectOIDCAccessToken(c *gin.Context, dep dependency.Dep, cfg *setting.
 
 	body, err := doOIDCRequest(c, dep, http.MethodPost, endpoint, strings.NewReader(form.Encode()), header)
 	if err != nil {
-		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to introspect OIDC access token", err)
+		return nil, serializer.NewError(serializer.CodeInternalSetting, "Failed to introspect OIDC access token", err)
 	}
 
 	payload, err := parseOIDCPayload[oidcIntrospectionPayload](body)
@@ -371,7 +371,7 @@ func introspectOIDCAccessToken(c *gin.Context, dep dependency.Dep, cfg *setting.
 		if errors.As(err, &appErr) {
 			return nil, appErr
 		}
-		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "Failed to parse OIDC introspection response", err)
+		return nil, serializer.NewError(serializer.CodeInternalSetting, "Failed to parse OIDC introspection response", err)
 	}
 	if payload.Active != nil && !*payload.Active {
 		return nil, serializer.NewError(serializer.CodeCredentialInvalid, "OIDC access token is inactive", nil)

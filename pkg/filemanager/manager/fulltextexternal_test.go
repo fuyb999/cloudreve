@@ -1258,6 +1258,37 @@ func TestDispatchExternalIfConfiguredFallbackOnQualityKeepsLocalResultWhenAccept
 	}
 }
 
+func TestUpsertFTSDocumentPublicURIUsesBypassOwnerCheck(t *testing.T) {
+	searchIndexer := &testSearchIndexer{}
+	dep := testDep{searchIndexer: searchIndexer}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+	uri := mustURI(t, "cloudreve://public/shared/report.pdf")
+
+	status, err := upsertFTSDocument(ctx, &manager{
+		fs:     backend,
+		dep:    dep,
+		hasher: nil,
+	}, uri, &searcher.SearchFileDocument{
+		ID:       "201",
+		FileID:   201,
+		EntityID: 301,
+		Content:  "indexed text",
+	})
+	if err != nil {
+		t.Fatalf("unexpected upsertFTSDocument error: %v", err)
+	}
+	if status != enttask.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, enttask.StatusCompleted)
+	}
+	if len(backend.bypassStates) != 1 || !backend.bypassStates[0] {
+		t.Fatalf("expected public metadata patch to enable bypass owner check, got %+v", backend.bypassStates)
+	}
+	if len(backend.patches) != 1 || backend.patches[0].Key != dbfs.FullTextIndexKey {
+		t.Fatalf("expected fulltext metadata patch, got %+v", backend.patches)
+	}
+}
+
 func TestDispatchExternalIfConfiguredQueuesWhenOCRCandidatesReady(t *testing.T) {
 	originalLoadCandidate := loadFTSExternalCandidateForTask
 	originalHasSidecar := hasCurrentExternalFTSSidecarForTask

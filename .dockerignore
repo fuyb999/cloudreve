@@ -1,0 +1,7 @@
+**
+!.build/
+!.build/aria2.supervisor.conf
+!.build/entrypoint.sh
+!cloudreve
+!Dockerfile
+!.dockerignore

@@ -13,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	usersvc "github.com/cloudreve/Cloudreve/v4/service/user"
@@ -266,6 +267,9 @@ func uploadCallbackCheck(c *gin.Context, policyType types.PolicyType) error {
 
 	callbackSession := callbackSessionRaw.(fs.UploadSession)
 	c.Set(manager.UploadSessionCtx, &callbackSession)
+	if visibility, err := publicshare.DecodeVisibilityOverride(callbackSession.PublicVisibility); err == nil && visibility != nil {
+		util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
+	}
 	if callbackSession.Policy.Type != string(policyType) {
 		return serializer.NewError(serializer.CodePolicyNotAllowed, "", nil)
 	}

@@ -65,7 +65,7 @@
 
 ## :book: 扩展文档
 
-- [Cloudreve 与 Yudao OIDC 统一认证接入说明](docs/yudao-oidc-integration.md)
+- [Cloudreve 与统一认证 OIDC 接入说明](docs/统一认证-网盘OIDC接入说明-不需要维护.md)
 - [统一认证 authverse / authverse-backend 的 Swarm 接入与上线手册](docs/docker-swarm-auth-deployment.md)
 
 ## :rocket: 贡献

@@ -22,3 +22,16 @@ func withPublicBypass(ctx context.Context, uris ...*fs.URI) context.Context {
 func publicVisibilityPayload(ctx context.Context) string {
 	return publicshare.EncodeVisibilityOverride(publicshare.VisibilityOverrideFromContext(ctx))
 }
+
+func withUploadSessionPublicVisibility(ctx context.Context, session *fs.UploadSession) context.Context {
+	if session == nil || session.PublicVisibility == "" {
+		return ctx
+	}
+
+	visibility, err := publicshare.DecodeVisibilityOverride(session.PublicVisibility)
+	if err != nil || visibility == nil {
+		return ctx
+	}
+
+	return context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, visibility)
+}

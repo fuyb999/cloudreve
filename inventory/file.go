@@ -114,6 +114,7 @@ type (
 	}
 
 	CreateFileParameters struct {
+		Owner               int
 		FileType            types.FileType
 		Name                string
 		Metadata            map[string]string
@@ -919,9 +920,13 @@ func (f *fileClient) SetPrimaryEntity(ctx context.Context, file *ent.File, entit
 
 func (f *fileClient) CreateFile(ctx context.Context, root *ent.File, args *CreateFileParameters) (*ent.File, *ent.Entity, StorageDiff, error) {
 	var defaultEntity *ent.Entity
+	ownerID := root.OwnerID
+	if args.Owner != 0 {
+		ownerID = args.Owner
+	}
 	stm := f.client.File.
 		Create().
-		SetOwnerID(root.OwnerID).
+		SetOwnerID(ownerID).
 		SetType(int(args.FileType)).
 		SetName(args.Name).
 		SetFileExt(fileExtValue(args.Name, int(args.FileType))).
@@ -944,7 +949,7 @@ func (f *fileClient) CreateFile(ctx context.Context, root *ent.File, args *Creat
 	// Create default primary file entity if needed
 	var storageDiff StorageDiff
 	if args.EntityParameters != nil {
-		args.EntityParameters.OwnerID = root.OwnerID
+		args.EntityParameters.OwnerID = ownerID
 		args.EntityParameters.StoragePolicyID = args.StoragePolicyID
 		defaultEntity, storageDiff, err = f.CreateEntity(ctx, newFile, args.EntityParameters)
 		if err != nil {

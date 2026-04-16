@@ -7,13 +7,12 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
-	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gofrs/uuid"
 )
 
 // NewLocalFileEntity creates a new local file entity.
 func NewLocalFileEntity(t types.EntityType, src string) (fs.Entity, error) {
-	info, err := os.Stat(util.RelativePath(src))
+	info, err := os.Stat(resolveLocalStoragePath(src))
 	if err != nil {
 		return nil, err
 	}

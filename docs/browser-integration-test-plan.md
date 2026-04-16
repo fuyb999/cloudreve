@@ -82,7 +82,7 @@
   - `POST /api/v4/session/oidc/exchange`
   - `POST /api/v4/session/oidc/revokeCallback`
   - `POST /api/v4/session/oidc/backchannelLogout`
-- 详细时序与配置：`cloudreve/docs/yudao-oidc-integration.md`（注意其中 “Yudao” 旧命名，对应当前 Authverse）
+- 详细时序与配置：`cloudreve/docs/统一认证-网盘OIDC接入说明-不需要维护.md`
 
 ### 2.2 Cloudreve：内置 OAuth（客户端，Syncthing）
 
@@ -145,7 +145,7 @@
   `authverse-backend/yudao-module-search/.../service/query/CloudrevePublicVisibilityAllowAugmentor.java`  
   语义：`finalAllow = baseAllow OR publicVisibilityAllow`（因此必须专项验证“不可见资源不会被检索命中”）
 - Search 前端（用于可视化越权与压测后抽样）：  
-  `search-frontend/src/component/Yudao/SearchProject.tsx`（支持 `statsOnly` 模式快速看命中统计）
+  `search-frontend/src/component/统一认证/SearchProject.tsx`（支持 `statsOnly` 模式快速看命中统计）
 
 ### 2.6 Authverse（统一认证）前端页面范围
 
@@ -178,7 +178,7 @@ Authverse-backend 已提供脚本（路径按需执行）：
 - 检索相关：`authverse-backend/sql/postgresql/search-*.sql`
 - 网盘授权相关：`authverse-backend/sql/postgresql/cloudreve-authz-*.sql`
 
-Cloudreve 授权中心 E2E 操作路径与模板库参考：`cloudreve/docs/yudao-cloudreve-authz-e2e.md`
+Cloudreve 授权中心 E2E 操作路径与模板库参考：`cloudreve/docs/统一认证-网盘授权联调说明-不需要维护.md`
 
 ### 3.3 时间/证书/跨域
 
@@ -266,7 +266,7 @@ Cloudreve 授权中心 E2E 操作路径与模板库参考：`cloudreve/docs/yuda
 失败排查与修改切入点：
 
 - Cloudreve OIDC：
-  - `cloudreve/docs/yudao-oidc-integration.md`（配置项/时序/常见问题）
+  - `cloudreve/docs/统一认证-网盘OIDC接入说明-不需要维护.md`（配置项/时序/常见问题）
   - 后端：`cloudreve/service/user/oidc.go`、`cloudreve/service/user/oidc_token.go`
   - 路由：`cloudreve/routers/router.go`
 - Authverse 登录与回调：
@@ -294,7 +294,7 @@ Gate-1 通过标准：
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | G2-01 | Cloudreve 显示 Syncthing 引导页 | `/connect` 页面正常，Syncthing 下载链接可用（或有明确提示） | Pass | 无 | `2026-03-23 20:35` 浏览器进入 `http://localhost:5212/connect`，页面展示 Syncthing 引导文案、Windows/Linux 下载按钮与三步引导说明 | 本地联调实测 | 无 | 回归通过：`/connect` 页面可稳定加载 |
 | G2-02 | Syncthing 打开 Cloudreve 授权页 | 浏览器打开 `${cloudreve}/session/authorize?...`，且能显示应用信息/授权按钮 | Pass | 无 | `GET http://127.0.0.1:18384/rest/noauth/auth/cloudreve/login -> 302`，`Location` 指向 `http://localhost:5212/session/authorize?...redirect_uri=http://127.0.0.1:18384/rest/noauth/auth/cloudreve/callback...`；浏览器落在授权页 `授权应用 - Cloudreve` 并显示 “Syncthing” 与 “授权应用” 按钮 | 本地联调实测 | 无 | 回归通过：授权页拉起正常 |
-| G2-03 | 授权回调到本地端口 | 浏览器回跳到 `http(s)://127.0.0.1:18384/rest/noauth/auth/cloudreve/callback` 并显示成功 | Pass | 无 | 点击 Cloudreve 授权页“授权应用”后，同一浏览器落回 Syncthing 本地站点 `http://127.0.0.1:18384/`（标题：`芋道源码 | Syncthing`）；授权入口 `redirect_uri` 已明确为 `/rest/noauth/auth/cloudreve/callback` | 本地联调实测 | 无 | 回归通过：本地端口回跳链路可用 |
+| G2-03 | 授权回调到本地端口 | 浏览器回跳到 `http(s)://127.0.0.1:18384/rest/noauth/auth/cloudreve/callback` 并显示成功 | Pass | 无 | 点击 Cloudreve 授权页“授权应用”后，同一浏览器落回 Syncthing 本地站点 `http://127.0.0.1:18384/`（标题：`统一认证 | Syncthing`）；授权入口 `redirect_uri` 已明确为 `/rest/noauth/auth/cloudreve/callback` | 本地联调实测 | 无 | 回归通过：本地端口回跳链路可用 |
 | G2-04 | Syncthing 换票成功 | Syncthing 调用 `POST /api/v4/session/oauth/token` 成功并持久化 session | Pass | 首次启动存在历史失效会话，持续报 `40020`；重新完成 OAuth 并重启 Syncthing 后恢复 | `GET http://127.0.0.1:18384/rest/noauth/auth/cloudreve/status` 返回 `authorized=true`，含 `userName/userEmail/scope`，证明换票与会话持久化成功 | 本地联调修正（流程） | 无代码改动（重授权 + 客户端重启） | 回归通过：Syncthing 已处于 Cloudreve 授权态 |
 | G2-05 | Cloudreve 设备列表出现并可刷新 | `GET /api/v4/devices/syncthing` 返回设备，UI 每 30s 刷新 last_seen/online | Pass | 无 | `GET /api/v4/devices/syncthing`：HTTP 200，`code=0`，返回设备 `JJVV453...`，`online=true`，`is_bound=true`；Cloudreve `/connect` 页面可见设备卡片、最近在线与绑定 URI | 本地联调实测 | 无 | 回归通过：设备注册、在线状态与刷新正常 |
 
@@ -483,7 +483,7 @@ Gate-5 通过标准：
 - 网盘授权（资源与模板库）：`/admin/authorization/disk`
 - 统一授权（融合策略与运行态预览）：`/admin/authorization/unified-auth`
 
-建议先照 `cloudreve/docs/yudao-cloudreve-authz-e2e.md` 完成：
+建议先照 `cloudreve/docs/统一认证-网盘授权联调说明-不需要维护.md` 完成：
 
 1. 策略模板库可用（内置模板存在、可新增自定义模板）
 2. 公共资源建模：把 `cloudreve://public` 下关键目录登记为资源
@@ -557,7 +557,7 @@ Gate-6 通过标准：
 
 #### 7.2 运行态验证（Search 前端）
 
-入口：`search-frontend/src/component/Yudao/SearchProject.tsx`
+入口：`search-frontend/src/component/统一认证/SearchProject.tsx`
 
 重点验证：
 
@@ -580,7 +580,7 @@ Gate-6 通过标准：
 - Search 策略模板/策略管理前端：  
   `authverse/src/component/UnifiedAuth/SearchAuthorizationManagement.tsx`
 - Search 运行态页：  
-  `search-frontend/src/component/Yudao/SearchProject.tsx`
+  `search-frontend/src/component/统一认证/SearchProject.tsx`
 
 #### 7.4 新增“检索策略模板”（必须执行）
 
@@ -614,7 +614,7 @@ Gate-7 通过标准：
 - 在主从协调模式下，任务可创建、可分发、可完成、可监控
 - 结合 ES/Tika/PG 联调：内容抽取产物正确、索引更新正确
 
-参考设计与术语：`cloudreve/docs/content-processing-node-plan.md`
+参考设计与术语：`cloudreve/docs/content-processing-node-plan-不需要维护.md`
 
 建议按顺序验证：
 
@@ -641,7 +641,7 @@ Gate-7 通过标准：
 
 - Cloudreve 工作流与节点 RPC：`cloudreve/routers/router.go`（`/api/v4/slave/*`、`/api/v4/workflow/*`）
 - 节点能力与任务编排：`cloudreve/pkg/cluster/*`、`cloudreve/service/node/*`
-- Tika/全文抽取能力验证参考：`cloudreve/docs/tika-fts-capability-test-report.md`
+- Tika/全文抽取能力验证参考：`cloudreve/docs/tika-fts-capability-test-report-不需要维护.md`
 
 Gate-8 通过标准：
 
@@ -748,10 +748,10 @@ Gate-10 通过标准：
 
 - 网盘授权策略：一级目录删除权限标识是否可去除，改为完全由统一授权控制（从根到任意层级动作）
 - 用户角色修改失败
-- 文案替换：`yudao/芋道/芋道源码` 等文案替换为“统一认证”
+- 文案替换：`yudao/统一认证/统一认证` 等文案替换为“统一认证”
 - 岗位备注修改无效
 - admin 修改用户信息失败（提示岗位不存在）
-- 进入统一认证主页报错：`ReferenceError: isYudaoNavigation is not defined`（示例：`PageNavigation.tsx` 报错）
+- 进入统一认证主页报错：`ReferenceError: isUnifiedAuthNavigation is not defined`（若代码仍保留旧变量名，则按实际报错继续回归）
 
 网盘相关（建议纳入阶段 6/5/1）：
 
@@ -787,7 +787,7 @@ Gate-10 通过标准：
   - Elasticsearch：`http://127.0.0.1:9200`，版本 `8.12.2`
   - Tika：`http://127.0.0.1:9998/version`，版本 `3.2.3`
 - Cloudreve 影子用户创建已确认：
-  - SQLite 查询：`1|admin|11aoteman@126.com|芋道源码|active`
+  - SQLite 查询：`1|admin|11aoteman@126.com|统一认证|active`
 
 ### 8.2 Gate-1 已修复缺陷台账
 

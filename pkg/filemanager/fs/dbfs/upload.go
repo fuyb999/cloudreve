@@ -47,10 +47,15 @@ func (f *DBFS) PreValidateUpload(ctx context.Context, dst *fs.URI, files ...fs.P
 		total += file.Size
 	}
 
-	// Get parent folder storage policy and performs validation
-	policy, err := f.getPreferredPolicy(ctx, dstFile)
+	owner, err := f.ownerForNewChild(ctx, dstFile)
 	if err != nil {
 		return err
+	}
+
+	// Uploading into public folders should validate against the uploader's effective owner policy.
+	policy, err := f.storagePolicyClient.GetByGroup(ctx, owner.Edges.Group)
+	if err != nil {
+		return serializer.NewError(serializer.CodeDBError, "Failed to get available storage policies", err)
 	}
 
 	// validate upload request
@@ -67,7 +72,7 @@ func (f *DBFS) PreValidateUpload(ctx context.Context, dst *fs.URI, files ...fs.P
 	}
 
 	// Validate available capacity
-	if err := f.validateUserCapacity(ctx, total, dstFile.Owner()); err != nil {
+	if err := f.validateUserCapacity(ctx, total, owner); err != nil {
 		return err
 	}
 
@@ -128,17 +133,22 @@ func (f *DBFS) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ..
 		return nil, err
 	}
 
+	childOwner, err := f.ownerForNewChild(ctx, ancestor)
+	if err != nil {
+		return nil, err
+	}
+
 	// Get parent folder storage policy and performs validation
 	var (
 		policy *ent.StoragePolicy
 	)
 	if req.ImportFrom == nil {
-		policy, err = f.getPreferredPolicy(ctx, ancestor)
+		policy, err = f.storagePolicyClient.GetByGroup(ctx, childOwner.Edges.Group)
 	} else {
 		policy, err = f.storagePolicyClient.GetPolicyByID(ctx, req.Props.PreferredStoragePolicy)
 	}
 	if err != nil {
-		return nil, err
+		return nil, serializer.NewError(serializer.CodeDBError, "Failed to get available storage policies", err)
 	}
 
 	// Encryption setting
@@ -161,7 +171,7 @@ func (f *DBFS) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ..
 	}
 
 	// Validate available capacity
-	if err := f.validateUserCapacity(ctx, req.Props.Size, ancestor.Owner()); err != nil {
+	if err := f.validateUserCapacity(ctx, req.Props.Size, childOwner); err != nil {
 		return nil, err
 	}
 

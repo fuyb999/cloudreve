@@ -249,54 +249,24 @@ func BuildVisibilityFilter(grants []RootGrant) *FileFilterExpr {
 		return FalseFilter()
 	}
 
-	byOwner := make(map[int][]string)
+	prefixes := make([]string, 0, len(grants))
 	for _, grant := range grants {
 		if strings.TrimSpace(grant.RootTreePath) == "" {
 			continue
 		}
-
-		byOwner[grant.RootOwnerID] = append(byOwner[grant.RootOwnerID], grant.RootTreePath)
+		prefixes = append(prefixes, grant.RootTreePath)
 	}
 
-	if len(byOwner) == 0 {
+	prefixes = uniqueSortedStrings(prefixes)
+	if len(prefixes) == 0 {
 		return FalseFilter()
 	}
 
-	ownerIDs := make([]int, 0, len(byOwner))
-	for ownerID := range byOwner {
-		ownerIDs = append(ownerIDs, ownerID)
-	}
-	sort.Ints(ownerIDs)
-
-	branches := make([]*FileFilterExpr, 0, len(ownerIDs))
-	for _, ownerID := range ownerIDs {
-		prefixes := uniqueSortedStrings(byOwner[ownerID])
-		branches = append(branches, &FileFilterExpr{
-			Operator: FileFilterOpAnd,
-			Children: []*FileFilterExpr{
-				{
-					Match: &FileFilterMatch{
-						Kind:      FileFilterMatchOwnerIDIn,
-						IntValues: []int{ownerID},
-					},
-				},
-				{
-					Match: &FileFilterMatch{
-						Kind:         FileFilterMatchTreePathIn,
-						StringValues: prefixes,
-					},
-				},
-			},
-		})
-	}
-
-	if len(branches) == 1 {
-		return branches[0]
-	}
-
 	return &FileFilterExpr{
-		Operator: FileFilterOpOr,
-		Children: branches,
+		Match: &FileFilterMatch{
+			Kind:         FileFilterMatchTreePathIn,
+			StringValues: prefixes,
+		},
 	}
 }
 

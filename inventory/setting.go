@@ -686,7 +686,7 @@ var DefaultSettings = map[string]string{
 	"oidc_wellknown_url":                            "",
 	"oidc_client_id":                                "",
 	"oidc_client_secret":                            "",
-	"oidc_scope":                                    "openid user_info user.read",
+	"oidc_scope":                                    "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write",
 	"headless_footer_html":                          "",
 	"headless_bottom_html":                          "",
 	"sidebar_bottom_html":                           "",

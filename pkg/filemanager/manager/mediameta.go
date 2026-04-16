@@ -13,8 +13,10 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 )
@@ -27,13 +29,14 @@ type (
 	MediaMetaTaskPhase string
 
 	MediaMetaTaskState struct {
-		Uri      *fs.URI            `json:"uri"`
-		FileID   int                `json:"file_id,omitempty"`
-		OwnerID  int                `json:"owner_id,omitempty"`
-		EntityID int                `json:"entity_id"`
-		Phase    MediaMetaTaskPhase `json:"phase,omitempty"`
-		NodeID   int                `json:"node_id,omitempty"`
-		SlaveID  int                `json:"slave_id,omitempty"`
+		Uri              *fs.URI                       `json:"uri"`
+		FileID           int                           `json:"file_id,omitempty"`
+		OwnerID          int                           `json:"owner_id,omitempty"`
+		EntityID         int                           `json:"entity_id"`
+		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
+		Phase            MediaMetaTaskPhase            `json:"phase,omitempty"`
+		NodeID           int                           `json:"node_id,omitempty"`
+		SlaveID          int                           `json:"slave_id,omitempty"`
 	}
 )
 
@@ -49,10 +52,11 @@ func init() {
 // NewMediaMetaTask creates a new MediaMetaTask to
 func NewMediaMetaTask(ctx context.Context, uri *fs.URI, fileID, ownerID, entityID int, creator *ent.User) (*MediaMetaTask, error) {
 	state := &MediaMetaTaskState{
-		Uri:      uri,
-		FileID:   fileID,
-		OwnerID:  ownerID,
-		EntityID: entityID,
+		Uri:              uri,
+		FileID:           fileID,
+		OwnerID:          ownerID,
+		EntityID:         entityID,
+		PublicVisibility: publicshare.VisibilityOverrideFromContext(ctx),
 	}
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -110,6 +114,9 @@ func (m *MediaMetaTask) Do(ctx context.Context) (task.Status, error) {
 	var state MediaMetaTaskState
 	if err := json.Unmarshal([]byte(m.State()), &state); err != nil {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
+	}
+	if state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, state.PublicVisibility)
 	}
 
 	var (
@@ -254,7 +261,18 @@ func (m *manager) mediaMetaForNewEntity(ctx context.Context, session *fs.UploadS
 			return
 		}
 
-		mediaMetaTask, err := NewMediaMetaTask(ctx, session.Props.Uri, session.FileID, m.user.ID, session.EntityID, m.user)
+		ownerID := 0
+		if m.user != nil {
+			ownerID = m.user.ID
+		}
+		if m.fs != nil {
+			ownerCtx := withPublicBypass(ctx, session.Props.Uri)
+			if file, err := m.fs.Get(ownerCtx, session.Props.Uri, dbfs.WithFileEntities(), dbfs.WithNotRoot()); err == nil && file != nil {
+				ownerID = file.OwnerID()
+			}
+		}
+
+		mediaMetaTask, err := NewMediaMetaTask(ctx, session.Props.Uri, session.FileID, ownerID, session.EntityID, m.user)
 		if err != nil {
 			m.l.Warning("Failed to create media meta task: %s", err)
 			return

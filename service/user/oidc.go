@@ -288,7 +288,7 @@ func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, st
 
 	scope := strings.TrimSpace(cfg.Scope)
 	if scope == "" {
-		scope = "openid user_info user.read"
+		scope = "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write"
 	}
 
 	query := parsed.Query()

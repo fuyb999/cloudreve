@@ -78,7 +78,7 @@ func TestBuildVisibilityFilterConversions(t *testing.T) {
 	}
 
 	filter := BuildVisibilityFilter(grants)
-	if filter == nil || filter.Operator != FileFilterOpOr || len(filter.Children) != 2 {
+	if filter == nil || filter.Match == nil || filter.Match.Kind != FileFilterMatchTreePathIn {
 		t.Fatalf("unexpected filter: %#v", filter)
 	}
 
@@ -86,40 +86,12 @@ func TestBuildVisibilityFilterConversions(t *testing.T) {
 		"bool": map[string]any{
 			"minimum_should_match": 1,
 			"should": []any{
-				map[string]any{
-					"bool": map[string]any{
-						"filter": []any{
-							map[string]any{"terms": map[string]any{"owner_id": []int{10}}},
-							map[string]any{
-								"bool": map[string]any{
-									"minimum_should_match": 1,
-									"should": []any{
-										map[string]any{"term": map[string]any{"tree_path": "1.2"}},
-										map[string]any{"prefix": map[string]any{"tree_path": "1.2."}},
-										map[string]any{"term": map[string]any{"tree_path": "1.3"}},
-										map[string]any{"prefix": map[string]any{"tree_path": "1.3."}},
-									},
-								},
-							},
-						},
-					},
-				},
-				map[string]any{
-					"bool": map[string]any{
-						"filter": []any{
-							map[string]any{"terms": map[string]any{"owner_id": []int{20}}},
-							map[string]any{
-								"bool": map[string]any{
-									"minimum_should_match": 1,
-									"should": []any{
-										map[string]any{"term": map[string]any{"tree_path": "2.5"}},
-										map[string]any{"prefix": map[string]any{"tree_path": "2.5."}},
-									},
-								},
-							},
-						},
-					},
-				},
+				map[string]any{"term": map[string]any{"tree_path": "1.2"}},
+				map[string]any{"prefix": map[string]any{"tree_path": "1.2."}},
+				map[string]any{"term": map[string]any{"tree_path": "1.3"}},
+				map[string]any{"prefix": map[string]any{"tree_path": "1.3."}},
+				map[string]any{"term": map[string]any{"tree_path": "2.5"}},
+				map[string]any{"prefix": map[string]any{"tree_path": "2.5."}},
 			},
 		},
 	}
@@ -128,7 +100,7 @@ func TestBuildVisibilityFilterConversions(t *testing.T) {
 		t.Fatalf("unexpected elasticsearch filter: %#v", got)
 	}
 
-	expectedMeili := `((owner_id IN [10] AND ((tree_path = "1.2" OR tree_path STARTS WITH "1.2.") OR (tree_path = "1.3" OR tree_path STARTS WITH "1.3."))) OR (owner_id IN [20] AND (tree_path = "2.5" OR tree_path STARTS WITH "2.5.")))`
+	expectedMeili := `((tree_path = "1.2" OR tree_path STARTS WITH "1.2.") OR (tree_path = "1.3" OR tree_path STARTS WITH "1.3.") OR (tree_path = "2.5" OR tree_path STARTS WITH "2.5."))`
 	if got := ToMeilisearchFilter(filter); got != expectedMeili {
 		t.Fatalf("unexpected meilisearch filter: %s", got)
 	}

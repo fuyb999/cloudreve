@@ -138,7 +138,7 @@ func upsertFTSDocument(ctx context.Context, fm *manager, uri *fs.URI, doc *searc
 	}
 
 	if uri != nil {
-		if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
+		if err := fm.fs.PatchMetadata(withPublicBypass(ctx, uri), []*fs.URI{uri}, fs.MetadataPatch{
 			Key:   dbfs.FullTextIndexKey,
 			Value: dbfs.BuildFullTextIndexMetadataValue(fm.hasher, doc.FileID, doc.EntityID),
 		}); err != nil {

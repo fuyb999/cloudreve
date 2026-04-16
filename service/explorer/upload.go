@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
@@ -13,8 +14,10 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -44,6 +47,14 @@ func (service *CreateUploadSessionService) Create(c context.Context) (*UploadSes
 	uri, err := fs.NewUriFromString(service.Uri)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+	if uri.FileSystem() == constants.FileSystemPublic {
+		visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
+		visibility, err := visibilityService.ResolveVisibility(c, user)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
+		}
+		c = context.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
 	}
 
 	var entityType *types.EntityType
@@ -124,6 +135,7 @@ func (service *UploadService) LocalUpload(c *gin.Context) error {
 	if uploadSession.UID != user.ID {
 		return serializer.NewError(serializer.CodeUploadSessionExpired, "", nil)
 	}
+	applyUploadSessionPublicVisibility(c, &uploadSession)
 
 	// Confirm upload session and chunk index
 	placeholder, err := m.ConfirmUploadSession(c, &uploadSession, service.Index)
@@ -152,6 +164,7 @@ func (service *UploadService) SlaveUpload(c *gin.Context) error {
 
 	// Parse chunk index from query
 	service.Index, _ = strconv.Atoi(c.Query("chunk"))
+	applyUploadSessionPublicVisibility(c, &uploadSession)
 
 	m := manager.NewFileManager(dep, nil)
 	defer m.Recycle()
@@ -235,4 +248,17 @@ func (service *DeleteUploadSessionService) Delete(c *gin.Context) error {
 	}
 
 	return m.CancelUploadSession(c, uri, service.ID)
+}
+
+func applyUploadSessionPublicVisibility(c *gin.Context, session *fs.UploadSession) {
+	if c == nil || session == nil || session.PublicVisibility == "" {
+		return
+	}
+
+	visibility, err := publicshare.DecodeVisibilityOverride(session.PublicVisibility)
+	if err != nil || visibility == nil {
+		return
+	}
+
+	util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
 }

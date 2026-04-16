@@ -205,6 +205,8 @@ func (m *manager) saveMediaMeta(ctx context.Context, uri *fs.URI, fileID, ownerI
 		return nil
 	}
 
+	ctx = withPublicBypass(ctx, uri)
+
 	if err := m.fs.PatchMetadata(ctx, []*fs.URI{uri}, lo.Map(metas, func(i driver.MediaMeta, index int) fs.MetadataPatch {
 		return fs.MetadataPatch{
 			Key:   fmt.Sprintf("%s:%s", i.Type, i.Key),

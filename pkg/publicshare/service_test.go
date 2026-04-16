@@ -2,6 +2,7 @@ package publicshare
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -73,5 +74,22 @@ func TestCreateRootFolderUsesRequesterOwnerInsteadOfHiddenRootOwner(t *testing.T
 	}
 	if folder.FileChildren != root.ID {
 		t.Fatalf("public root folder parent mismatch: got %d want %d", folder.FileChildren, root.ID)
+	}
+}
+
+func TestBuildVisibilityFilterUsesTreePathOnlyForPublicSubtree(t *testing.T) {
+	filter := BuildVisibilityFilter([]RootGrant{
+		{RootFileID: 100, RootOwnerID: -1, RootTreePath: "1.100"},
+		{RootFileID: 200, RootOwnerID: 88, RootTreePath: "1.200"},
+	})
+
+	if filter == nil || filter.Match == nil {
+		t.Fatalf("expected visibility filter match")
+	}
+	if filter.Match.Kind != FileFilterMatchTreePathIn {
+		t.Fatalf("unexpected filter kind: %s", filter.Match.Kind)
+	}
+	if !reflect.DeepEqual(filter.Match.StringValues, []string{"1.100", "1.200"}) {
+		t.Fatalf("unexpected tree path prefixes: %+v", filter.Match.StringValues)
 	}
 }

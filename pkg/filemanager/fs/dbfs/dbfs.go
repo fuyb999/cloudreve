@@ -323,6 +323,28 @@ func (f *DBFS) CreateEntity(ctx context.Context, file fs.File, policy *ent.Stora
 	return fs.NewEntity(entity), nil
 }
 
+func (f *DBFS) ownerForNewChild(ctx context.Context, parent *File) (*ent.User, error) {
+	if parent == nil || parent.IsNil() {
+		return nil, fmt.Errorf("parent is nil")
+	}
+
+	if parent.Uri(false) != nil && parent.Uri(false).FileSystem() == constants.FileSystemPublic &&
+		f.user != nil && f.user.ID > 0 {
+		if f.user.Edges.Group != nil {
+			return f.user, nil
+		}
+
+		loadCtx := context.WithValue(ctx, inventory.LoadUserGroup{}, true)
+		owner, err := f.userClient.GetByID(loadCtx, f.user.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load creator owner %d: %w", f.user.ID, err)
+		}
+		return owner, nil
+	}
+
+	return f.ensureOwnerWithGroup(ctx, parent)
+}
+
 func (f *DBFS) SharedAddressTranslation(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.File, *fs.URI, error) {
 	o := newDbfsOption()
 	for _, opt := range opts {
@@ -654,7 +676,13 @@ func (f *DBFS) ExecuteNavigatorHooks(ctx context.Context, hookType fs.HookType, 
 
 // createFile creates a file with given name and type under given parent folder
 func (f *DBFS) createFile(ctx context.Context, parent *File, name string, fileType types.FileType, o *dbfsOption) (*File, error) {
+	owner, err := f.ownerForNewChild(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+
 	createFileArgs := &inventory.CreateFileParameters{
+		Owner:               owner.ID,
 		FileType:            fileType,
 		Name:                name,
 		MetadataPrivateMask: make(map[string]bool),
@@ -671,10 +699,10 @@ func (f *DBFS) createFile(ctx context.Context, parent *File, name string, fileTy
 	if o.preferredStoragePolicy != nil {
 		createFileArgs.StoragePolicyID = o.preferredStoragePolicy.ID
 	} else {
-		// get preferred storage policy
-		policy, err := f.getPreferredPolicy(ctx, parent)
+		// New children should follow the effective owner of the newly created resource.
+		policy, err := f.storagePolicyClient.GetByGroup(ctx, owner.Edges.Group)
 		if err != nil {
-			return nil, err
+			return nil, serializer.NewError(serializer.CodeDBError, "Failed to get available storage policies", err)
 		}
 
 		createFileArgs.StoragePolicyID = policy.ID

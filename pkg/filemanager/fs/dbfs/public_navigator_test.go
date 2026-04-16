@@ -194,7 +194,35 @@ func TestTopLevelProjectedRootGrantsCollapsesDescendants(t *testing.T) {
 	}
 
 	filtered := topLevelProjectedRootGrants(grants)
-	assertProjectedGrantIDs(t, filtered, []int{20, 40, 50})
+	assertProjectedGrantIDs(t, filtered, []int{20, 50})
+}
+
+func TestPublicNavigatorGrantForFileMatchesTreePathAcrossDifferentOwners(t *testing.T) {
+	n := &publicNavigator{
+		visibility: &publicshare.VisibilityResult{
+			RootGrants: []publicshare.RootGrant{
+				{RootFileID: 20, RootOwnerID: -1, RootTreePath: "10.20"},
+			},
+		},
+	}
+
+	target := &File{
+		Model: &ent.File{
+			ID:       88,
+			OwnerID:  12345,
+			TreePath: "10.20.88",
+			Name:     "spec.md",
+			Type:     int(types.FileTypeFile),
+		},
+	}
+
+	grant, ok := n.grantForFile(target)
+	if !ok {
+		t.Fatalf("expected file under public subtree to inherit grant")
+	}
+	if grant.RootFileID != 20 {
+		t.Fatalf("unexpected matched grant: %+v", grant)
+	}
 }
 
 func TestShouldDeferPublicCapabilityCheck(t *testing.T) {

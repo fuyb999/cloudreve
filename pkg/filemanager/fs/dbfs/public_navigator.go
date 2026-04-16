@@ -275,7 +275,6 @@ func (n *publicNavigator) grantForFile(file *File) (publicshare.RootGrant, bool)
 	}
 
 	targetID := file.ID()
-	targetOwnerID := file.OwnerID()
 	targetPath := strings.TrimSpace(file.Model.TreePath)
 
 	var (
@@ -283,10 +282,6 @@ func (n *publicNavigator) grantForFile(file *File) (publicshare.RootGrant, bool)
 		matchedDepth = -1
 	)
 	for _, grant := range n.visibility.RootGrants {
-		if grant.RootOwnerID != 0 && grant.RootOwnerID != targetOwnerID {
-			continue
-		}
-
 		if grant.RootFileID == targetID {
 			return grant, true
 		}
@@ -684,9 +679,6 @@ func topLevelProjectedRootGrants(grants []publicshare.RootGrant) []publicshare.R
 		if leftDepth != rightDepth {
 			return leftDepth < rightDepth
 		}
-		if sorted[i].RootOwnerID != sorted[j].RootOwnerID {
-			return sorted[i].RootOwnerID < sorted[j].RootOwnerID
-		}
 		if sorted[i].RootTreePath != sorted[j].RootTreePath {
 			return sorted[i].RootTreePath < sorted[j].RootTreePath
 		}
@@ -697,9 +689,6 @@ func topLevelProjectedRootGrants(grants []publicshare.RootGrant) []publicshare.R
 	for _, grant := range sorted {
 		skip := false
 		for _, existing := range filtered {
-			if existing.RootOwnerID != grant.RootOwnerID {
-				continue
-			}
 			if publicshare.RootGrantWithinTree(existing.RootTreePath, grant) {
 				skip = true
 				break

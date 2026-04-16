@@ -411,7 +411,7 @@ func persistFTSSidecars(
 		}
 	}
 
-	if err := internal.fs.PatchMetadata(ctx, []*fs.URI{uri}, patches...); err != nil {
+	if err := internal.fs.PatchMetadata(withPublicBypass(ctx, uri), []*fs.URI{uri}, patches...); err != nil {
 		internal.l.Warning("Failed to update Tika sidecar metadata for file %d: %s", fileModel.ID, err)
 	}
 }
@@ -654,7 +654,7 @@ func (m *manager) persistExternalFTSSidecars(
 		}
 	}
 
-	if err := m.fs.PatchMetadata(ctx, []*fs.URI{uri}, patches...); err != nil {
+	if err := m.fs.PatchMetadata(withPublicBypass(ctx, uri), []*fs.URI{uri}, patches...); err != nil {
 		return nil, "", fmt.Errorf("failed to update external fts sidecar metadata: %w", err)
 	}
 
@@ -1004,7 +1004,7 @@ func (m *manager) cloneFTSSidecarsForCopiedFile(ctx context.Context, originalFil
 		return false, fmt.Errorf("failed to resolve copied file uri: %w", err)
 	}
 
-	if err := m.fs.PatchMetadata(ctx, []*fs.URI{targetURI},
+	if err := m.fs.PatchMetadata(withPublicBypass(ctx, targetURI), []*fs.URI{targetURI},
 		fs.MetadataPatch{
 			Key:     dbfs.FTSSidecarManifestKey,
 			Value:   targetManifestPath,

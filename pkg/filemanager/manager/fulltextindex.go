@@ -41,10 +41,11 @@ type (
 	FullTextIndexTaskPhase string
 
 	FullTextIndexTaskItem struct {
-		Uri      *fs.URI `json:"uri,omitempty"`
-		EntityID int     `json:"entity_id,omitempty"`
-		FileID   int     `json:"file_id"`
-		OwnerID  int     `json:"owner_id,omitempty"`
+		Uri              *fs.URI                       `json:"uri,omitempty"`
+		EntityID         int                           `json:"entity_id,omitempty"`
+		FileID           int                           `json:"file_id"`
+		OwnerID          int                           `json:"owner_id,omitempty"`
+		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 	}
 
 	FullTextIndexTaskState struct {
@@ -129,12 +130,6 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 				Operator: publicshare.FileFilterOpAnd,
 				Children: []*publicshare.FileFilterExpr{
 					filter,
-					{
-						Match: &publicshare.FileFilterMatch{
-							Kind:      publicshare.FileFilterMatchOwnerIDIn,
-							IntValues: []int{target.OwnerID()},
-						},
-					},
 				},
 			}
 			if model, ok := target.(*dbfs.File); ok && model.Model.TreePath != "" {
@@ -194,7 +189,7 @@ func init() {
 }
 
 func NewFullTextIndexTask(ctx context.Context, uri *fs.URI, entityID, fileID, ownerID int, creator *ent.User) (*FullTextIndexTask, error) {
-	state := newFullTextIndexTaskState(uri, entityID, fileID, ownerID)
+	state := newFullTextIndexTaskState(ctx, uri, entityID, fileID, ownerID)
 	stateBytes, err := marshalFullTextIndexTaskState(state)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal state: %w", err)
@@ -221,13 +216,14 @@ func NewFullTextIndexTaskFromModel(t *ent.Task) queue.Task {
 	}
 }
 
-func newFullTextIndexTaskState(uri *fs.URI, entityID, fileID, ownerID int) *FullTextIndexTaskState {
+func newFullTextIndexTaskState(ctx context.Context, uri *fs.URI, entityID, fileID, ownerID int) *FullTextIndexTaskState {
 	state := &FullTextIndexTaskState{}
 	state.Upsert(FullTextIndexTaskItem{
-		Uri:      uri,
-		EntityID: entityID,
-		FileID:   fileID,
-		OwnerID:  ownerID,
+		Uri:              uri,
+		EntityID:         entityID,
+		FileID:           fileID,
+		OwnerID:          ownerID,
+		PublicVisibility: publicshare.VisibilityOverrideFromContext(ctx),
 	})
 	return state
 }
@@ -710,6 +706,19 @@ func fullTextTaskContainsEquivalentItem(state *FullTextIndexTaskState, item Full
 	return false
 }
 
+func fullTextTaskSharesCorrelationScope(ctx context.Context, pendingTask *ent.Task) bool {
+	if pendingTask == nil || pendingTask.CorrelationID == nil {
+		return false
+	}
+
+	currentCorrelationID := logging.NillableCorrelationID(ctx)
+	if currentCorrelationID == nil {
+		return false
+	}
+
+	return *currentCorrelationID == *pendingTask.CorrelationID
+}
+
 type (
 	FullTextChangeOwnerTask struct {
 		*queue.DBTask
@@ -857,6 +866,7 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 	dep := dependency.FromContext(ctx)
 	l := dep.Logger()
 	fm := NewFileManager(dep, inventory.UserFromContext(ctx)).(*manager)
+	baseCtx := ctx
 
 	// Check FTS enabled
 	if !fm.settings.FTSEnabled(ctx) {
@@ -890,7 +900,11 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 			}
 
 			item, _ := state.Current()
-			next, err := t.dispatchOrIndexLocally(ctx, fm, state, item)
+			itemCtx := baseCtx
+			if item.PublicVisibility != nil {
+				itemCtx = context.WithValue(baseCtx, publicshare.VisibilityOverrideCtx{}, item.PublicVisibility)
+			}
+			next, err := t.dispatchOrIndexLocally(itemCtx, fm, state, item)
 			if err != nil {
 				return task.StatusError, err
 			}
@@ -898,7 +912,11 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 				return t.persistAndSuspend(state)
 			}
 		case fullTextIndexPhaseAwaitSlave:
-			next, err := t.awaitSlaveExtraction(ctx, fm, state)
+			itemCtx := baseCtx
+			if state.Active != nil && state.Active.PublicVisibility != nil {
+				itemCtx = context.WithValue(baseCtx, publicshare.VisibilityOverrideCtx{}, state.Active.PublicVisibility)
+			}
+			next, err := t.awaitSlaveExtraction(itemCtx, fm, state)
 			if err != nil {
 				return task.StatusError, err
 			}
@@ -906,7 +924,11 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 				return t.persistAndSuspend(state)
 			}
 		case fullTextIndexPhaseAwaitExternal:
-			next, err := t.awaitExternalExtraction(ctx, fm, state)
+			itemCtx := baseCtx
+			if state.Active != nil && state.Active.PublicVisibility != nil {
+				itemCtx = context.WithValue(baseCtx, publicshare.VisibilityOverrideCtx{}, state.Active.PublicVisibility)
+			}
+			next, err := t.awaitExternalExtraction(itemCtx, fm, state)
 			if err != nil {
 				return task.StatusError, err
 			}
@@ -1193,7 +1215,7 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	}
 
 	if uri != nil {
-		if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
+		if err := fm.fs.PatchMetadata(withPublicBypass(ctx, uri), []*fs.URI{uri}, fs.MetadataPatch{
 			Key:   dbfs.FullTextIndexKey,
 			Value: dbfs.BuildFullTextIndexMetadataValue(fm.hasher, doc.FileID, doc.EntityID),
 		}); err != nil {
@@ -1210,7 +1232,7 @@ func clearFullTextIndexMetadataBestEffort(ctx context.Context, fm *manager, uri 
 		return
 	}
 
-	if err := fm.fs.PatchMetadata(ctx, []*fs.URI{uri}, fs.MetadataPatch{
+	if err := fm.fs.PatchMetadata(withPublicBypass(ctx, uri), []*fs.URI{uri}, fs.MetadataPatch{
 		Key:    dbfs.FullTextIndexKey,
 		Remove: true,
 	}); err != nil {
@@ -1476,7 +1498,7 @@ func (m *manager) queueFullTextReconcile(ctx context.Context, uri *fs.URI, fileI
 	lock.Lock()
 	defer lock.Unlock()
 
-	state := newFullTextIndexTaskState(uri, entityID, fileID, ownerID)
+	state := newFullTextIndexTaskState(ctx, uri, entityID, fileID, ownerID)
 	merged, err := m.mergePendingFullTextTask(ctx, state)
 	if err != nil {
 		m.l.Warning("Failed to merge pending full text reconcile task for file %d: %s", fileID, err)
@@ -1602,6 +1624,9 @@ func (m *manager) mergePendingFullTextTask(ctx context.Context, state *FullTextI
 				continue
 			}
 			if pending[i].state.Len() >= fullTextMaxFilesPerTask {
+				continue
+			}
+			if !fullTextTaskSharesCorrelationScope(ctx, pending[i].task) {
 				continue
 			}
 			if targetIndex == -1 || pending[i].task.UpdatedAt.After(pending[targetIndex].task.UpdatedAt) {

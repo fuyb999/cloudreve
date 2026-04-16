@@ -15,6 +15,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 )
@@ -27,13 +28,14 @@ type (
 	DocumentInspectTaskPhase string
 
 	DocumentInspectTaskState struct {
-		Uri      *fs.URI                  `json:"uri"`
-		FileID   int                      `json:"file_id,omitempty"`
-		OwnerID  int                      `json:"owner_id,omitempty"`
-		EntityID int                      `json:"entity_id"`
-		Phase    DocumentInspectTaskPhase `json:"phase,omitempty"`
-		NodeID   int                      `json:"node_id,omitempty"`
-		SlaveID  int                      `json:"slave_id,omitempty"`
+		Uri              *fs.URI                       `json:"uri"`
+		FileID           int                           `json:"file_id,omitempty"`
+		OwnerID          int                           `json:"owner_id,omitempty"`
+		EntityID         int                           `json:"entity_id"`
+		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
+		Phase            DocumentInspectTaskPhase      `json:"phase,omitempty"`
+		NodeID           int                           `json:"node_id,omitempty"`
+		SlaveID          int                           `json:"slave_id,omitempty"`
 	}
 
 	DocumentInspection struct {
@@ -58,10 +60,11 @@ func init() {
 
 func NewDocumentInspectTask(ctx context.Context, uri *fs.URI, fileID, ownerID, entityID int, creator *ent.User) (*DocumentInspectTask, error) {
 	state := &DocumentInspectTaskState{
-		Uri:      uri,
-		FileID:   fileID,
-		OwnerID:  ownerID,
-		EntityID: entityID,
+		Uri:              uri,
+		FileID:           fileID,
+		OwnerID:          ownerID,
+		EntityID:         entityID,
+		PublicVisibility: publicshare.VisibilityOverrideFromContext(ctx),
 	}
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -116,6 +119,9 @@ func (t *DocumentInspectTask) Do(ctx context.Context) (task.Status, error) {
 	var state DocumentInspectTaskState
 	if err := json.Unmarshal([]byte(t.State()), &state); err != nil {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %s (%w)", err, queue.CriticalErr)
+	}
+	if state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, state.PublicVisibility)
 	}
 
 	var (
@@ -233,7 +239,18 @@ func (m *manager) documentInspectForNewEntity(ctx context.Context, session *fs.U
 		return
 	}
 
-	task, err := NewDocumentInspectTask(ctx, session.Props.Uri, session.FileID, m.user.ID, session.EntityID, m.user)
+	ownerID := 0
+	if m.user != nil {
+		ownerID = m.user.ID
+	}
+	if m.fs != nil {
+		ownerCtx := withPublicBypass(ctx, session.Props.Uri)
+		if file, err := m.fs.Get(ownerCtx, session.Props.Uri, dbfs.WithFileEntities(), dbfs.WithNotRoot()); err == nil && file != nil {
+			ownerID = file.OwnerID()
+		}
+	}
+
+	task, err := NewDocumentInspectTask(ctx, session.Props.Uri, session.FileID, ownerID, session.EntityID, m.user)
 	if err != nil {
 		m.l.Warning("Failed to create document inspect task: %s", err)
 		return
@@ -286,6 +303,8 @@ func (m *manager) patchDocumentInspectionMetadata(ctx context.Context, uri *fs.U
 	if uri == nil {
 		return nil
 	}
+
+	ctx = withPublicBypass(ctx, uri)
 
 	patches := []fs.MetadataPatch{
 		{Key: dbfs.DocInspectMimeKey, Remove: true, Private: true},

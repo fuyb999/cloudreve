@@ -260,20 +260,21 @@ type (
 
 	// UploadSession stores the information of an upload session, used in server side.
 	UploadSession struct {
-		UID             int // 发起者
-		Policy          *ent.StoragePolicy
-		FileID          int    // ID of the placeholder file
-		EntityID        int    // ID of the new entity
-		Callback        string // 回调 URL 地址
-		CallbackSecret  string // Callback secret
-		UploadID        string // Multi-part upload ID
-		UploadURL       string
-		Credential      string
-		ChunkSize       int64
-		SentinelTaskID  int
-		NewFileCreated  bool // If new file is created for this session
-		Importing       bool // If the upload is importing from another file
-		EncryptMetadata *types.EncryptMetadata
+		UID              int // 发起者
+		Policy           *ent.StoragePolicy
+		FileID           int    // ID of the placeholder file
+		EntityID         int    // ID of the new entity
+		Callback         string // 回调 URL 地址
+		CallbackSecret   string // Callback secret
+		UploadID         string // Multi-part upload ID
+		UploadURL        string
+		Credential       string
+		ChunkSize        int64
+		SentinelTaskID   int
+		NewFileCreated   bool // If new file is created for this session
+		Importing        bool // If the upload is importing from another file
+		EncryptMetadata  *types.EncryptMetadata
+		PublicVisibility string // Resolved public-file authorization snapshot for callback/background stages.
 
 		LockToken string // Token of the locked placeholder file
 		Props     *UploadProps

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -119,13 +120,13 @@ func (handler *Driver) Open(ctx context.Context, path string) (*os.File, error) 
 }
 
 func (handler *Driver) LocalPath(ctx context.Context, path string) string {
-	return util.RelativePath(filepath.FromSlash(path))
+	return resolveLocalStoragePath(path)
 }
 
 // Put 将文件流保存到指定目录
 func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 	defer file.Close()
-	dst := util.RelativePath(filepath.FromSlash(file.Props.SavePath))
+	dst := resolveLocalStoragePath(file.Props.SavePath)
 
 	// 如果非 Overwrite，则检查是否有重名冲突
 	if file.Mode&fs.ModeOverwrite != fs.ModeOverwrite {
@@ -177,7 +178,7 @@ func (handler *Driver) Delete(ctx context.Context, files ...string) ([]string, e
 	var retErr error
 
 	for _, value := range files {
-		filePath := util.RelativePath(filepath.FromSlash(value))
+		filePath := resolveLocalStoragePath(value)
 		if util.Exists(filePath) {
 			err := os.Remove(filePath)
 			if err != nil {
@@ -206,11 +207,11 @@ func (handler *Driver) Source(ctx context.Context, e fs.Entity, args *driver.Get
 
 // Token 获取上传策略和认证Token，本地策略直接返回空值
 func (handler *Driver) Token(ctx context.Context, uploadSession *fs.UploadSession, file *fs.UploadRequest) (*fs.UploadCredential, error) {
-	if file.Mode&fs.ModeOverwrite != fs.ModeOverwrite && util.Exists(uploadSession.Props.SavePath) {
+	dst := resolveLocalStoragePath(uploadSession.Props.SavePath)
+	if file.Mode&fs.ModeOverwrite != fs.ModeOverwrite && util.Exists(dst) {
 		return nil, errors.New("placeholder file already exist")
 	}
 
-	dst := util.RelativePath(filepath.FromSlash(uploadSession.Props.SavePath))
 	if err := handler.prepareFileDirectory(dst); err != nil {
 		return nil, fmt.Errorf("failed to prepare file directory: %w", err)
 	}
@@ -245,6 +246,23 @@ func (h *Driver) prepareFileDirectory(dst string) error {
 	}
 
 	return nil
+}
+
+func resolveLocalStoragePath(name string) string {
+	relative := filepath.FromSlash(name)
+	cleaned := filepath.Clean(relative)
+	if cleaned == "." {
+		return util.RelativePath(cleaned)
+	}
+
+	// Internal artifacts use the reserved "cloudreve/" prefix. Persist them
+	// under the data directory so they don't collide with the workspace root
+	// binary named "cloudreve" during local development/smoke runs.
+	if cleaned == "cloudreve" || strings.HasPrefix(cleaned, "cloudreve"+string(filepath.Separator)) {
+		return util.DataPath(cleaned)
+	}
+
+	return util.RelativePath(cleaned)
 }
 
 // 取消上传凭证

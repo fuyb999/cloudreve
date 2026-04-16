@@ -119,6 +119,11 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 		return nil, err
 	}
 
+	childOwner, err := f.ownerForNewChild(ctx, ancestor)
+	if err != nil {
+		return nil, err
+	}
+
 	// For all ancestors in user's desired path, create folders if not exist
 	existedElements := ancestor.Uri(false).Elements()
 	desired := path.Elements()
@@ -139,7 +144,7 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 
 		if i < len(desired)-1 || fileType == types.FileTypeFolder {
 			args := &inventory.CreateFolderParameters{
-				Owner: ancestor.Model.OwnerID,
+				Owner: childOwner.ID,
 				Name:  desired[i],
 			}
 

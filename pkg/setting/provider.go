@@ -405,7 +405,7 @@ func (s *settingProvider) OIDC(ctx context.Context) *OIDCSetting {
 		WellKnownURL: s.getString(ctx, "oidc_wellknown_url", ""),
 		ClientID:     s.getString(ctx, "oidc_client_id", ""),
 		ClientSecret: s.getString(ctx, "oidc_client_secret", ""),
-		Scope:        s.getString(ctx, "oidc_scope", "openid user_info user.read"),
+		Scope:        s.getString(ctx, "oidc_scope", "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write"),
 	}
 }
 

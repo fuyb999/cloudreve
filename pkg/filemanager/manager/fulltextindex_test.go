@@ -32,6 +32,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/mediameta"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
@@ -39,6 +40,7 @@ import (
 	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/thumb"
+	"github.com/gofrs/uuid"
 )
 
 type testTextExtractor struct {
@@ -161,7 +163,7 @@ func TestFullTextIndexTaskStatePreservesLatestHeadAfterReplacement(t *testing.T)
 	uriA, _ := fs.NewUriFromString("cloudreve:///my/original.txt")
 	uriB, _ := fs.NewUriFromString("cloudreve:///my/replaced.txt")
 
-	state := newFullTextIndexTaskState(uriA, 11, 1, 22)
+	state := newFullTextIndexTaskState(context.Background(), uriA, 11, 1, 22)
 	state.Upsert(FullTextIndexTaskItem{
 		FileID:   1,
 		OwnerID:  33,
@@ -353,7 +355,8 @@ func TestProcessIndexDiffQueuesAllOperationTypes(t *testing.T) {
 }
 
 func TestQueueFullTextReconcileStressMergesIntoPendingTask(t *testing.T) {
-	ctx := context.Background()
+	correlationID := uuid.Must(uuid.NewV4())
+	ctx := context.WithValue(context.Background(), logging.CorrelationIDCtx{}, correlationID)
 	settings := testSettingProvider{enabled: true}
 	pending := &ent.Task{
 		ID:           1,
@@ -362,6 +365,7 @@ func TestQueueFullTextReconcileStressMergesIntoPendingTask(t *testing.T) {
 		UpdatedAt:    time.Now(),
 		PrivateState: "",
 	}
+	pending.CorrelationID = &correlationID
 	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
 	tasks := &testQueue{}
 	dep := testDep{
@@ -397,7 +401,7 @@ func TestQueueFullTextReconcileStressMergesIntoPendingTask(t *testing.T) {
 	}
 
 	if len(tasks.tasks) != 0 {
-		t.Fatalf("expected all reconcile requests to merge into pending task, got %d new task(s)", len(tasks.tasks))
+		t.Fatalf("expected same-correlation reconcile requests to merge into pending task, got %d new task(s)", len(tasks.tasks))
 	}
 
 	state := mustParseState(t, pending.PrivateState)
@@ -564,6 +568,36 @@ func TestFullTextIndexForNewEntitySkipsWhenContextDisablesNativeFTSEnqueue(t *te
 	}
 }
 
+func TestNewFullTextIndexTaskStateCarriesPublicVisibility(t *testing.T) {
+	uri := mustURI(t, "cloudreve://public/研发部/方案.docx")
+	override := &publicshare.VisibilityResult{
+		RootGrants: []publicshare.RootGrant{
+			{
+				RootFileID:   20,
+				RootOwnerID:  7,
+				RootTreePath: "10.20",
+				Actions: map[publicshare.Action]bool{
+					publicshare.ActionList:   true,
+					publicshare.ActionUpload: true,
+				},
+			},
+		},
+	}
+	ctx := context.WithValue(context.Background(), publicshare.VisibilityOverrideCtx{}, override)
+
+	state := newFullTextIndexTaskState(ctx, uri, 11, 22, 33)
+	item, ok := state.Current()
+	if !ok {
+		t.Fatal("expected current full text task item")
+	}
+	if item.PublicVisibility == nil {
+		t.Fatal("expected public visibility to be copied into task item")
+	}
+	if len(item.PublicVisibility.RootGrants) != 1 || item.PublicVisibility.RootGrants[0].RootFileID != 20 {
+		t.Fatalf("unexpected task item visibility: %+v", item.PublicVisibility.RootGrants)
+	}
+}
+
 func TestQueueFullTextReconcileCollapsesDuplicateFileAcrossPendingTasks(t *testing.T) {
 	ctx := context.Background()
 	settings := testSettingProvider{enabled: true}
@@ -715,6 +749,87 @@ func TestQueueFullTextReconcileDoesNotMergeIntoAwaitingSlaveTask(t *testing.T) {
 	if originalState.Phase != fullTextIndexPhaseAwaitSlave || originalState.Active == nil || originalState.SlaveID != 15 {
 		t.Fatalf("expected awaiting-slave markers to stay intact, got %+v", originalState)
 	}
+}
+
+func TestQueueFullTextReconcileDoesNotMergeIntoUnrelatedPendingTaskWithoutCorrelation(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettingProvider{enabled: true}
+	pending := newPendingFTSTask(t, 1, time.Now(), FullTextIndexTaskItem{
+		FileID:   701,
+		OwnerID:  801,
+		EntityID: 901,
+		Uri:      mustURI(t, "cloudreve://public/team-a/seed.txt"),
+	})
+
+	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
+	tasks := &testQueue{}
+	dep := testDep{
+		settings:   settings,
+		taskClient: taskClient,
+		mediaMeta:  tasks,
+		registry:   queue.NewTaskRegistry(),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		settings: settings,
+		dep:      dep,
+	}
+
+	newURI := mustURI(t, "cloudreve:///share-save/copied.txt")
+	m.queueFullTextReconcile(ctx, newURI, 702, 802, 902)
+
+	if len(tasks.tasks) != 1 {
+		t.Fatalf("expected unrelated pending task to be skipped for merge, got %d new task(s)", len(tasks.tasks))
+	}
+	assertQueuedState(t, tasks.tasks[0], 702, 802, 902, newURI.String())
+
+	originalState := mustParseState(t, pending.PrivateState)
+	if originalState.Len() != 1 || !originalState.Contains(701) || originalState.Contains(702) {
+		t.Fatalf("expected unrelated pending task to stay unchanged, got %+v", originalState.Items())
+	}
+}
+
+func TestQueueFullTextReconcileMergesIntoRelatedPendingTaskWithSameCorrelation(t *testing.T) {
+	correlationID := uuid.Must(uuid.NewV4())
+	ctx := context.WithValue(context.Background(), logging.CorrelationIDCtx{}, correlationID)
+	settings := testSettingProvider{enabled: true}
+	pending := newPendingFTSTask(t, 1, time.Now(), FullTextIndexTaskItem{
+		FileID:   701,
+		OwnerID:  801,
+		EntityID: 901,
+		Uri:      mustURI(t, "cloudreve:///batch/seed.txt"),
+	})
+	pending.CorrelationID = &correlationID
+
+	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
+	tasks := &testQueue{}
+	dep := testDep{
+		settings:   settings,
+		taskClient: taskClient,
+		mediaMeta:  tasks,
+		registry:   queue.NewTaskRegistry(),
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 1},
+		settings: settings,
+		dep:      dep,
+	}
+
+	newURI := mustURI(t, "cloudreve:///batch/next.txt")
+	m.queueFullTextReconcile(ctx, newURI, 702, 802, 902)
+
+	if len(tasks.tasks) != 0 {
+		t.Fatalf("expected same-correlation pending task to absorb merge, got %d new task(s)", len(tasks.tasks))
+	}
+
+	state := mustParseState(t, pending.PrivateState)
+	if state.Len() != 2 {
+		t.Fatalf("expected pending task to contain 2 files after merge, got %+v", state.Items())
+	}
+	assertStateItem(t, state.Items()[0], 701, 801, 901, "cloudreve:///batch/seed.txt")
+	assertStateItem(t, state.Items()[1], 702, 802, 902, newURI.String())
 }
 
 func TestProcessIndexDiffSequenceLastOperationWinsForSameFile(t *testing.T) {
@@ -1663,7 +1778,7 @@ func TestSourceFullTextExtractionPendingDetectsAwaitingSourceTask(t *testing.T) 
 }
 
 func TestSourceFullTextExtractionPendingIgnoresDeleteOnlyTask(t *testing.T) {
-	state := newFullTextIndexTaskState(nil, 0, 902, 0)
+	state := newFullTextIndexTaskState(context.Background(), nil, 0, 902, 0)
 	stateBytes, err := marshalFullTextIndexTaskState(state)
 	if err != nil {
 		t.Fatalf("failed to marshal delete-only state: %v", err)
@@ -2068,6 +2183,44 @@ func TestApplySlaveFTSSidecarResultPatchesMetadata(t *testing.T) {
 	}
 	if backend.patches[1].Key != dbfs.FTSSidecarEntityIDKey || backend.patches[1].Value != "901" || !backend.patches[1].Private {
 		t.Fatalf("unexpected entity metadata patch: %+v", backend.patches[1])
+	}
+}
+
+func TestApplySlaveFTSSidecarResultPublicURIUsesBypassOwnerCheck(t *testing.T) {
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			803: {
+				ID:            803,
+				OwnerID:       703,
+				Name:          "public-finalize.pdf",
+				PrimaryEntity: 903,
+				Edges: ent.FileEdges{
+					Metadata: []*ent.Metadata{},
+				},
+			},
+		},
+	}
+	backend := &testMetadataFS{}
+	m := &manager{
+		fs:       backend,
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings:   testSettingProvider{enabled: true},
+			fileClient: fileClient,
+		},
+	}
+
+	uri := mustURI(t, "cloudreve://public/shared/public-finalize.pdf")
+	err := m.applySlaveFTSSidecarResult(context.Background(), 803, uri, &SlaveFullTextExtractResult{
+		EntityID:     903,
+		ManifestPath: "cloudreve/fts-sidecar/703/803/903/manifest.json",
+	})
+	if err != nil {
+		t.Fatalf("unexpected applySlaveFTSSidecarResult error: %v", err)
+	}
+
+	if len(backend.bypassStates) != 1 || !backend.bypassStates[0] {
+		t.Fatalf("expected public metadata patch to enable bypass owner check, got %+v", backend.bypassStates)
 	}
 }
 
@@ -2669,13 +2822,16 @@ func (n *testClusterNode) GetTask(ctx context.Context, id int, clearOnComplete b
 
 type testMetadataFS struct {
 	fs.FileSystem
-	paths   []*fs.URI
-	patches []fs.MetadataPatch
+	paths        []*fs.URI
+	patches      []fs.MetadataPatch
+	bypassStates []bool
 }
 
 func (f *testMetadataFS) PatchMetadata(ctx context.Context, path []*fs.URI, metas ...fs.MetadataPatch) error {
 	f.paths = append(f.paths, path...)
 	f.patches = append(f.patches, metas...)
+	_, bypassed := ctx.Value(dbfs.ByPassOwnerCheckCtxKey{}).(bool)
+	f.bypassStates = append(f.bypassStates, bypassed)
 	return nil
 }
 

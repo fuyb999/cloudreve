@@ -86,6 +86,11 @@ func (m *manager) CreateUploadSession(ctx context.Context, req *fs.UploadRequest
 			return nil, fmt.Errorf("faield to prepare uplaod: %w", err)
 		}
 	}
+	if payload := publicVisibilityPayload(ctx); payload != "" {
+		uploadSession.PublicVisibility = payload
+	} else {
+		ctx = withUploadSessionPublicVisibility(ctx, uploadSession)
+	}
 
 	effectivePolicy := m.CastStoragePolicyOnSlave(ctx, uploadSession.Policy)
 	if m.stateless && uploadSession != nil && uploadSession.Policy != nil {
@@ -164,6 +169,8 @@ func (m *manager) CreateUploadSession(ctx context.Context, req *fs.UploadRequest
 }
 
 func (m *manager) ConfirmUploadSession(ctx context.Context, session *fs.UploadSession, chunkIndex int) (fs.File, error) {
+	ctx = withUploadSessionPublicVisibility(ctx, session)
+	ctx = withPublicBypass(ctx, session.Props.Uri)
 	// Get placeholder file
 	file, err := m.fs.Get(ctx, session.Props.Uri)
 	if err != nil {
@@ -246,6 +253,10 @@ func (m *manager) CancelUploadSession(ctx context.Context, path *fs.URI, session
 	if ok {
 		if sessionTyped, sessionOK := sessionRaw.(fs.UploadSession); sessionOK {
 			session = &sessionTyped
+			ctx = withUploadSessionPublicVisibility(ctx, session)
+			if session.Props != nil && session.Props.Uri != nil {
+				ctx = withPublicBypass(ctx, session.Props.Uri)
+			}
 		} else {
 			m.l.Warning("Ignoring invalid upload session cache entry for %q: %T", sessionID, sessionRaw)
 		}
@@ -309,6 +320,8 @@ func (m *manager) CancelUploadSession(ctx context.Context, path *fs.URI, session
 }
 
 func (m *manager) CompleteUpload(ctx context.Context, session *fs.UploadSession) (fs.File, error) {
+	ctx = withUploadSessionPublicVisibility(ctx, session)
+	ctx = withPublicBypass(ctx, session.Props.Uri)
 	d, err := m.GetStorageDriver(ctx, m.CastStoragePolicyOnSlave(ctx, session.Policy))
 	if err != nil {
 		return nil, err
@@ -391,6 +404,10 @@ func (m *manager) Update(ctx context.Context, req *fs.UploadRequest, opts ...fs.
 
 func (m *manager) OnUploadFailed(ctx context.Context, session *fs.UploadSession) {
 	ctx = context.WithoutCancel(ctx)
+	ctx = withUploadSessionPublicVisibility(ctx, session)
+	if session != nil && session.Props != nil && session.Props.Uri != nil {
+		ctx = withPublicBypass(ctx, session.Props.Uri)
+	}
 	if !m.stateless {
 		if session.LockToken != "" {
 			if err := m.Unlock(ctx, session.LockToken); err != nil {
