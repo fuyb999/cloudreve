@@ -5,3 +5,6 @@
 !cloudreve
 !Dockerfile
 !.dockerignore
+!docker/
+!docker/tika-unrar/
+!docker/tika-unrar/**
