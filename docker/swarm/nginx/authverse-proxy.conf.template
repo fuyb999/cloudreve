@@ -45,6 +45,22 @@ server {
         proxy_send_timeout ${PROXY_SEND_TIMEOUT};
     }
 
+    location ^~ /system-api/ {
+        proxy_pass http://$upstream_authverse_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    }
+
     location ^~ /app-api/ {
         proxy_pass http://$upstream_authverse_backend;
         proxy_http_version 1.1;
