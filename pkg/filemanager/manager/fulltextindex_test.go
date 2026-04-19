@@ -1352,6 +1352,111 @@ func TestPerformIndexingUpsertsLatestVersionWhenTextExtractionFails(t *testing.T
 	}
 }
 
+func TestResolveFTSFileURIByModelPrefersPublicURI(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	fileModel := &ent.File{
+		ID:      12,
+		OwnerID: 7,
+		Name:    "说明.txt",
+	}
+	fileClient := &testFileClient{
+		ancestorByID: map[int][]*ent.File{
+			12: {
+				{ID: 1, Name: inventory.RootFolderName},
+				{ID: 9, Name: publicshare.DefaultRootName},
+				{ID: 10, Name: "研发部"},
+				{ID: 12, Name: "说明.txt"},
+			},
+		},
+	}
+	m := &manager{
+		l:      logging.NewConsoleLogger(logging.LevelError),
+		dep:    testDep{fileClient: fileClient, settingClient: testSettingClient{values: map[string]string{publicshare.PublicRootFileIDSetting: "9"}}, registry: queue.NewTaskRegistry()},
+		hasher: hasher,
+	}
+
+	got, err := m.resolveFTSFileURIByModel(context.Background(), fileModel)
+	if err != nil {
+		t.Fatalf("unexpected resolveFTSFileURIByModel error: %v", err)
+	}
+	want := mustURI(t, "cloudreve://public/研发部/说明.txt")
+	if got == nil || got.String() != want.String() {
+		t.Fatalf("unexpected public fts uri: got %+v want %s", got, want.String())
+	}
+}
+
+func TestPerformIndexingClearsFolderMetadataUsingPublicURI(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	fileModel := &ent.File{
+		ID:      12,
+		OwnerID: 7,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "研发部",
+	}
+	indexer := &testSearchIndexer{}
+	backend := &testMetadataFS{}
+	settings := testSettingProvider{enabled: true, syncFolders: false}
+	dep := testDep{
+		settings:      settings,
+		searchIndexer: indexer,
+		config:        testConfigProvider{},
+		fileClient: &testFileClient{
+			fileByID: map[int]*ent.File{
+				12: fileModel,
+			},
+			ancestorByID: map[int][]*ent.File{
+				12: {
+					{ID: 1, Name: inventory.RootFolderName},
+					{ID: 9, Name: publicshare.DefaultRootName},
+					{ID: 12, Name: "研发部"},
+				},
+			},
+		},
+		settingClient: testSettingClient{values: map[string]string{publicshare.PublicRootFileIDSetting: "9"}},
+		hasher:        hasher,
+		registry:      queue.NewTaskRegistry(),
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	status, err := performIndexing(ctx, &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		user:     &ent.User{ID: 7},
+		settings: settings,
+		dep:      dep,
+		hasher:   hasher,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != fileModel.ID {
+		t.Fatalf("expected folder index deletion, got %+v", indexer.deleted)
+	}
+	if len(backend.paths) != 1 {
+		t.Fatalf("expected one metadata patch path, got %+v", backend.paths)
+	}
+	if got, want := backend.paths[0].String(), mustURI(t, "cloudreve://public/研发部").String(); got != want {
+		t.Fatalf("unexpected metadata patch path: got %s want %s", got, want)
+	}
+	if len(backend.patches) != 1 || backend.patches[0].Key != dbfs.FullTextIndexKey || !backend.patches[0].Remove {
+		t.Fatalf("unexpected metadata patches: %+v", backend.patches)
+	}
+	if len(backend.bypassStates) != 1 || !backend.bypassStates[0] {
+		t.Fatalf("expected public metadata cleanup to enable bypass owner check, got %+v", backend.bypassStates)
+	}
+}
+
 func TestFullTextIndexTaskDoDispatchesToSlaveContentProcessing(t *testing.T) {
 	settings := testSettingProvider{
 		enabled: true,

@@ -148,6 +148,46 @@ func TestCreateSupportsRawID(t *testing.T) {
 	}
 }
 
+func TestCreateSupportsRawIDWithoutFirstUserPromotion(t *testing.T) {
+	client, err := ent.Open("sqlite3", "file:create-user-raw-id-no-promotion?mode=memory&cache=shared&_fk=1")
+	if err != nil {
+		t.Fatalf("failed to open sqlite client: %v", err)
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	if err := client.Schema.Create(ctx); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	if _, err := client.Group.Create().SetName("Admin").SetPermissions(&boolset.BooleanSet{}).Save(ctx); err != nil {
+		t.Fatalf("failed to create admin group: %v", err)
+	}
+	if _, err := client.Group.Create().SetName("User").SetPermissions(&boolset.BooleanSet{}).Save(ctx); err != nil {
+		t.Fatalf("failed to create user group: %v", err)
+	}
+
+	userClient := NewUserClient(client)
+	created, err := userClient.Create(ctx, &NewUserArgs{
+		RawID:                  1002,
+		Username:               "oidc-shadow-plain",
+		Email:                  "oidc-shadow-plain@example.com",
+		Status:                 user.StatusActive,
+		GroupID:                2,
+		SkipFirstUserPromotion: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create raw-id user without first-user promotion: %v", err)
+	}
+
+	if created.ID != 1002 {
+		t.Fatalf("unexpected raw user id: got %d want 1002", created.ID)
+	}
+	if created.GroupUsers != 2 {
+		t.Fatalf("expected raw-id user to keep configured group, got group_id=%d", created.GroupUsers)
+	}
+}
+
 func TestListUsersAndSearchActiveHideInternalSystemUser(t *testing.T) {
 	client, err := ent.Open("sqlite3", "file:hide-internal-user?mode=memory&cache=shared&_fk=1")
 	if err != nil {

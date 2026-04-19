@@ -174,6 +174,7 @@ func (service *OIDCPrepareService) Prepare(c *gin.Context) (*OIDCPrepareResponse
 // Exchange 用授权码换取上游 access token，再同步/创建本地影子用户并把 provider token 直接返回给前端。
 func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeResponse, error) {
 	dep := dependency.FromContext(c)
+	dep.Logger().Info("OIDC exchange started, state=%s", service.State)
 	oidcSetting := loadEffectiveOIDCSetting(c, dep)
 	if !oidcSetting.Enabled {
 		return nil, serializer.NewError(serializer.CodeFeatureNotEnabled, "OIDC sign-in is disabled", nil)
@@ -195,27 +196,32 @@ func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeRespo
 	if err != nil {
 		return nil, err
 	}
+	dep.Logger().Info("OIDC exchange loaded discovery, issuer=%s", discovery.Issuer)
 
 	callbackURL := oidcSPACallbackURL(dep.SettingProvider().SiteURL(c))
 	tokenPayload, err := exchangeOIDCCode(c, dep, oidcSetting, discovery, callbackURL, statePayload.CodeVerifier, service)
 	if err != nil {
 		return nil, err
 	}
+	dep.Logger().Info("OIDC exchange received access token, refresh_present=%t", tokenPayload.RefreshToken != "")
 
 	userinfoPayload, err := fetchOIDCUserinfo(c, dep, discovery, tokenPayload.AccessToken)
 	if err != nil {
 		return nil, err
 	}
+	dep.Logger().Info("OIDC exchange loaded userinfo, external_id=%v username=%s", userinfoPayload.ID, userinfoPayload.Username)
 
 	profile, err := buildOIDCIdentityProfile(discovery, tokenPayload, userinfoPayload)
 	if err != nil {
 		return nil, err
 	}
+	dep.Logger().Info("OIDC exchange built identity profile, subject=%s external_user_id=%s", profile.Subject, profile.ExternalUserID)
 
 	loginUser, err := syncOIDCShadowUser(c, dep, profile)
 	if err != nil {
 		return nil, err
 	}
+	dep.Logger().Info("OIDC exchange synced local user, user_id=%d", loginUser.ID)
 
 	accessExpiresAt := time.Now().Add(time.Duration(tokenPayload.ExpiresIn) * time.Second).Unix()
 	issuedAt := extractJWTIssuedAt(tokenPayload.IDToken)
@@ -235,10 +241,12 @@ func (service *OIDCExchangeService) Exchange(c *gin.Context) (*OIDCExchangeRespo
 	}); err != nil {
 		dep.Logger().Warning("Failed to warm OIDC access token cache: %s", err)
 	}
+	dep.Logger().Info("OIDC exchange cached provider token, user_id=%d", loginUser.ID)
 
 	if err := afterLoginSuccess(c, loginUser); err != nil {
 		return nil, err
 	}
+	dep.Logger().Info("OIDC exchange finished login hooks, user_id=%d", loginUser.ID)
 
 	return &OIDCExchangeResponse{
 		User:       BuildUser(loginUser, dep.HashIDEncoder()),
@@ -288,7 +296,7 @@ func buildOIDCRedirectURL(cfg *setting.OIDCSetting, discovery *oidcDiscovery, st
 
 	scope := strings.TrimSpace(cfg.Scope)
 	if scope == "" {
-		scope = "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write"
+		scope = "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write Workflow.Read Workflow.Write Shares.Read Shares.Write"
 	}
 
 	query := parsed.Query()
@@ -598,6 +606,7 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 			Nick:     selectOIDCNickname(profile),
 			Status:   user.StatusActive,
 			GroupID:  dep.SettingProvider().DefaultGroup(c),
+			SkipFirstUserPromotion: true,
 			Avatar:   profile.Avatar,
 		})
 		if err != nil {

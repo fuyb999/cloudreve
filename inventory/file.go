@@ -1163,8 +1163,33 @@ func (f *fileClient) SetParent(ctx context.Context, files []*ent.File, parent *e
 }
 
 func (f *fileClient) GetAncestorFiles(ctx context.Context, target *ent.File) ([]*ent.File, error) {
-	if f.dbType != conf.PostgresDB || strings.TrimSpace(target.TreePath) == "" {
+	if target == nil {
 		return nil, ErrTreePathQueryUnavailable
+	}
+
+	if f.dbType != conf.PostgresDB || strings.TrimSpace(target.TreePath) == "" {
+		ancestors := make([]*ent.File, 0, 4)
+		currentID := target.ID
+		for currentID > 0 {
+			current, err := withFileEagerLoading(ctx, f.client.File.Query().Where(file.IDEQ(currentID))).First(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ancestors = append(ancestors, current)
+
+			parent, err := f.client.File.QueryParent(current).First(ctx)
+			if ent.IsNotFound(err) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			currentID = parent.ID
+		}
+		for i, j := 0, len(ancestors)-1; i < j; i, j = i+1, j-1 {
+			ancestors[i], ancestors[j] = ancestors[j], ancestors[i]
+		}
+		return ancestors, nil
 	}
 
 	return withFileEagerLoading(ctx, f.client.File.Query()).
@@ -1179,8 +1204,23 @@ func (f *fileClient) GetAncestorFiles(ctx context.Context, target *ent.File) ([]
 }
 
 func (f *fileClient) GetSubtreeFiles(ctx context.Context, root *ent.File, depth, limit int) ([]*ent.File, error) {
-	if f.dbType != conf.PostgresDB || strings.TrimSpace(root.TreePath) == "" {
+	if root == nil || strings.TrimSpace(root.TreePath) == "" {
 		return nil, ErrTreePathQueryUnavailable
+	}
+
+	if f.dbType != conf.PostgresDB {
+		files, err := withFileEagerLoading(ctx, f.client.File.Query()).
+			Where(treePathTextSubtreePredicate(root.TreePath, false)).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		files = filterVisibleTreePathFiles(files, root.TreePath, false, depth)
+		sortTreePathFilesByDepthAndPath(files)
+		if limit > 0 && len(files) > limit {
+			files = files[:limit]
+		}
+		return files, nil
 	}
 
 	q := withFileEagerLoading(ctx, f.client.File.Query()).
@@ -1194,8 +1234,69 @@ func (f *fileClient) GetSubtreeFiles(ctx context.Context, root *ent.File, depth,
 }
 
 func (f *fileClient) SearchSubtreeFiles(ctx context.Context, root *ent.File, ownerID int, args *ListFileParameters, maxRecursiveFolders int) (*ListFileResult, bool, error) {
-	if f.dbType != conf.PostgresDB || strings.TrimSpace(root.TreePath) == "" {
+	if root == nil || strings.TrimSpace(root.TreePath) == "" {
 		return nil, false, ErrTreePathQueryUnavailable
+	}
+
+	if f.dbType != conf.PostgresDB {
+		pageSize := capPageSize(f.maxSQlParam, args.PageSize, 16)
+		query := withFileEagerLoading(ctx, f.client.File.Query()).
+			Where(file.OwnerIDEQ(ownerID)).
+			Where(treePathTextSubtreePredicate(root.TreePath, false))
+		if args.ExtraPredicate != nil {
+			query = query.Where(args.ExtraPredicate)
+		}
+		if args.Search != nil {
+			query = f.applySearchFilters(query, args.Search)
+		}
+
+		files, err := query.All(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		files = filterVisibleTreePathFiles(files, root.TreePath, false, -1)
+		sortTreePathSearchFiles(files, args)
+
+		if args.PageToken != "" {
+			token, err := treePathSearchTokenFromString(args.PageToken, f.hasher)
+			if err != nil {
+				return nil, false, fmt.Errorf("invalid tree path search token %q: %w", args.PageToken, err)
+			}
+			files = lo.Filter(files, func(item *ent.File, _ int) bool {
+				return treePathSearchFileAfterToken(item, token, args)
+			})
+		}
+
+		allFiles := append([]*ent.File(nil), files...)
+		nextToken := ""
+		if len(files) > pageSize {
+			last := files[pageSize-1]
+			token, err := getTreePathSearchNextToken(f.hasher, last, args)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to generate tree path search token: %w", err)
+			}
+			nextToken = token
+			files = files[:pageSize]
+		}
+
+		limitReached := false
+		if maxRecursiveFolders > 0 {
+			folderCount := len(lo.Filter(allFiles, func(item *ent.File, _ int) bool {
+				return item.Type == int(types.FileTypeFolder)
+			}))
+			limitReached = folderCount > maxRecursiveFolders
+		}
+
+		return &ListFileResult{
+			Files: files,
+			PaginationResults: &PaginationResults{
+				Page:          0,
+				PageSize:      pageSize,
+				NextPageToken: nextToken,
+				IsCursor:      true,
+			},
+			MixedType: true,
+		}, limitReached, nil
 	}
 
 	pageSize := capPageSize(f.maxSQlParam, args.PageSize, 16)
@@ -1264,12 +1365,48 @@ func (f *fileClient) SearchSubtreeFiles(ctx context.Context, root *ent.File, own
 }
 
 func (f *fileClient) SummarizeSubtree(ctx context.Context, root *ent.File, limit int) (*SubtreeSummary, error) {
-	if f.dbType != conf.PostgresDB || strings.TrimSpace(root.TreePath) == "" {
+	if root == nil || strings.TrimSpace(root.TreePath) == "" {
 		return nil, ErrTreePathQueryUnavailable
 	}
 
 	if limit < 0 {
 		limit = 0
+	}
+
+	if f.dbType != conf.PostgresDB {
+		loadCtx := context.WithValue(ctx, LoadFileEntity{}, true)
+		files, err := f.GetSubtreeFiles(loadCtx, root, -1, limit+1)
+		if err != nil {
+			return nil, err
+		}
+
+		summary := &SubtreeSummary{Completed: true}
+		if len(files) > limit {
+			summary.Completed = false
+			files = files[:limit]
+		}
+
+		for _, item := range files {
+			switch item.Type {
+			case int(types.FileTypeFile):
+				summary.Files++
+			case int(types.FileTypeFolder):
+				summary.Folders++
+			}
+
+			entities, err := item.Edges.EntitiesOrErr()
+			if err != nil {
+				if ent.IsNotLoaded(err) {
+					continue
+				}
+				return nil, fmt.Errorf("failed to summarize subtree entities: %w", err)
+			}
+			for _, entity := range entities {
+				summary.Size += entity.Size
+			}
+		}
+
+		return summary, nil
 	}
 
 	query := fmt.Sprintf(`

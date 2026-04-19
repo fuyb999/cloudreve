@@ -83,13 +83,13 @@ func TestApplyOIDCRuntimeBindingConfigOverridesLocalEndpoints(t *testing.T) {
 		WellKnownURL: "http://localhost:48080/.well-known/openid-configuration",
 		ClientID:     "cloudreve-local",
 		ClientSecret: "cloudreve-secret",
-		Scope:        "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write",
+		Scope:        "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write Workflow.Read Workflow.Write Shares.Read Shares.Write",
 	}
 
 	applyOIDCRuntimeBindingConfig(cfg, &oidcRuntimeBindingConfig{
 		BindingCode: "cloudreve-main",
 		ClientID:    "cloudreve",
-		ScopeText:   "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write",
+		ScopeText:   "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write Workflow.Read Workflow.Write Shares.Read Shares.Write",
 		AuthProvider: &oidcRuntimeAuthProvider{
 			DiscoveryURL: "http://localhost:48080/.well-known/openid-configuration",
 			SsoURL:       "http://localhost:5173/sso",
@@ -99,7 +99,7 @@ func TestApplyOIDCRuntimeBindingConfigOverridesLocalEndpoints(t *testing.T) {
 	if cfg.ClientID != "cloudreve" {
 		t.Fatalf("cfg.ClientID = %q, want %q", cfg.ClientID, "cloudreve")
 	}
-	if cfg.Scope != "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write" {
+	if cfg.Scope != "openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write Workflow.Read Workflow.Write Shares.Read Shares.Write" {
 		t.Fatalf("cfg.Scope = %q, want remote scope", cfg.Scope)
 	}
 	if cfg.SSOURL != "http://localhost:5173/sso" {

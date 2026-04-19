@@ -345,23 +345,7 @@ func ToEntPredicate(expr *FileFilterExpr) predicate.File {
 				return file.IDLT(0)
 			}
 
-			return func(s *sql.Selector) {
-				pathColumn := s.C(file.FieldTreePath)
-				s.Where(sql.P(func(b *sql.Builder) {
-					if len(prefixes) > 1 {
-						b.WriteByte('(')
-					}
-					for i, prefix := range prefixes {
-						if i > 0 {
-							b.WriteString(" OR ")
-						}
-						b.WriteString(pathColumn).WriteString(" <@ text2ltree(").Arg(prefix).WriteByte(')')
-					}
-					if len(prefixes) > 1 {
-						b.WriteByte(')')
-					}
-				}))
-			}
+			return treePathPrefixPredicate(prefixes)
 		default:
 			return file.IDLT(0)
 		}
@@ -397,6 +381,30 @@ func ToEntPredicate(expr *FileFilterExpr) predicate.File {
 		return file.Not(children[0])
 	default:
 		return nil
+	}
+}
+
+func treePathPrefixPredicate(prefixes []string) predicate.File {
+	return func(s *sql.Selector) {
+		pathColumn := s.C(file.FieldTreePath)
+		pathTextExpr := fmt.Sprintf("CAST(%s AS TEXT)", pathColumn)
+		s.Where(sql.P(func(b *sql.Builder) {
+			if len(prefixes) > 1 {
+				b.WriteByte('(')
+			}
+			for i, prefix := range prefixes {
+				if i > 0 {
+					b.WriteString(" OR ")
+				}
+				b.WriteByte('(')
+				b.WriteString(pathTextExpr).WriteString(" = ").Arg(prefix)
+				b.WriteString(" OR ").WriteString(pathTextExpr).WriteString(" LIKE ").Arg(prefix + ".%")
+				b.WriteByte(')')
+			}
+			if len(prefixes) > 1 {
+				b.WriteByte(')')
+			}
+		}))
 	}
 }
 

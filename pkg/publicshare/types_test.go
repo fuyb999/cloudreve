@@ -1,10 +1,15 @@
 package publicshare
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	entfile "github.com/cloudreve/Cloudreve/v4/ent/file"
+	entuser "github.com/cloudreve/Cloudreve/v4/ent/user"
+	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 )
 
@@ -103,6 +108,79 @@ func TestBuildVisibilityFilterConversions(t *testing.T) {
 	expectedMeili := `((tree_path = "1.2" OR tree_path STARTS WITH "1.2.") OR (tree_path = "1.3" OR tree_path STARTS WITH "1.3.") OR (tree_path = "2.5" OR tree_path STARTS WITH "2.5."))`
 	if got := ToMeilisearchFilter(filter); got != expectedMeili {
 		t.Fatalf("unexpected meilisearch filter: %s", got)
+	}
+}
+
+func TestToEntPredicateTreePathInSupportsSQLite(t *testing.T) {
+	ctx := context.Background()
+	client, err := ent.Open("sqlite3", "file:publicshare-tree-path-filter?mode=memory&cache=shared&_fk=1")
+	if err != nil {
+		t.Fatalf("failed to open sqlite client: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Schema.Create(ctx); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	group, err := client.Group.Create().SetName("User").SetPermissions(&boolset.BooleanSet{}).Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+
+	owner, err := client.User.Create().
+		SetUsername("sqlite-owner").
+		SetEmail("sqlite-owner@example.com").
+		SetNick("sqlite-owner").
+		SetStatus(entuser.StatusActive).
+		SetGroupID(group.ID).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
+
+	createFile := func(name string, treePath string) *ent.File {
+		fi, createErr := client.File.Create().
+			SetName(name).
+			SetFileExt("").
+			SetType(int(types.FileTypeFolder)).
+			SetOwnerID(owner.ID).
+			SetTreePath(treePath).
+			Save(ctx)
+		if createErr != nil {
+			t.Fatalf("failed to create file %s: %v", name, createErr)
+		}
+		return fi
+	}
+
+	createFile("exact", "1.2")
+	createFile("descendant", "1.2.3")
+	createFile("prefix-trap", "1.20")
+	createFile("other", "2.1")
+
+	filter := &FileFilterExpr{
+		Match: &FileFilterMatch{
+			Kind:         FileFilterMatchTreePathIn,
+			StringValues: []string{"1.2"},
+		},
+	}
+
+	files, err := client.File.Query().
+		Where(ToEntPredicate(filter)).
+		Order(entfile.ByTreePath()).
+		All(ctx)
+	if err != nil {
+		t.Fatalf("failed to query filtered files: %v", err)
+	}
+
+	got := make([]string, 0, len(files))
+	for _, fi := range files {
+		got = append(got, fi.TreePath)
+	}
+
+	expected := []string{"1.2", "1.2.3"}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("unexpected tree path matches: got %v want %v", got, expected)
 	}
 }
 

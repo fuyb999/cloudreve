@@ -381,12 +381,12 @@ func isAdminUser(user *ent.User) bool {
 }
 
 func (s *Service) ResolveVisibility(ctx context.Context, user *ent.User) (*VisibilityResult, error) {
-	if visibility := VisibilityOverrideFromContext(ctx); visibility != nil {
-		return visibility, nil
-	}
-
 	if isAdminUser(user) {
 		return s.resolveVisibilityLocal(ctx, user)
+	}
+
+	if visibility := VisibilityOverrideFromContext(ctx); visibility != nil {
+		return visibility, nil
 	}
 
 	if s.UnifiedAuthzEnabled(ctx) {
@@ -481,12 +481,12 @@ func (s *Service) resolveVisibilityLocal(ctx context.Context, user *ent.User) (*
 }
 
 func (s *Service) CheckActionByFile(ctx context.Context, user *ent.User, target *ent.File, action Action) (*ActionDecision, error) {
-	if visibility := VisibilityOverrideFromContext(ctx); visibility != nil {
-		return decisionFromVisibility(target, action, visibility), nil
-	}
-
 	if isAdminUser(user) {
 		return s.checkActionByFileLocal(ctx, user, target, action)
+	}
+
+	if visibility := VisibilityOverrideFromContext(ctx); visibility != nil {
+		return decisionFromVisibility(target, action, visibility), nil
 	}
 
 	if s.UnifiedAuthzEnabled(ctx) {

@@ -94,18 +94,31 @@ func (s *GetSettingService) GetSiteConfig(c *gin.Context) (*SiteConfig, error) {
 
 	switch s.Section {
 	case "login":
-		legalDocs := settings.LegalDocuments(c)
+		dep.Logger().Info("site config login: start loading settings")
+		loginCaptcha := settings.LoginCaptchaEnabled(c)
+		dep.Logger().Info("site config login: loaded login captcha")
+		regCaptcha := settings.RegCaptchaEnabled(c)
+		dep.Logger().Info("site config login: loaded register captcha")
+		forgetCaptcha := settings.ForgotPasswordCaptchaEnabled(c)
+		dep.Logger().Info("site config login: loaded forgot captcha")
+		authnEnabled := settings.AuthnEnabled(c)
+		dep.Logger().Info("site config login: loaded authn")
 		oidc := settings.OIDC(c)
+		dep.Logger().Info("site config login: loaded oidc")
+		registerEnabled := settings.RegisterEnabled(c)
+		dep.Logger().Info("site config login: loaded register enabled")
+		legalDocs := settings.LegalDocuments(c)
+		dep.Logger().Info("site config login: loaded legal docs")
 		return &SiteConfig{
-			LoginCaptcha:  settings.LoginCaptchaEnabled(c),
-			RegCaptcha:    settings.RegCaptchaEnabled(c),
-			ForgetCaptcha: settings.ForgotPasswordCaptchaEnabled(c),
+			LoginCaptcha:  loginCaptcha,
+			RegCaptcha:    regCaptcha,
+			ForgetCaptcha: forgetCaptcha,
 			// 统一认证开启后，前端必须隐藏本地 Passkey/注册入口，避免与统一入口并存。
-			Authn:            settings.AuthnEnabled(c) && !oidc.Enabled,
+			Authn:            authnEnabled && !oidc.Enabled,
 			OIDCEnabled:      oidc.Enabled,
 			OIDCDisplayName:  oidc.DisplayName,
 			OIDCAutoRedirect: oidc.AutoRedirect,
-			RegisterEnabled:  settings.RegisterEnabled(c) && !oidc.Enabled,
+			RegisterEnabled:  registerEnabled && !oidc.Enabled,
 			PrivacyPolicyUrl: legalDocs.PrivacyPolicy,
 			TosUrl:           legalDocs.TermsOfService,
 		}, nil

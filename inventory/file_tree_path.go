@@ -79,15 +79,6 @@ func ensurePostgresLtree(ctx context.Context, client *ent.Client, dbType conf.DB
 }
 
 func ensureFileTreePathSupport(ctx context.Context, l logging.Logger, client *ent.Client, dbType conf.DBType) error {
-	if dbType != conf.PostgresDB {
-		return nil
-	}
-
-	if _, err := client.File.ExecContext(ctx,
-		fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON files USING GIST (tree_path) WHERE tree_path IS NOT NULL", fileTreePathIndexName)); err != nil {
-		return fmt.Errorf("failed to ensure tree path index: %w", err)
-	}
-
 	missing, err := client.File.Query().
 		Where(file.Or(file.TreePathEQ(""), file.TreePathIsNil())).
 		Exist(ctx)
@@ -95,12 +86,20 @@ func ensureFileTreePathSupport(ctx context.Context, l logging.Logger, client *en
 		return fmt.Errorf("failed to inspect tree path state: %w", err)
 	}
 
+	if dbType == conf.PostgresDB {
+		if _, err := client.File.ExecContext(ctx,
+			fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON files USING GIST (tree_path) WHERE tree_path IS NOT NULL", fileTreePathIndexName)); err != nil {
+			return fmt.Errorf("failed to ensure tree path index: %w", err)
+		}
+	}
+
 	if !missing {
 		return nil
 	}
 
 	l.Info("Backfilling file tree paths...")
-	if _, err := client.File.ExecContext(ctx, `
+	if dbType == conf.PostgresDB {
+		if _, err := client.File.ExecContext(ctx, `
 WITH RECURSIVE tree AS (
     SELECT id, file_children, text2ltree('f' || id::text) AS tree_path
     FROM files
@@ -116,19 +115,45 @@ FROM tree
 WHERE target.id = tree.id
   AND target.tree_path IS DISTINCT FROM tree.tree_path
 `); err != nil {
-		return fmt.Errorf("failed to backfill file tree paths: %w", err)
+			return fmt.Errorf("failed to backfill file tree paths: %w", err)
+		}
+
+		return nil
+	}
+
+	roots, err := client.File.Query().
+		Where(file.Not(file.HasParent())).
+		Order(file.ByID()).
+		All(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load tree path roots: %w", err)
+	}
+
+	fc := &fileClient{client: client, dbType: dbType}
+	for _, root := range roots {
+		if err := fc.rebuildTreePathSubtree(ctx, root, joinFileTreePath("", root.ID)); err != nil {
+			return fmt.Errorf("failed to backfill tree path for root %d: %w", root.ID, err)
+		}
 	}
 
 	return nil
 }
 
 func (f *fileClient) updateFileTreePath(ctx context.Context, target *ent.File, treePath string) error {
-	if f.dbType != conf.PostgresDB || target == nil {
+	if target == nil {
 		return nil
 	}
 
 	treePath = strings.TrimSpace(treePath)
 	if treePath == "" || target.TreePath == treePath {
+		target.TreePath = treePath
+		return nil
+	}
+
+	if f.dbType != conf.PostgresDB {
+		if err := f.persistTreePath(ctx, target.ID, treePath); err != nil {
+			return fmt.Errorf("failed to persist tree path for file %d: %w", target.ID, err)
+		}
 		target.TreePath = treePath
 		return nil
 	}
@@ -142,8 +167,12 @@ func (f *fileClient) updateFileTreePath(ctx context.Context, target *ent.File, t
 }
 
 func (f *fileClient) rebuildTreePathSubtree(ctx context.Context, root *ent.File, newPrefix string) error {
-	if f.dbType != conf.PostgresDB || root == nil {
+	if root == nil {
 		return nil
+	}
+
+	if f.dbType != conf.PostgresDB {
+		return f.rebuildTreePathSubtreeGeneric(ctx, root, newPrefix)
 	}
 
 	if _, err := f.client.File.ExecContext(ctx, `
@@ -170,7 +199,7 @@ WHERE target.id = tree.id
 }
 
 func (f *fileClient) relocateTreePathSubtree(ctx context.Context, root *ent.File, parent *ent.File) error {
-	if f.dbType != conf.PostgresDB || root == nil {
+	if root == nil {
 		return nil
 	}
 
@@ -178,6 +207,10 @@ func (f *fileClient) relocateTreePathSubtree(ctx context.Context, root *ent.File
 	newPrefix := joinFileTreePath("", root.ID)
 	if parent != nil {
 		newPrefix = joinFileTreePath(parent.TreePath, root.ID)
+	}
+
+	if f.dbType != conf.PostgresDB {
+		return f.rebuildTreePathSubtreeGeneric(ctx, root, newPrefix)
 	}
 
 	if oldPrefix == "" {
@@ -198,6 +231,50 @@ END
 WHERE tree_path <@ $1::ltree
 `, oldPrefix, newPrefix); err != nil {
 		return fmt.Errorf("failed to relocate file tree path subtree: %w", err)
+	}
+
+	root.TreePath = newPrefix
+	return nil
+}
+
+func (f *fileClient) persistTreePath(ctx context.Context, fileID int, treePath string) error {
+	return f.client.File.UpdateOneID(fileID).SetTreePath(treePath).Exec(ctx)
+}
+
+func (f *fileClient) rebuildTreePathSubtreeGeneric(ctx context.Context, root *ent.File, newPrefix string) error {
+	newPrefix = strings.TrimSpace(newPrefix)
+	if newPrefix == "" {
+		return nil
+	}
+
+	type treeNode struct {
+		id   int
+		path string
+	}
+
+	queue := []treeNode{{id: root.ID, path: newPrefix}}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if err := f.persistTreePath(ctx, current.id, current.path); err != nil {
+			return err
+		}
+
+		children, err := f.client.File.Query().
+			Where(file.HasParentWith(file.IDEQ(current.id))).
+			Order(file.ByID()).
+			All(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to load tree path children for file %d: %w", current.id, err)
+		}
+
+		for _, child := range children {
+			queue = append(queue, treeNode{
+				id:   child.ID,
+				path: joinFileTreePath(current.path, child.ID),
+			})
+		}
 	}
 
 	root.TreePath = newPrefix
@@ -443,4 +520,150 @@ func topLevelTreePathRoots(files []*ent.File) []*ent.File {
 	}
 
 	return roots
+}
+
+func treePathTextSubtreePredicate(prefix string, includeSelf bool) predicate.File {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return file.IDLT(0)
+	}
+
+	predicates := []predicate.File{
+		file.Or(
+			file.TreePathEQ(prefix),
+			file.TreePathHasPrefix(prefix+"."),
+		),
+	}
+	if !includeSelf {
+		predicates = append(predicates, file.TreePathNEQ(prefix))
+	}
+
+	return file.And(predicates...)
+}
+
+func filterVisibleTreePathFiles(files []*ent.File, rootPath string, includeSelf bool, maxDepth int) []*ent.File {
+	rootPath = strings.TrimSpace(rootPath)
+	if rootPath == "" {
+		return nil
+	}
+
+	symbolicPaths := make([]string, 0)
+	res := make([]*ent.File, 0, len(files))
+	for _, item := range files {
+		if item == nil {
+			continue
+		}
+		path := strings.TrimSpace(item.TreePath)
+		if path == "" || !fileTreePathHasPrefix(path, rootPath) {
+			continue
+		}
+		if !includeSelf && path == rootPath {
+			continue
+		}
+		if maxLevel, ok := treePathVisibleSubtreeMaxLevel(rootPath, maxDepth); ok && fileTreePathDepth(path) > maxLevel {
+			continue
+		}
+		if lo.SomeBy(symbolicPaths, func(symbolicPath string) bool {
+			return symbolicPath != path && fileTreePathHasPrefix(path, symbolicPath)
+		}) {
+			continue
+		}
+
+		res = append(res, item)
+		if item.IsSymbolic {
+			symbolicPaths = append(symbolicPaths, path)
+		}
+	}
+
+	return res
+}
+
+func sortTreePathFilesByDepthAndPath(files []*ent.File) {
+	sort.Slice(files, func(i, j int) bool {
+		leftDepth := fileTreePathDepth(files[i].TreePath)
+		rightDepth := fileTreePathDepth(files[j].TreePath)
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		if files[i].TreePath != files[j].TreePath {
+			return files[i].TreePath < files[j].TreePath
+		}
+		return files[i].ID < files[j].ID
+	})
+}
+
+func sortTreePathSearchFiles(files []*ent.File, args *ListFileParameters) {
+	desc := args != nil && args.Order == OrderDirectionDesc
+	sort.Slice(files, func(i, j int) bool {
+		leftDepth := fileTreePathDepth(files[i].TreePath)
+		rightDepth := fileTreePathDepth(files[j].TreePath)
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+
+		switch {
+		case args != nil && args.OrderBy == file.FieldName && files[i].Name != files[j].Name:
+			if desc {
+				return files[i].Name > files[j].Name
+			}
+			return files[i].Name < files[j].Name
+		case args != nil && args.OrderBy == file.FieldSize && files[i].Size != files[j].Size:
+			if desc {
+				return files[i].Size > files[j].Size
+			}
+			return files[i].Size < files[j].Size
+		case args != nil && args.OrderBy == file.FieldUpdatedAt && !files[i].UpdatedAt.Equal(files[j].UpdatedAt):
+			if desc {
+				return files[i].UpdatedAt.After(files[j].UpdatedAt)
+			}
+			return files[i].UpdatedAt.Before(files[j].UpdatedAt)
+		default:
+			if desc {
+				return files[i].ID > files[j].ID
+			}
+			return files[i].ID < files[j].ID
+		}
+	})
+}
+
+func treePathSearchFileAfterToken(item *ent.File, token *treePathSearchToken, args *ListFileParameters) bool {
+	if item == nil || token == nil {
+		return true
+	}
+
+	itemDepth := fileTreePathDepth(item.TreePath)
+	if itemDepth > token.Depth {
+		return true
+	}
+	if itemDepth < token.Depth {
+		return false
+	}
+
+	desc := args != nil && args.Order == OrderDirectionDesc
+	switch {
+	case args != nil && args.OrderBy == file.FieldName:
+		if desc {
+			return item.Name < token.Name || (item.Name == token.Name && item.ID < token.ID)
+		}
+		return item.Name > token.Name || (item.Name == token.Name && item.ID > token.ID)
+	case args != nil && args.OrderBy == file.FieldSize:
+		if desc {
+			return item.Size < token.Size || (item.Size == token.Size && item.ID < token.ID)
+		}
+		return item.Size > token.Size || (item.Size == token.Size && item.ID > token.ID)
+	case args != nil && args.OrderBy == file.FieldUpdatedAt:
+		tokenTime := time.Time{}
+		if token.UpdatedAt != nil {
+			tokenTime = *token.UpdatedAt
+		}
+		if desc {
+			return item.UpdatedAt.Before(tokenTime) || (item.UpdatedAt.Equal(tokenTime) && item.ID < token.ID)
+		}
+		return item.UpdatedAt.After(tokenTime) || (item.UpdatedAt.Equal(tokenTime) && item.ID > token.ID)
+	default:
+		if desc {
+			return item.ID < token.ID
+		}
+		return item.ID > token.ID
+	}
 }

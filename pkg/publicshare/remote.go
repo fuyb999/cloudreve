@@ -120,11 +120,6 @@ func (s *Service) checkActionRemote(ctx context.Context, accessToken string, tar
 		return &ActionDecision{Allowed: false, Action: action, Reason: "target_not_found"}, nil
 	}
 
-	rootID, rootErr := s.RootID(ctx)
-	if rootErr == nil && rootID > 0 && target.ID == rootID {
-		return virtualPublicRootDecision(target, action), nil
-	}
-
 	baseURL, err := s.remoteAuthzBaseURL(ctx)
 	if err != nil {
 		return nil, err
@@ -320,28 +315,6 @@ func toLocalActionDecision(payload *remoteActionDecision, target *ent.File, acti
 		RootFileID: rootFileID,
 		Actions:    toLocalActions(payload.Actions),
 		Reason:     payload.Reason,
-	}
-}
-
-func virtualPublicRootDecision(target *ent.File, action Action) *ActionDecision {
-	actions := make(map[Action]bool, len(ActionOrder))
-	for _, candidate := range ActionOrder {
-		actions[candidate] = false
-	}
-	actions[ActionList] = true
-
-	allowed := action == ActionList
-	reason := "virtual_public_root_readonly"
-	if allowed {
-		reason = "allowed"
-	}
-
-	return &ActionDecision{
-		Allowed:    allowed,
-		Action:     action,
-		RootFileID: target.ID,
-		Actions:    actions,
-		Reason:     reason,
 	}
 }
 

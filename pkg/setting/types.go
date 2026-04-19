@@ -225,7 +225,8 @@ type OIDCSetting struct {
 	WellKnownURL string
 	ClientID     string
 	ClientSecret string
-	// Scope 至少需要包含 openid、user_info、user.read，以及网盘运行态鉴权实际使用的 UserInfo.Read、Admin.Read、Files.Read、Files.Write。
+	// Scope 至少需要包含 openid、user_info、user.read，以及网盘运行态鉴权实际使用的
+	// UserInfo.Read、Admin.Read、Files.Read、Files.Write、Workflow.Read、Workflow.Write、Shares.Read、Shares.Write。
 	Scope string
 }
 

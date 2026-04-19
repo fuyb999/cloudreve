@@ -186,6 +186,7 @@ func IssueToken(c *gin.Context) (*BuiltinLoginResponse, error) {
 
 func afterLoginSuccess(c *gin.Context, u *ent.User) error {
 	dep := dependency.FromContext(c)
+	dep.Logger().Info("afterLoginSuccess start, user_id=%d", u.ID)
 	account := userUsernameValue(u.Username)
 	if account == "" {
 		account = u.Email
@@ -194,6 +195,7 @@ func afterLoginSuccess(c *gin.Context, u *ent.User) error {
 	if _, err := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder()).ResolveVisibility(c, u); err != nil {
 		dep.Logger().Warning("Failed to warm public visibility for user %d: %s", u.ID, err)
 	}
+	dep.Logger().Info("afterLoginSuccess visibility warmed, user_id=%d", u.ID)
 
 	if err := audit.Publish(c, &audit.Event{
 		Type:   audit.UserLogin,
@@ -205,6 +207,7 @@ func afterLoginSuccess(c *gin.Context, u *ent.User) error {
 	}); err != nil {
 		dep.Logger().Warning("Failed to publish login audit log: %s", err)
 	}
+	dep.Logger().Info("afterLoginSuccess audit published, user_id=%d", u.ID)
 
 	return nil
 }

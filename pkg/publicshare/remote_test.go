@@ -2,6 +2,8 @@ package publicshare
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -124,18 +126,44 @@ func TestConstrainRemoteDecisionToVisibilityUsesDeepestGrant(t *testing.T) {
 	}
 }
 
-func TestVirtualPublicRootDecisionIsReadonly(t *testing.T) {
-	target := &ent.File{ID: 1}
+func TestCheckActionRemoteAllowsWritablePublicRoot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 
-	decision := virtualPublicRootDecision(target, ActionCreate)
-	if decision.Allowed {
-		t.Fatalf("expected virtual public root create to be denied")
+		switch r.URL.Path {
+		case remoteActionCheckPath:
+			if got := r.Header.Get("Authorization"); got != "Bearer test-cloudreve-token" {
+				t.Fatalf("unexpected auth header: %s", got)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"","data":{"allowed":true,"action":"create","resourceFileId":1,"reason":"nearest_policy_allowed","actions":{"list":true,"create":true,"upload":true}}}`))
+		case remoteVisibilityPath:
+			_, _ = w.Write([]byte(`{"code":0,"msg":"","data":{"rootGrants":[{"fileId":1,"ownerId":-1,"treePath":"f1","name":"公共文件","actions":{"list":true,"create":true,"upload":true}}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := &Service{
+		settingClient: testSettingClient{values: map[string]string{
+			PublicRootFileIDSetting: "1",
+			oidcWellKnownSettingKey: server.URL + "/.well-known/openid-configuration",
+		}},
 	}
-	if !decision.Actions[ActionList] {
-		t.Fatalf("expected virtual public root to remain listable")
+
+	target := &ent.File{ID: 1, OwnerID: -1, TreePath: "f1", Type: 1, Name: "公共文件"}
+	decision, err := service.checkActionRemote(context.Background(), "test-cloudreve-token", target, ActionCreate)
+	if err != nil {
+		t.Fatalf("checkActionRemote returned error: %v", err)
 	}
-	if decision.Actions[ActionCreate] || decision.Actions[ActionUpload] {
-		t.Fatalf("expected virtual public root write actions to be disabled")
+	if decision == nil {
+		t.Fatal("expected non-nil action decision")
+	}
+	if !decision.Allowed {
+		t.Fatalf("expected public root create to be allowed, got reason=%s actions=%v", decision.Reason, decision.Actions)
+	}
+	if !decision.Actions[ActionCreate] || !decision.Actions[ActionUpload] {
+		t.Fatalf("expected public root write actions to be preserved, got %v", decision.Actions)
 	}
 }
 

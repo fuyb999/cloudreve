@@ -134,6 +134,9 @@ type (
 		PlainPassword string
 		Status        user.Status
 		GroupID       int
+		// SkipFirstUserPromotion 禁止 Create() 的“首个可见用户自动提升为管理员”逻辑。
+		// 统一认证影子用户需要由上层显式决定是否提升，避免普通用户因首次登录被误授管理员。
+		SkipFirstUserPromotion bool
 		Avatar        string // Optional
 		Language      string // Optional
 	}
@@ -372,18 +375,20 @@ func (c *userClient) Create(ctx context.Context, args *NewUserArgs) (*ent.User, 
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	firstVisibleUser, err := isFirstVisibleUser(ctx, c.client, newUser)
-	if err != nil {
-		return newUser, fmt.Errorf("failed to determine whether user is first visible user: %w", err)
-	}
-
-	if firstVisibleUser {
-		// For the first user registered, elevate it to admin group.
-		promotedUser, err := newUser.Update().SetGroupID(1).Save(ctx)
+	if !args.SkipFirstUserPromotion {
+		firstVisibleUser, err := isFirstVisibleUser(ctx, c.client, newUser)
 		if err != nil {
-			return newUser, fmt.Errorf("failed to elevate user to admin: %w", err)
+			return newUser, fmt.Errorf("failed to determine whether user is first visible user: %w", err)
 		}
-		newUser = promotedUser
+
+		if firstVisibleUser {
+			// For the first user registered, elevate it to admin group.
+			promotedUser, err := newUser.Update().SetGroupID(1).Save(ctx)
+			if err != nil {
+				return newUser, fmt.Errorf("failed to elevate user to admin: %w", err)
+			}
+			newUser = promotedUser
+		}
 	}
 	return newUser, nil
 }

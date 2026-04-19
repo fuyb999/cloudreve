@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +10,10 @@ import (
 	sqlbuilder "entgo.io/ent/dialect/sql"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
+	entuser "github.com/cloudreve/Cloudreve/v4/ent/user"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
+	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"golang.org/x/tools/container/intsets"
 )
 
@@ -117,5 +122,289 @@ func TestIndexableTreePathPredicateQuery(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []any{RootFolderName}) {
 		t.Fatalf("unexpected args: %#v", args)
+	}
+}
+
+func TestSQLiteCreateFolderMaintainsTreePath(t *testing.T) {
+	ctx := context.Background()
+	client, err := ent.Open("sqlite3", "file:sqlite-tree-path-create?mode=memory&cache=shared&_fk=1")
+	if err != nil {
+		t.Fatalf("failed to open sqlite client: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Schema.Create(ctx); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	group, err := client.Group.Create().SetName("User").SetPermissions(&boolset.BooleanSet{}).Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+
+	owner, err := client.User.Create().
+		SetUsername("tree-owner").
+		SetEmail("tree-owner@example.com").
+		SetNick("tree-owner").
+		SetStatus(entuser.StatusActive).
+		SetGroupID(group.ID).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
+
+	fileClient := NewFileClient(client, conf.SQLiteDB, nil)
+	root, err := fileClient.CreateFolder(ctx, nil, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "root",
+	})
+	if err != nil {
+		t.Fatalf("failed to create root: %v", err)
+	}
+
+	child, err := fileClient.CreateFolder(ctx, root, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "child",
+	})
+	if err != nil {
+		t.Fatalf("failed to create child: %v", err)
+	}
+
+	grandChild, err := fileClient.CreateFolder(ctx, child, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "grand-child",
+	})
+	if err != nil {
+		t.Fatalf("failed to create grand child: %v", err)
+	}
+
+	wantRootPath := joinFileTreePath("", root.ID)
+	wantChildPath := joinFileTreePath(wantRootPath, child.ID)
+	wantGrandChildPath := joinFileTreePath(wantChildPath, grandChild.ID)
+	if root.TreePath != wantRootPath {
+		t.Fatalf("unexpected root tree path: got %q want %q", root.TreePath, wantRootPath)
+	}
+	if child.TreePath != wantChildPath {
+		t.Fatalf("unexpected child tree path: got %q want %q", child.TreePath, wantChildPath)
+	}
+	if grandChild.TreePath != wantGrandChildPath {
+		t.Fatalf("unexpected grand child tree path: got %q want %q", grandChild.TreePath, wantGrandChildPath)
+	}
+}
+
+func TestSQLiteRelocateTreePathSubtree(t *testing.T) {
+	ctx := context.Background()
+	client, err := ent.Open("sqlite3", "file:sqlite-tree-path-relocate?mode=memory&cache=shared&_fk=1")
+	if err != nil {
+		t.Fatalf("failed to open sqlite client: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Schema.Create(ctx); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	group, err := client.Group.Create().SetName("User").SetPermissions(&boolset.BooleanSet{}).Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+
+	owner, err := client.User.Create().
+		SetUsername("move-owner").
+		SetEmail("move-owner@example.com").
+		SetNick("move-owner").
+		SetStatus(entuser.StatusActive).
+		SetGroupID(group.ID).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
+
+	fileClient := NewFileClient(client, conf.SQLiteDB, nil)
+	srcRoot, err := fileClient.CreateFolder(ctx, nil, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "src-root",
+	})
+	if err != nil {
+		t.Fatalf("failed to create src root: %v", err)
+	}
+	dstRoot, err := fileClient.CreateFolder(ctx, nil, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "dst-root",
+	})
+	if err != nil {
+		t.Fatalf("failed to create dst root: %v", err)
+	}
+	child, err := fileClient.CreateFolder(ctx, srcRoot, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "child",
+	})
+	if err != nil {
+		t.Fatalf("failed to create child: %v", err)
+	}
+	grandChild, err := fileClient.CreateFolder(ctx, child, &CreateFolderParameters{
+		Owner: owner.ID,
+		Name:  "grand-child",
+	})
+	if err != nil {
+		t.Fatalf("failed to create grand child: %v", err)
+	}
+
+	if err := fileClient.SetParent(ctx, []*ent.File{child}, dstRoot); err != nil {
+		t.Fatalf("failed to relocate child: %v", err)
+	}
+
+	reloadedChild, err := fileClient.GetByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("failed to reload child: %v", err)
+	}
+	reloadedGrandChild, err := fileClient.GetByID(ctx, grandChild.ID)
+	if err != nil {
+		t.Fatalf("failed to reload grand child: %v", err)
+	}
+
+	wantChildPath := joinFileTreePath(dstRoot.TreePath, child.ID)
+	wantGrandChildPath := joinFileTreePath(wantChildPath, grandChild.ID)
+	if reloadedChild.TreePath != wantChildPath {
+		t.Fatalf("unexpected relocated child tree path: got %q want %q", reloadedChild.TreePath, wantChildPath)
+	}
+	if reloadedGrandChild.TreePath != wantGrandChildPath {
+		t.Fatalf("unexpected relocated grand child tree path: got %q want %q", reloadedGrandChild.TreePath, wantGrandChildPath)
+	}
+}
+
+func TestEnsureFileTreePathSupportBackfillsSQLiteData(t *testing.T) {
+	ctx := context.Background()
+	client, err := ent.Open("sqlite3", "file:sqlite-tree-path-backfill?mode=memory&cache=shared&_fk=1")
+	if err != nil {
+		t.Fatalf("failed to open sqlite client: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Schema.Create(ctx); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	group, err := client.Group.Create().SetName("User").SetPermissions(&boolset.BooleanSet{}).Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+	owner, err := client.User.Create().
+		SetUsername("backfill-owner").
+		SetEmail("backfill-owner@example.com").
+		SetNick("backfill-owner").
+		SetStatus(entuser.StatusActive).
+		SetGroupID(group.ID).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
+
+	root, err := client.File.Create().
+		SetOwnerID(owner.ID).
+		SetType(1).
+		SetName("root").
+		SetFileExt("").
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create root: %v", err)
+	}
+	child, err := client.File.Create().
+		SetOwnerID(owner.ID).
+		SetType(1).
+		SetName("child").
+		SetFileExt("").
+		SetParentID(root.ID).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create child: %v", err)
+	}
+
+	if err := ensureFileTreePathSupport(ctx, logging.NewConsoleLogger(logging.LevelError), client, conf.SQLiteDB); err != nil {
+		t.Fatalf("failed to ensure sqlite tree path support: %v", err)
+	}
+
+	reloadedRoot, err := client.File.Get(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("failed to reload root: %v", err)
+	}
+	reloadedChild, err := client.File.Get(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("failed to reload child: %v", err)
+	}
+
+	wantRootPath := joinFileTreePath("", root.ID)
+	wantChildPath := joinFileTreePath(wantRootPath, child.ID)
+	if reloadedRoot.TreePath != wantRootPath {
+		t.Fatalf("unexpected backfilled root tree path: got %q want %q", reloadedRoot.TreePath, wantRootPath)
+	}
+	if reloadedChild.TreePath != wantChildPath {
+		t.Fatalf("unexpected backfilled child tree path: got %q want %q", reloadedChild.TreePath, wantChildPath)
+	}
+}
+
+func TestSQLiteTreePathQueriesDoNotRequirePostgres(t *testing.T) {
+	ctx := context.Background()
+	client, err := ent.Open("sqlite3", "file:sqlite-tree-path-query-fallback?mode=memory&cache=shared&_fk=1")
+	if err != nil {
+		t.Fatalf("failed to open sqlite client: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Schema.Create(ctx); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	group, err := client.Group.Create().SetName("User").SetPermissions(&boolset.BooleanSet{}).Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create group: %v", err)
+	}
+	owner, err := client.User.Create().
+		SetUsername("query-owner").
+		SetEmail("query-owner@example.com").
+		SetNick("query-owner").
+		SetStatus(entuser.StatusActive).
+		SetGroupID(group.ID).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create owner: %v", err)
+	}
+
+	fileClient := NewFileClient(client, conf.SQLiteDB, nil)
+	root, err := fileClient.CreateFolder(ctx, nil, &CreateFolderParameters{Owner: owner.ID, Name: "root"})
+	if err != nil {
+		t.Fatalf("failed to create root: %v", err)
+	}
+	child, err := fileClient.CreateFolder(ctx, root, &CreateFolderParameters{Owner: owner.ID, Name: "child"})
+	if err != nil {
+		t.Fatalf("failed to create child: %v", err)
+	}
+	grandChild, err := fileClient.CreateFolder(ctx, child, &CreateFolderParameters{Owner: owner.ID, Name: "grand-child"})
+	if err != nil {
+		t.Fatalf("failed to create grand child: %v", err)
+	}
+
+	ancestors, err := fileClient.GetAncestorFiles(ctx, grandChild)
+	if err != nil {
+		t.Fatalf("failed to query ancestors in sqlite: %v", err)
+	}
+	if len(ancestors) != 3 || ancestors[0].ID != root.ID || ancestors[1].ID != child.ID || ancestors[2].ID != grandChild.ID {
+		t.Fatalf("unexpected sqlite ancestors: %#v", ancestors)
+	}
+
+	subtree, err := fileClient.GetSubtreeFiles(ctx, root, -1, 10)
+	if err != nil {
+		t.Fatalf("failed to query subtree in sqlite: %v", err)
+	}
+	if len(subtree) != 2 || subtree[0].ID != child.ID || subtree[1].ID != grandChild.ID {
+		t.Fatalf("unexpected sqlite subtree order: %#v", subtree)
+	}
+
+	summary, err := fileClient.SummarizeSubtree(ctx, root, 10)
+	if err != nil {
+		t.Fatalf("failed to summarize subtree in sqlite: %v", err)
+	}
+	if summary.Folders != 2 || !summary.Completed {
+		t.Fatalf("unexpected sqlite subtree summary: %#v", summary)
 	}
 }

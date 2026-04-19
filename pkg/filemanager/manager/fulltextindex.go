@@ -1347,6 +1347,10 @@ func (m *manager) resolveFTSFileURIByModel(ctx context.Context, fileModel *ent.F
 		return nil, fmt.Errorf("failed to resolve file uri: file model is nil")
 	}
 
+	if publicURI := m.resolvePublicSearchURI(ctx, fileModel); publicURI != nil {
+		return publicURI, nil
+	}
+
 	ownerManager, err := m.fileManagerForOwner(ctx, fileModel.OwnerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load file owner context: %w", err)
