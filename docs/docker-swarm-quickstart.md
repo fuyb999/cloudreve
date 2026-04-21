@@ -343,11 +343,13 @@ docker secret ls | grep '^cloudreve.*_secret_'
 
 如果你准备把第三方抽取链路也切到栈内 Kafka：
 
+- `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE=internal-plaintext`
 - Cloudreve 全局 Kafka brokers：`${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
 - 第三方抽取器如果也在 Swarm 内部网络，Kafka brokers 也填 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
-- `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`
+- `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL` 会由 `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE=internal-plaintext` 自动落成 `PLAINTEXT`
 - Kafka UI 也直接连 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
 - 如果 `SWARM_OVERLAY_ENCRYPT=true`，跨主机 overlay 流量会由 Swarm 加密；当前 Kafka 模板就依赖这一层
+- 如果后续要让 Cloudreve 直连外部 TLS / SASL Kafka，把 `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE` 改成 `external-tls` 或 `external-sasl-ssl`，再回填 brokers 与证书/SASL 变量
 
 ## 6. 多节点模式才需要回填从节点密钥
 

@@ -113,8 +113,10 @@ set +a
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:-$ENV_FILE}"
 SWARM_PKI_MOUNT_TYPE="${SWARM_PKI_MOUNT_TYPE:-bind}"
 SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
+SWARM_PKI_LOCAL_SOURCE="${SWARM_PKI_LOCAL_SOURCE:-$SWARM_PKI_MOUNT_SOURCE}"
 SHARED_CUSTOM_FONTS_MOUNT_TYPE="${SHARED_CUSTOM_FONTS_MOUNT_TYPE:-volume}"
 SHARED_CUSTOM_FONTS_MOUNT_SOURCE="${SHARED_CUSTOM_FONTS_MOUNT_SOURCE:-shared_custom_fonts}"
+SHARED_CUSTOM_FONTS_LOCAL_SOURCE="${SHARED_CUSTOM_FONTS_LOCAL_SOURCE:-$SHARED_CUSTOM_FONTS_MOUNT_SOURCE}"
 
 normalize_targets() {
   local raw="$1"
@@ -200,10 +202,10 @@ if [[ "$SYNC_ENV" == "yes" ]]; then
   require_local_path "$ENV_FILE" ".env 文件"
 fi
 if should_sync_pki; then
-  require_local_path "$SWARM_PKI_MOUNT_SOURCE" "PKI 目录"
+  require_local_path "$SWARM_PKI_LOCAL_SOURCE" "PKI 目录"
 fi
 if should_sync_fonts; then
-  require_local_path "$SHARED_CUSTOM_FONTS_MOUNT_SOURCE" "共享字体目录"
+  require_local_path "$SHARED_CUSTOM_FONTS_LOCAL_SOURCE" "共享字体目录"
 fi
 
 if [[ "$MODE" == "apply" ]]; then
@@ -222,7 +224,7 @@ echo "[$HOST_NAME] - 文本配置 / 启动脚本 / 代理模板：Swarm configs"
 echo "[$HOST_NAME] - PKI / 共享字体 / .env：sync-swarm-assets.sh"
 echo
 
-while IFS= read -r raw_target; do
+while IFS= read -r raw_target <&3; do
   [[ -n "$raw_target" ]] || continue
   target="$(resolve_target "$raw_target")"
 
@@ -234,13 +236,13 @@ while IFS= read -r raw_target; do
   fi
 
   if should_sync_pki; then
-    echo "[$HOST_NAME]   PKI   $SWARM_PKI_MOUNT_SOURCE -> $SWARM_PKI_MOUNT_SOURCE"
+    echo "[$HOST_NAME]   PKI   $SWARM_PKI_LOCAL_SOURCE -> $SWARM_PKI_MOUNT_SOURCE"
   else
     echo "[$HOST_NAME]   PKI   已跳过（当前不是 bind，或显式关闭）"
   fi
 
   if should_sync_fonts; then
-    echo "[$HOST_NAME]   FONTS $SHARED_CUSTOM_FONTS_MOUNT_SOURCE -> $SHARED_CUSTOM_FONTS_MOUNT_SOURCE"
+    echo "[$HOST_NAME]   FONTS $SHARED_CUSTOM_FONTS_LOCAL_SOURCE -> $SHARED_CUSTOM_FONTS_MOUNT_SOURCE"
   else
     echo "[$HOST_NAME]   FONTS 已跳过（当前不是 bind，或显式关闭）"
   fi
@@ -269,17 +271,17 @@ while IFS= read -r raw_target; do
       rsync -az "$ENV_FILE" "$target:$REMOTE_ENV_FILE"
     fi
     if should_sync_pki; then
-      rsync -az "$SWARM_PKI_MOUNT_SOURCE/" "$target:$SWARM_PKI_MOUNT_SOURCE/"
+      rsync -az "$SWARM_PKI_LOCAL_SOURCE/" "$target:$SWARM_PKI_MOUNT_SOURCE/"
     fi
     if should_sync_fonts; then
-      rsync -az "$SHARED_CUSTOM_FONTS_MOUNT_SOURCE/" "$target:$SHARED_CUSTOM_FONTS_MOUNT_SOURCE/"
+      rsync -az "$SHARED_CUSTOM_FONTS_LOCAL_SOURCE/" "$target:$SHARED_CUSTOM_FONTS_MOUNT_SOURCE/"
     fi
 
     echo "[$HOST_NAME]   [DONE] $target 同步完成"
   fi
 
   echo
-done < <(normalize_targets "$TARGETS")
+done 3< <(normalize_targets "$TARGETS")
 
 if [[ "$MODE" == "check" ]]; then
   echo "[$HOST_NAME] [NEXT] 确认无误后执行 --apply。"

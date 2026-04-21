@@ -218,6 +218,9 @@ SHARED_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/shared-fonts
 
 - 当前默认 `PRIVATE_REGISTRY_SCHEME=http`
 - `prepare-private-registry.sh` 会把 `PRIVATE_REGISTRY_ADDR` 写入 Docker `insecure-registries`
+- truststore 不再依赖宿主机默认 `keytool`
+- `generate-swarm-pki.sh` 会统一使用 `SWARM_TRUSTSTORE_IMAGE` 指定镜像内的 `keytool` 生成
+- 默认就是 `${AUTHVERSE_BACKEND_IMAGE}`
 - 如果你用了 bind 模式的 `SWARM_PKI_MOUNT_SOURCE` 或 `SHARED_CUSTOM_FONTS_MOUNT_SOURCE`，建议从 manager 执行 `docker/swarm/sync-swarm-assets.sh`
 - 如果后续你要把默认 CA 换成正式 CA，替换 `SWARM_PKI_MOUNT_SOURCE/ca/ca.crt` 与 `ca.key` 后，重新执行：
 
@@ -1031,15 +1034,14 @@ docker service inspect cloudreve-prod-app_cloudreve-master \
 下面这些命令很适合做上线后巡检：
 
 ```bash
-curl -kfsS https://<vip>:28081/api/v4/site/ping
-curl -kfsS https://<vip>:28080/
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28082/
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28090/healthcheck
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29000/minio/health/live
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29200
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29998/tika
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28089
+docker/swarm/verify-public-tls.sh --env-file .env.swarm
 ```
+
+说明：
+
+- `cloudreve-slave` 的 `28082` 不是浏览器首页，不要用 `GET /` 或 `GET /api/v4/site/ping` 判活
+- 正确巡检方式是 `POST /api/v4/slave/ping`
+- 未带签名时，预期返回 `HTTP 200` 且 JSON `code=403`
 
 数据库与缓存连通性：
 
@@ -1049,7 +1051,7 @@ docker run --rm postgres:17-alpine sh -lc \
   -v /srv/cloudreve/pki:/pki:ro
 
 docker run --rm -v /srv/cloudreve/pki:/pki:ro redis:8.6.2 redis-cli \
-  --tls --cacert /pki/ca/ca.crt -h <vip> -p 26379 -a '<redis-password>' PING
+  --tls --cacert /pki/ca/ca.crt -h <vip> -p 26380 -a '<redis-password>' PING
 ```
 
 ## 16. 升级、回滚、扩缩容

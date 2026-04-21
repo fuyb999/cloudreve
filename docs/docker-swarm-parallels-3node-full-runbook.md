@@ -29,7 +29,9 @@
 
 ### 本次使用的 stack 名称
 
-- Cloudreve 主业务栈：`cloudreve-prl3`
+- Foundation 栈：`cloudreve-prl3-foundation`
+- Infra 栈：`cloudreve-prl3-infra`
+- Cloudreve 主业务栈：`cloudreve-prl3-app`
 - 统一认证栈：`authverse-prl3`
 - 私有仓库栈：`cloudreve-registry-prl3`
 
@@ -37,7 +39,9 @@
 
 当前在线服务已经核对过：
 
-- `cloudreve-prl3`
+- `cloudreve-prl3-foundation`
+- `cloudreve-prl3-infra`
+- `cloudreve-prl3-app`
 - `authverse-prl3`
 - `cloudreve-registry-prl3`
 
@@ -55,6 +59,13 @@
 - Pgpool：`10.37.129.11:25432`
 - Redis Proxy：`10.37.129.11:26380`
 - 私有仓库地址：`10.37.129.11:15000`
+
+这轮真实 3 节点外部连通验证结果：
+
+- 业务对外端口 `25432 26380 28080 28081 28082 28089 28090 29000 29001 29200 29300 29998` 在 `10.37.129.11 / 10.37.129.12 / 10.37.129.13` 三台节点上都可从 Swarm 外访问
+- `https://<node>:29000/minio/health/live` 在三台节点上都返回 `200`
+- `https://<node>:29200/_cluster/health?pretty` 在三台节点上都返回 `green`
+- `15000` 只在 `10.37.129.11` 可达，这是预期行为：`registry:2` 固定部署在 manager，端口发布模式是 `host`
 
 当前 `curl -k https://10.37.129.11:28081/api/v4/site/ping` 返回：
 
@@ -130,6 +141,10 @@
 16. 发现 `/api/v4/site/ping` 健康检查过重，修改 Cloudreve 路由。
 17. 重建 Cloudreve 镜像并推到私有仓库。
 18. 重新滚动发布 Cloudreve 栈，再次压测验证。
+19. 重新排查 shared overlay 网络冲突，修复 `10.41.0.0/24` 子网重叠。
+20. 把 PostgreSQL Repmgr / Pgpool 后端地址统一改成 `tasks.*`。
+21. 收口 MinIO / Elasticsearch / Kafka UI / Authverse 的 healthcheck 观察。
+22. 逐个验证 3 台虚机的 Swarm 外部入口连通性，确认除 registry 外全部业务端口可跨节点访问。
 
 ## 5. 第一步：重新构建 ISO 与创建 3 台 Parallels VM
 
@@ -347,9 +362,11 @@ export ENV_FILE=.env.swarm.parallels-3node-test
   - `SWARM_TIMEZONE=Asia/Shanghai`
   - Docker `json-file` 日志轮转
 - 证书目录：
-  - `SWARM_PKI_MOUNT_SOURCE=/tmp/cloudreve-prl3-assets/pki`
+  - `SWARM_PKI_MOUNT_SOURCE=/srv/cloudreve-prl3-assets/pki`
+  - `SWARM_PKI_LOCAL_SOURCE=/tmp/cloudreve-prl3-assets/pki`
 - 共享字体目录：
-  - `SHARED_CUSTOM_FONTS_MOUNT_SOURCE=/tmp/cloudreve-prl3-assets/fonts`
+  - `SHARED_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve-prl3-assets/fonts`
+  - `SHARED_CUSTOM_FONTS_LOCAL_SOURCE=/tmp/cloudreve-prl3-assets/fonts`
 - `PG / Redis / MinIO / ES / Kafka / Cloudreve runtime` 全部走宿主机 bind
 - 所有对外端口都不是默认端口
 - 所有 stack 名称都已经固定成 `*-prl3`
@@ -438,6 +455,77 @@ docker/swarm/sync-swarm-assets.sh \
 
 - 当前 `PRIVATE_REGISTRY_SCHEME=http`，所以 registry 本身不需要 Docker 证书信任链
 - 但其他对外服务依然全部使用了这套自签 CA
+- 本机生成目录仍然是 `/tmp/cloudreve-prl3-assets/...`
+- 真正挂给容器的远端持久目录必须是 `/srv/cloudreve-prl3-assets/...`
+- `sync-swarm-assets.sh` 的职责就是把本机生成出来的 PKI 与字体，同步到三台 Linux 的 `/srv/...`
+
+### 这一步这次实际踩到的坑
+
+这轮最大的问题不是证书算法，也不是 Swarm 本身，而是挂载源选错了：
+
+- 之前把 PKI 和字体直接 bind 到 guest 的 `/tmp/cloudreve-prl3-assets/...`
+- VM 重启后 `/tmp` 内容丢失
+- service spec 还保留旧 mount，导致代理容器启动后读不到证书或字体
+
+这次最终收敛后的规则是：
+
+- 本机临时生成目录放 `/tmp/cloudreve-prl3-assets/...`
+- Linux 节点持久目录统一放 `/srv/cloudreve-prl3-assets/...`
+- Swarm stack 里的 bind mount 一律挂 `/srv/...`
+
+### 证书生成脚本这次补的行为
+
+`docker/swarm/generate-swarm-pki.sh` 这次已经补了两个关键能力：
+
+- 如果证书文件已存在，不再简单跳过
+- 如果现有证书和当前 CA 不一致，或者和当前 SAN 配置不一致，会自动重签
+
+这意味着后续如果你：
+
+- 换了根 CA
+- 补了新的节点 IP
+- 调整了 `*_TLS_EXTRA_SANS`
+
+只要重新执行一次 `generate-swarm-pki.sh --force-certs`，脚本就会按当前配置自动重签，不需要手工删目录。
+
+### 服务端证书链的正确规则
+
+这次还确认了一件必须记住的事：
+
+- 对外服务的 `fullchain.crt` 不能把根 CA 拼进去
+- `haproxy.pem` 也不能拼根 CA
+
+最终正确格式是：
+
+- `fullchain.crt` 只放叶子证书
+- `haproxy.pem` 只放私钥 + 叶子证书
+
+之前把根 CA 一起拼进去时，严格客户端会直接报：
+
+- `self signed certificate in certificate chain`
+
+### 3 节点公网 SAN 的真实要求
+
+这次三节点外部严格 TLS 验证能全部通过，前提不是“每个服务只配 manager IP”，而是：
+
+- 每个公网入口证书的 SAN 都覆盖 `10.37.129.11`
+- 每个公网入口证书的 SAN 都覆盖 `10.37.129.12`
+- 每个公网入口证书的 SAN 都覆盖 `10.37.129.13`
+
+所以 `.env.swarm.parallels-3node-test` 里以下变量现在都已经补成三节点 IP：
+
+- `CLOUDREVE_MASTER_TLS_EXTRA_SANS`
+- `CLOUDREVE_SLAVE_TLS_EXTRA_SANS`
+- `PGPOOL_TLS_EXTRA_SANS`
+- `REDIS_PROXY_TLS_EXTRA_SANS`
+- `MINIO_PUBLIC_TLS_EXTRA_SANS`
+- `ELASTICSEARCH_PUBLIC_TLS_EXTRA_SANS`
+- `KAFKA_UI_TLS_EXTRA_SANS`
+- `TIKA_TLS_EXTRA_SANS`
+- `ONLYOFFICE_TLS_EXTRA_SANS`
+- `AUTHVERSE_TLS_EXTRA_SANS`
+
+如果后续再扩节点，只要还有跨节点访问公网发布端口的需求，就必须继续把新节点 IP 加到对应服务的 SAN 里。
 
 ## 9. 第五步：在 3 台 Linux 上准备私有仓库与 bind 挂载目录
 
@@ -453,7 +541,7 @@ docker/swarm/sync-swarm-assets.sh \
 - `/etc/docker/daemon.json`
 - `/etc/docker/certs.d`
 - `/srv/cloudreve-prl3/...`
-- `/tmp/cloudreve-prl3-assets/...`
+- `/srv/cloudreve-prl3-assets/...`
 
 所以一定要在节点本机执行，或者从本机通过 `ssh 'bash -s' < script` 的方式远程执行。
 
@@ -674,6 +762,32 @@ curl -k https://10.37.129.11:28081/api/v4/site/ping
 {"code":0,"data":"4.15.0","msg":""}
 ```
 
+### 对外 TLS 验收
+
+这次已经把所有对外端口按真实协议做过一轮正式 TLS 验收，推荐以后直接复用脚本：
+
+```bash
+docker/swarm/verify-public-tls.sh --env-file .env.swarm.parallels-3node-test
+```
+
+这轮三节点实测结论：
+
+- `28080` `authverse`：3 节点 HTTPS 全通过
+- `28081` `cloudreve-master`：3 节点 HTTPS 全通过
+- `28082` `cloudreve-slave`：3 节点 TLS 和代理都正常
+  - 正确探测方式是 `POST /api/v4/slave/ping`
+  - 未带签名时预期返回 `HTTP 200` + JSON `code=403`
+  - 之前用 `GET /` 或 `GET /api/v4/site/ping` 得到 `404`，这是探测方式错了，不是 SSL 故障
+- `28089` `kafka-ui`：3 节点 HTTPS 全通过
+- `28090` `onlyoffice`：3 节点 HTTPS 全通过
+- `29000` `minio api`：3 节点 HTTPS 全通过
+- `29001` `minio console`：3 节点 HTTPS 全通过
+- `29200` `elasticsearch http`：3 节点 HTTPS 全通过
+- `29300` `elasticsearch transport`：3 节点 TLS 全通过
+- `29998` `tika`：3 节点 HTTPS 全通过
+- `26380` `redis-proxy`：3 节点 TLS + `AUTH/PING` 全通过
+- `25432` `pgpool`：3 节点 PostgreSQL `SSLRequest` + TLS 握手全通过
+
 ### Pgpool 三节点状态
 
 ```bash
@@ -691,6 +805,39 @@ sudo docker exec "$cid" sh -lc "PGPASSWORD=\"$pwd\" /opt/bitnami/postgresql/bin/
 1|postgresql-2|5432|up|up|0.333333|standby|standby|0|false|0|||2026-04-16 08:13:33
 2|postgresql-3|5432|up|up|0.333333|standby|standby|0|false|0|||2026-04-16 08:15:44
 ```
+
+### 从 Swarm 外验证 Pgpool 时为什么会看到 `EOF`
+
+这个坑这次已经定位清楚，不是 `pgpool` 坏了，也不是 LB 失效。
+
+原因是 PostgreSQL 的 TLS 握手不是裸 TLS：
+
+- 客户端连上 `25432` 后，不能直接按 HTTPS/TCP TLS 方式握手
+- 必须先发 PostgreSQL `SSLRequest`
+- 只有服务端回 `S` 之后，才进入真正的 TLS 握手
+
+所以如果直接用这类方式探活：
+
+- `openssl s_client -connect 10.37.129.11:25432`
+- 普通裸 TLS 探测器
+
+经常会看到：
+
+- `EOF`
+- `wrong version number`
+- 握手直接断开
+
+这不表示 `pgpool` 不可用，只表示探测方式错了。
+
+这次已经按 PostgreSQL 正确握手方式验证通过：
+
+- 先发 `SSLRequest`
+- 再做 TLS 握手
+- 三个节点的 `25432` 都能成功协商到 `TLSv1.3`
+- 证书 `CN=pgpool`
+- SAN 覆盖 `10.37.129.11 / 10.37.129.12 / 10.37.129.13`
+
+后续如果要做外部探活，必须用 PostgreSQL 协议感知型探测，而不是普通裸 TLS。
 
 ## 13. 第九步：正式压测时实际用了什么脚本
 
@@ -903,6 +1050,7 @@ sudo docker exec "$cid" sh -lc "PGPASSWORD=\"$pwd\" /opt/bitnami/postgresql/bin/
 - 从 bind 目录准备，到 `PG / Redis / MinIO / ES / Kafka / Tika / OnlyOffice / Cloudreve runtime` 全部真实启动
 - 从 Cloudreve 到 Authverse 的分栈部署
 - 从证书与字体下发，到多节点一致性
+- 从 CA 轮换、SAN 扩展，到证书自动重签与严格 TLS 校验通过
 - 从压测监控，到 `site/ping` 路由问题定位与修复
 
 下次继续时，不需要再回忆“上次都干了什么”，直接按本文继续即可。

@@ -16,7 +16,7 @@ usage() {
 说明：
   这个脚本会在宿主机生成一套默认 Swarm PKI：
   1. 根 CA：后续你可以直接替换
-  2. Java truststore：供 authverse / kafka-ui 这类 JVM 客户端直接信任根 CA
+  2. Java truststore：使用 authverse-backend 镜像内的 keytool 生成，供 authverse / kafka-ui 这类 JVM 客户端直接信任根 CA
   3. 各对外入口服务证书：统一由这套 CA 签发
 
 参数：
@@ -81,6 +81,11 @@ if ! command -v openssl >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v docker >/dev/null 2>&1 && ! command -v keytool >/dev/null 2>&1; then
+  echo "当前系统既缺少 docker，也缺少 keytool，无法生成 Java truststore。" >&2
+  exit 1
+fi
+
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -88,10 +93,50 @@ set +a
 
 SWARM_PKI_MOUNT_TYPE="${SWARM_PKI_MOUNT_TYPE:-bind}"
 SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
+SWARM_PKI_LOCAL_SOURCE="${SWARM_PKI_LOCAL_SOURCE:-$SWARM_PKI_MOUNT_SOURCE}"
 SWARM_CA_VALID_DAYS="${SWARM_CA_VALID_DAYS:-3650}"
 SWARM_CERT_VALID_DAYS="${SWARM_CERT_VALID_DAYS:-825}"
 SWARM_CA_COMMON_NAME="${SWARM_CA_COMMON_NAME:-Cloudreve Swarm Root CA}"
 SWARM_TRUSTSTORE_PASSWORD="${SWARM_TRUSTSTORE_PASSWORD:-changeit}"
+
+resolve_truststore_image() {
+  local configured_image="${SWARM_TRUSTSTORE_IMAGE:-}"
+  local local_image="${AUTHVERSE_BACKEND_LOCAL_IMAGE:-}"
+  local runtime_local_image="${AUTHVERSE_BACKEND_RUNTIME_BASE_LOCAL_IMAGE:-}"
+  local remote_image="${AUTHVERSE_BACKEND_IMAGE:-${AUTHVERSE_BACKEND_REMOTE_IMAGE:-}}"
+
+  if [[ -n "$configured_image" ]]; then
+    printf '%s\n' "$configured_image"
+    return 0
+  fi
+
+  if [[ -n "$local_image" ]] && docker image inspect "$local_image" >/dev/null 2>&1; then
+    printf '%s\n' "$local_image"
+    return 0
+  fi
+
+  if [[ -n "$remote_image" ]] && docker image inspect "$remote_image" >/dev/null 2>&1; then
+    printf '%s\n' "$remote_image"
+    return 0
+  fi
+
+  if [[ -n "$local_image" ]]; then
+    printf '%s\n' "$local_image"
+    return 0
+  fi
+
+  if [[ -n "$remote_image" ]]; then
+    printf '%s\n' "$remote_image"
+    return 0
+  fi
+
+  if [[ -n "$runtime_local_image" ]]; then
+    printf '%s\n' "$runtime_local_image"
+    return 0
+  fi
+
+  printf '%s\n' "authverse/authverse-backend:2024-local"
+}
 
 service_contains() {
   local target="$1"
@@ -160,6 +205,44 @@ normalize_sans() {
   done
 
   printf '%s\n' "$result"
+}
+
+normalize_sans_for_compare() {
+  local raw="$1"
+
+  printf '%s\n' "$raw" \
+    | tr ' ' '\n' \
+    | sed '/^$/d' \
+    | sort -u
+}
+
+extract_cert_sans_for_compare() {
+  local cert_file="$1"
+
+  openssl x509 -in "$cert_file" -noout -ext subjectAltName 2>/dev/null \
+    | tail -n +2 \
+    | tr ',' '\n' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^IP Address:/IP:/' \
+    | sed '/^$/d' \
+    | sort -u
+}
+
+cert_matches_current_ca() {
+  local cert_file="$1"
+  local ca_file="$2"
+
+  [[ -f "$cert_file" && -f "$ca_file" ]] || return 1
+  openssl verify -CAfile "$ca_file" "$cert_file" >/dev/null 2>&1
+}
+
+cert_matches_desired_sans() {
+  local cert_file="$1"
+  local desired_sans="$2"
+
+  [[ -f "$cert_file" ]] || return 1
+  diff -u \
+    <(normalize_sans_for_compare "$desired_sans") \
+    <(extract_cert_sans_for_compare "$cert_file") >/dev/null 2>&1
 }
 
 build_service_sans() {
@@ -243,13 +326,17 @@ issue_service_cert() {
   common_name="${common_name#IP:}"
 
   if [[ "$FORCE_CERTS" -eq 0 && -f "$key_file" && -f "$crt_file" ]]; then
-    cat "$crt_file" "$ca_dir/ca.crt" >"$fullchain_file"
-    cat "$key_file" "$crt_file" "$ca_dir/ca.crt" >"$pem_file"
-    cp "$key_file" "$server_key_file"
-    chmod 0600 "$key_file"
-    chmod 0644 "$server_key_file" "$crt_file" "$fullchain_file" "$pem_file"
-    echo "[skip] $service 证书已存在"
-    return 0
+    if cert_matches_current_ca "$crt_file" "$ca_dir/ca.crt" && cert_matches_desired_sans "$crt_file" "$san_string"; then
+    cp "$crt_file" "$fullchain_file"
+    cat "$key_file" "$crt_file" >"$pem_file"
+      cp "$key_file" "$server_key_file"
+      chmod 0600 "$key_file"
+      chmod 0644 "$server_key_file" "$crt_file" "$fullchain_file" "$pem_file"
+      echo "[skip] $service 证书已存在且与当前 CA / SAN 配置一致"
+      return 0
+    fi
+
+    echo "[warn] $service 现有证书与当前 CA 或 SAN 配置不一致，自动重签"
   fi
 
   cat >"$ext_file" <<EOF
@@ -273,8 +360,8 @@ EOF
     -extfile "$ext_file" \
     -extensions v3_req >/dev/null 2>&1
 
-  cat "$crt_file" "$ca_dir/ca.crt" >"$fullchain_file"
-  cat "$key_file" "$crt_file" "$ca_dir/ca.crt" >"$pem_file"
+  cp "$crt_file" "$fullchain_file"
+  cat "$key_file" "$crt_file" >"$pem_file"
   cp "$key_file" "$server_key_file"
 
   chmod 0600 "$key_file"
@@ -311,6 +398,12 @@ generate_truststore() {
   local pki_root="$1"
   local ca_dir="$pki_root/ca"
   local truststore_file="$ca_dir/truststore.p12"
+  local truststore_image
+  local uid_gid
+  local used_local_keytool=0
+
+  truststore_image="$(resolve_truststore_image)"
+  uid_gid="$(id -u):$(id -g)"
 
   if [[ "$FORCE_CA" -eq 0 && -f "$truststore_file" ]]; then
     echo "[skip] Java truststore 已存在"
@@ -318,7 +411,34 @@ generate_truststore() {
   fi
 
   rm -f "$truststore_file"
-  if command -v keytool >/dev/null 2>&1; then
+
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if ! docker run --rm \
+      --user "$uid_gid" \
+      --entrypoint keytool \
+      -v "$ca_dir:/work" \
+      "$truststore_image" \
+      -importcert \
+      -noprompt \
+      -alias swarm-root-ca \
+      -file /work/ca.crt \
+      -keystore /work/truststore.p12 \
+      -storetype PKCS12 \
+      -storepass "$SWARM_TRUSTSTORE_PASSWORD" >/dev/null 2>&1; then
+      if ! command -v keytool >/dev/null 2>&1; then
+        echo "无法通过 docker 镜像 $truststore_image 生成 Java truststore。" >&2
+        exit 1
+      fi
+      used_local_keytool=1
+    fi
+  elif command -v keytool >/dev/null 2>&1; then
+    used_local_keytool=1
+  else
+    echo "当前 docker daemon 不可用，且系统未安装 keytool，无法生成 Java truststore。" >&2
+    exit 1
+  fi
+
+  if [[ "$used_local_keytool" -eq 1 ]]; then
     keytool \
       -importcert \
       -noprompt \
@@ -327,23 +447,14 @@ generate_truststore() {
       -keystore "$truststore_file" \
       -storetype PKCS12 \
       -storepass "$SWARM_TRUSTSTORE_PASSWORD" >/dev/null 2>&1
-  else
-    docker run --rm \
-      --entrypoint keytool \
-      -e SWARM_TRUSTSTORE_PASSWORD="$SWARM_TRUSTSTORE_PASSWORD" \
-      -v "$ca_dir:/work" \
-      eclipse-temurin:21-jre-alpine \
-      -importcert \
-      -noprompt \
-      -alias swarm-root-ca \
-      -file /work/ca.crt \
-      -keystore /work/truststore.p12 \
-      -storetype PKCS12 \
-      -storepass "$SWARM_TRUSTSTORE_PASSWORD" >/dev/null 2>&1
   fi
 
   chmod 0644 "$truststore_file"
-  echo "[done] 已生成 Java truststore"
+  if [[ "$used_local_keytool" -eq 1 ]]; then
+    echo "[done] 已使用本机 keytool 生成 Java truststore"
+  else
+    echo "[done] 已使用 $truststore_image 生成 Java truststore"
+  fi
 }
 
 sync_to_volume() {
@@ -377,7 +488,7 @@ build_target_services() {
 }
 
 if [[ "$SWARM_PKI_MOUNT_TYPE" == "bind" ]]; then
-  PKI_ROOT="$SWARM_PKI_MOUNT_SOURCE"
+  PKI_ROOT="$SWARM_PKI_LOCAL_SOURCE"
   mkdir -p "$PKI_ROOT"
   WORK_ROOT="$PKI_ROOT"
 elif [[ "$SWARM_PKI_MOUNT_TYPE" == "volume" ]]; then

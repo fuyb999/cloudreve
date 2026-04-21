@@ -433,7 +433,8 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 - Cloudreve 默认 S3 初始化地址是 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000`
 - Cloudreve 后台里的 FTS Elasticsearch 地址应填写 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
 - 如果 Cloudreve 要直接使用栈内 Kafka，全局 Kafka brokers 填 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
-- `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL` 保持 `PLAINTEXT`
+- `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE` 保持 `internal-plaintext`
+- 这样 `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL` 会自动落成 `PLAINTEXT`
 - Elasticsearch 所在宿主机必须先执行 `sysctl -w vm.max_map_count=262144`
 - Kafka UI 默认访问地址是 `http://<node-or-lb>:18089`
 
@@ -465,7 +466,8 @@ Kafka UI 本身也走这个内部 bootstrap 地址，所以它会自动看到 `k
 
 - 当前模板依赖 `SWARM_OVERLAY_ENCRYPT=true` 对跨节点 overlay 流量加密
 - 这意味着 Kafka broker 之间、Cloudreve 到 Kafka 的跨机传输不再是裸明文
-- 如果你后续一定要做 Kafka 端到端 TLS，需要再单独为 broker 监听、证书挂载、advertised listeners 做一轮改造
+- 如果你后续一定要让 Cloudreve 直连外部 TLS / SASL Kafka，直接把 `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE` 改成 `external-tls` / `external-sasl-ssl`，再回填 brokers 与证书/SASL 变量
+- 如果你后续一定要做“栈内 Kafka broker 端到端 TLS”，还需要再单独为 broker 监听、证书挂载、advertised listeners 做一轮改造
 
 建议在每台 Elasticsearch 节点持久化：
 

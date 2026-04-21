@@ -83,7 +83,7 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/cloudreve-entrypoint.sh"]
     environment:
       <<: *default-env
-      SWARM_SECRET_ENV_MAPPINGS: CR_CONF_System.SessionSecret=cloudreve_session_secret,CR_CONF_Database.Password=postgresql_password,CR_CONF_Redis.Password=redis_password,CR_INIT_S3_SECRET_KEY=cloudreve_s3_secret_key
+      SWARM_SECRET_ENV_MAPPINGS: ${CLOUDREVE_MASTER_SECRET_ENV_MAPPINGS:-CR_CONF_System.SessionSecret=cloudreve_session_secret,CR_CONF_Database.Password=postgresql_password,CR_CONF_Redis.Password=redis_password,CR_INIT_S3_SECRET_KEY=cloudreve_s3_secret_key}
       SSL_CERT_FILE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
       SSL_CERT_DIR: ${CLOUDREVE_CA_CERT_DIR:-/run/swarm-pki/ca}
       CURL_CA_BUNDLE: ${CLOUDREVE_CA_CERT_FILE:-/run/swarm-pki/ca/ca.crt}
@@ -106,6 +106,12 @@ services:
       CR_CONF_Kafka.TLSSkipVerify: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.TLSServerName: ${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}
       CR_CONF_Kafka.TLSCAPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}
+      CR_CONF_Kafka.TLSCertPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_CERT_PATH:-}
+      CR_CONF_Kafka.TLSKeyPath: ${CLOUDREVE_GLOBAL_KAFKA_TLS_KEY_PATH:-}
+      CR_CONF_Kafka.SASLMechanism: ${CLOUDREVE_GLOBAL_KAFKA_SASL_MECHANISM:-PLAIN}
+      CR_CONF_Kafka.SASLUsername: ${CLOUDREVE_GLOBAL_KAFKA_SASL_USERNAME:-}
+      CR_CONF_Kafka.SASLPassword: ${CLOUDREVE_GLOBAL_KAFKA_SASL_PASSWORD:-}
+      CR_CONF_Kafka.SASLHandshake: ${CLOUDREVE_GLOBAL_KAFKA_SASL_HANDSHAKE:-true}
       CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:?set CLOUDREVE_SITE_URL}
       CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
       CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-https://minio:9000}
@@ -1303,7 +1309,7 @@ secrets:
     name: ${SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME:?set SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME}
   cloudreve_s3_secret_key:
     external: true
-    name: ${SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME:?set SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME}
+    name: ${SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME:-cloudreve_s3_secret_key_disabled}
   onlyoffice_db_password:
     external: true
     name: ${SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME:?set SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME}

@@ -315,6 +315,78 @@ prepare_secret_value_env() {
   export AUTHVERSE_DB_ADMIN_PASSWORD
 }
 
+cloudreve_default_s3_init_enabled() {
+  case "$(printf '%s' "${CR_INIT_DEFAULT_STORAGE:-}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+    s3)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prepare_cloudreve_secret_mappings() {
+  local base_mappings="CR_CONF_System.SessionSecret=cloudreve_session_secret,CR_CONF_Database.Password=postgresql_password,CR_CONF_Redis.Password=redis_password"
+
+  if cloudreve_default_s3_init_enabled; then
+    CLOUDREVE_MASTER_SECRET_ENV_MAPPINGS="${CLOUDREVE_MASTER_SECRET_ENV_MAPPINGS:-${base_mappings},CR_INIT_S3_SECRET_KEY=cloudreve_s3_secret_key}"
+  else
+    CLOUDREVE_MASTER_SECRET_ENV_MAPPINGS="${CLOUDREVE_MASTER_SECRET_ENV_MAPPINGS:-${base_mappings}}"
+    unset SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME
+  fi
+
+  export CLOUDREVE_MASTER_SECRET_ENV_MAPPINGS
+}
+
+prepare_cloudreve_kafka_env() {
+  local default_brokers="$1"
+  local mode
+
+  mode="$(printf '%s' "${CLOUDREVE_GLOBAL_KAFKA_TLS_MODE:-internal-plaintext}" | tr '[:upper:]' '[:lower:]' | xargs)"
+
+  case "$mode" in
+    ""|internal-plaintext)
+      CLOUDREVE_GLOBAL_KAFKA_TLS_MODE="internal-plaintext"
+      CLOUDREVE_GLOBAL_KAFKA_BROKERS="$default_brokers"
+      CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL="PLAINTEXT"
+      ;;
+    external-plaintext)
+      CLOUDREVE_GLOBAL_KAFKA_TLS_MODE="external-plaintext"
+      CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-$default_brokers}"
+      CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL="PLAINTEXT"
+      ;;
+    external-tls)
+      CLOUDREVE_GLOBAL_KAFKA_TLS_MODE="external-tls"
+      CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-$default_brokers}"
+      CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL="SSL"
+      ;;
+    external-sasl-plaintext)
+      CLOUDREVE_GLOBAL_KAFKA_TLS_MODE="external-sasl-plaintext"
+      CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-$default_brokers}"
+      CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL="SASL_PLAINTEXT"
+      ;;
+    external-sasl-ssl)
+      CLOUDREVE_GLOBAL_KAFKA_TLS_MODE="external-sasl-ssl"
+      CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-$default_brokers}"
+      CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL="SASL_SSL"
+      ;;
+    custom)
+      CLOUDREVE_GLOBAL_KAFKA_TLS_MODE="custom"
+      CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-$default_brokers}"
+      ;;
+    *)
+      echo "不支持的 CLOUDREVE_GLOBAL_KAFKA_TLS_MODE: $mode" >&2
+      echo "允许值: internal-plaintext / external-plaintext / external-tls / external-sasl-plaintext / external-sasl-ssl / custom" >&2
+      exit 1
+      ;;
+  esac
+
+  CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY="${CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY:-false}"
+  CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME="${CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME:-kafka}"
+  CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH="${CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH:-/run/swarm-pki/ca/ca.crt}"
+}
+
 sha256_string() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum | awk '{print $1}'
@@ -487,7 +559,7 @@ prepare_stack_secrets() {
       register_stack_secret "SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME" "cloudreve_session_secret" "${CLOUDREVE_SESSION_SECRET:-}" 1
       register_stack_secret "SWARM_SECRET_POSTGRESQL_PASSWORD_NAME" "postgresql_password" "${POSTGRESQL_PASSWORD:-}" 1
       register_stack_secret "SWARM_SECRET_REDIS_PASSWORD_NAME" "redis_password" "${REDIS_PASSWORD:-}" 1
-      register_stack_secret "SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME" "cloudreve_s3_secret_key" "${CR_INIT_S3_SECRET_KEY:-}" 1
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME" "cloudreve_s3_secret_key" "${CR_INIT_S3_SECRET_KEY:-}" "$([ cloudreve_default_s3_init_enabled ] && printf '1' || printf '0')"
       register_stack_secret "SWARM_SECRET_CLOUDREVE_SLAVE_SECRET_NAME" "cloudreve_slave_secret" "${CLOUDREVE_SLAVE_SECRET:-}" 1
       ;;
     foundation)
@@ -516,7 +588,7 @@ prepare_stack_secrets() {
       register_stack_secret "SWARM_SECRET_PGPOOL_ADMIN_PASSWORD_NAME" "pgpool_admin_password" "${PGPOOL_ADMIN_PASSWORD:-}" 1
       register_stack_secret "SWARM_SECRET_REDIS_PASSWORD_NAME" "redis_password" "${REDIS_PASSWORD:-}" 1
       register_stack_secret "SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME" "minio_root_password" "${MINIO_ROOT_PASSWORD:-}" 1
-      register_stack_secret "SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME" "cloudreve_s3_secret_key" "${CR_INIT_S3_SECRET_KEY:-}" 1
+      register_stack_secret "SWARM_SECRET_CLOUDREVE_S3_SECRET_KEY_NAME" "cloudreve_s3_secret_key" "${CR_INIT_S3_SECRET_KEY:-}" "$([ cloudreve_default_s3_init_enabled ] && printf '1' || printf '0')"
       register_stack_secret "SWARM_SECRET_ONLYOFFICE_DB_PASSWORD_NAME" "onlyoffice_db_password" "${ONLYOFFICE_DB_PASSWORD:-}" 1
       register_stack_secret "SWARM_SECRET_ONLYOFFICE_REDIS_PASSWORD_NAME" "onlyoffice_redis_password" "${ONLYOFFICE_REDIS_PASSWORD:-}" 1
       register_stack_secret "SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME" "onlyoffice_rabbitmq_password" "${ONLYOFFICE_RABBITMQ_PASSWORD:-}" 1
@@ -566,7 +638,6 @@ prepare_single_auth_env() {
     CLOUDREVE_FTS_TIKA_ENDPOINT="http://tika:9998"
     CR_INIT_S3_ENDPOINT="http://minio-internal:9000"
     MINIO_INIT_ENDPOINT="http://minio-internal:9000"
-    CLOUDREVE_GLOBAL_KAFKA_BROKERS="kafka:9092"
     KAFKA_UI_BOOTSTRAP_SERVERS="kafka:9092"
     ONLYOFFICE_DB_HOST="pgpool-internal"
     ONLYOFFICE_REDIS_HOST="redis-proxy-internal"
@@ -577,11 +648,18 @@ prepare_single_auth_env() {
     export CLOUDREVE_FTS_TIKA_ENDPOINT
     export CR_INIT_S3_ENDPOINT
     export MINIO_INIT_ENDPOINT
-    export CLOUDREVE_GLOBAL_KAFKA_BROKERS
     export KAFKA_UI_BOOTSTRAP_SERVERS
     export ONLYOFFICE_DB_HOST
     export ONLYOFFICE_REDIS_HOST
   fi
+
+  prepare_cloudreve_kafka_env "${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}"
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_MODE
+  export CLOUDREVE_GLOBAL_KAFKA_BROKERS
+  export CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH
 
   AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM="${AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM:-cloudreve-master:5212}"
   AUTHVERSE_SINGLE_POSTGRES_HOST="${AUTHVERSE_SINGLE_POSTGRES_HOST:-pgpool-internal}"
@@ -589,7 +667,7 @@ prepare_single_auth_env() {
   AUTHVERSE_SINGLE_REDIS_HOST="${AUTHVERSE_SINGLE_REDIS_HOST:-redis-1}"
   AUTHVERSE_SINGLE_REDIS_PORT="${AUTHVERSE_SINGLE_REDIS_PORT:-6379}"
   AUTHVERSE_SINGLE_ELASTICSEARCH_URI="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:-https://elasticsearch:9200}"
-  AUTHVERSE_SINGLE_DB_MASTER_URL="${AUTHVERSE_SINGLE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_SINGLE_POSTGRES_HOST}:${AUTHVERSE_SINGLE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}}"
+  AUTHVERSE_SINGLE_DB_MASTER_URL="${AUTHVERSE_SINGLE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_SINGLE_POSTGRES_HOST}:${AUTHVERSE_SINGLE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}?sslmode=disable}"
   AUTHVERSE_SINGLE_DB_SLAVE_URL="${AUTHVERSE_SINGLE_DB_SLAVE_URL:-$AUTHVERSE_SINGLE_DB_MASTER_URL}"
 
   export AUTHVERSE_SINGLE_CLOUDREVE_INTERNAL_UPSTREAM
@@ -616,13 +694,55 @@ is_truthy() {
   esac
 }
 
+inspect_swarm_network_field() {
+  local network_name="$1"
+  local template="$2"
+  docker network inspect "$network_name" --format "$template" 2>/dev/null || true
+}
+
+list_swarm_networks_by_subnet() {
+  local subnet="$1"
+  local network_id network_name network_subnet
+
+  while IFS= read -r network_id; do
+    [[ -n "$network_id" ]] || continue
+    network_name="$(docker network inspect "$network_id" --format '{{.Name}}' 2>/dev/null || true)"
+    network_subnet="$(docker network inspect "$network_id" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)"
+    if [[ -n "$network_name" && "$network_subnet" == "$subnet" ]]; then
+      printf '%s\n' "$network_name"
+    fi
+  done < <(docker network ls -q 2>/dev/null || true)
+}
+
 ensure_shared_overlay_network() {
   local network_name="$1"
   local subnet="${CLOUDREVE_BACKEND_SUBNET:-10.20.0.0/24}"
   local cmd=(docker network create --driver overlay --subnet "$subnet")
+  local driver scope actual_subnet attachable encrypted has_containers
+  local create_output overlaps
 
   if docker network inspect "$network_name" >/dev/null 2>&1; then
-    return 0
+    driver="$(inspect_swarm_network_field "$network_name" '{{.Driver}}')"
+    scope="$(inspect_swarm_network_field "$network_name" '{{.Scope}}')"
+    actual_subnet="$(inspect_swarm_network_field "$network_name" '{{range .IPAM.Config}}{{.Subnet}}{{end}}')"
+    attachable="$(inspect_swarm_network_field "$network_name" '{{.Attachable}}')"
+    encrypted="$(inspect_swarm_network_field "$network_name" '{{if .Options}}{{if index .Options "encrypted"}}true{{else}}false{{end}}{{else}}false{{end}}')"
+    has_containers="$(inspect_swarm_network_field "$network_name" '{{if .Containers}}true{{else}}false{{end}}')"
+
+    if [[ "$driver" == "overlay" && "$scope" == "swarm" && "$actual_subnet" == "$subnet" ]]; then
+      return 0
+    fi
+
+    if [[ "$has_containers" == "true" ]]; then
+      echo "共享 overlay 网络 $network_name 已存在，但状态异常，无法自动重建。" >&2
+      echo "当前 driver=$driver scope=$scope subnet=${actual_subnet:-<empty>} attachable=${attachable:-<empty>} encrypted=${encrypted:-<empty>}" >&2
+      echo "请先清理占用该网络的旧 stack 或改用新的 CLOUDREVE_BACKEND_SUBNET 后重试。" >&2
+      exit 1
+    fi
+
+    echo "检测到损坏或不匹配的共享 overlay 网络：$network_name，开始删除并重建。"
+    echo "当前 driver=$driver scope=$scope subnet=${actual_subnet:-<empty>} attachable=${attachable:-<empty>} encrypted=${encrypted:-<empty>}"
+    docker network rm "$network_name" >/dev/null
   fi
 
   if is_truthy "${SWARM_OVERLAY_ATTACHABLE:-false}"; then
@@ -634,7 +754,15 @@ ensure_shared_overlay_network() {
   cmd+=("$network_name")
 
   echo "共享 overlay 网络不存在，开始创建：$network_name"
-  "${cmd[@]}" >/dev/null
+  if ! create_output="$("${cmd[@]}" 2>&1)"; then
+    echo "创建共享 overlay 网络失败：$network_name" >&2
+    echo "$create_output" >&2
+    overlaps="$(list_swarm_networks_by_subnet "$subnet" | paste -sd ',' -)"
+    if [[ -n "$overlaps" ]]; then
+      echo "检测到相同子网 $subnet 已被这些网络占用：$overlaps" >&2
+    fi
+    exit 1
+  fi
 }
 
 prepare_stack_name_defaults() {
@@ -657,6 +785,7 @@ prepare_stack_name_defaults() {
 
 prepare_shared_stack_env() {
   local auto_prefixes=0
+  local default_cloudreve_kafka_brokers
   if is_truthy "${SWARM_AUTO_SERVICE_PREFIXES:-true}"; then
     auto_prefixes=1
     CLOUDREVE_FOUNDATION_SERVICE_PREFIX="${FOUNDATION_STACK_NAME}_"
@@ -684,6 +813,8 @@ prepare_shared_stack_env() {
     return 0
   fi
 
+  default_cloudreve_kafka_brokers="${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092"
+
   if [[ "$auto_prefixes" -eq 1 ]]; then
     CLOUDREVE_POSTGRES_HOST="${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal"
     CLOUDREVE_REDIS_ENDPOINT="${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal:6379"
@@ -692,7 +823,6 @@ prepare_shared_stack_env() {
     CLOUDREVE_FTS_TIKA_ENDPOINT="http://${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}tika:9998"
     CR_INIT_S3_ENDPOINT="http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000"
     MINIO_INIT_ENDPOINT="http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000"
-    CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092"
     KAFKA_UI_BOOTSTRAP_SERVERS="${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092"
     KAFKA_1_ADVERTISED_LISTENER="${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka-1:9092"
     KAFKA_2_ADVERTISED_LISTENER="${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka-2:9092"
@@ -703,7 +833,7 @@ prepare_shared_stack_env() {
     AUTHVERSE_POSTGRES_HOST="${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal"
     AUTHVERSE_REDIS_HOST="${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal"
     AUTHVERSE_ELASTICSEARCH_URI="http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200"
-    AUTHVERSE_DB_MASTER_URL="jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT:-5432}/${AUTHVERSE_DB_NAME:-authverse}"
+    AUTHVERSE_DB_MASTER_URL="jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT:-5432}/${AUTHVERSE_DB_NAME:-authverse}?sslmode=disable"
     AUTHVERSE_DB_SLAVE_URL="$AUTHVERSE_DB_MASTER_URL"
   else
     CLOUDREVE_POSTGRES_HOST="${CLOUDREVE_POSTGRES_HOST:-${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal}"
@@ -713,7 +843,6 @@ prepare_shared_stack_env() {
     CLOUDREVE_FTS_TIKA_ENDPOINT="${CLOUDREVE_FTS_TIKA_ENDPOINT:-http://${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}tika:9998}"
     CR_INIT_S3_ENDPOINT="${CR_INIT_S3_ENDPOINT:-http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000}"
     MINIO_INIT_ENDPOINT="${MINIO_INIT_ENDPOINT:-http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000}"
-    CLOUDREVE_GLOBAL_KAFKA_BROKERS="${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092}"
     KAFKA_UI_BOOTSTRAP_SERVERS="${KAFKA_UI_BOOTSTRAP_SERVERS:-${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092}"
     KAFKA_1_ADVERTISED_LISTENER="${KAFKA_1_ADVERTISED_LISTENER:-${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka-1:9092}"
     KAFKA_2_ADVERTISED_LISTENER="${KAFKA_2_ADVERTISED_LISTENER:-${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka-2:9092}"
@@ -724,9 +853,11 @@ prepare_shared_stack_env() {
     AUTHVERSE_POSTGRES_HOST="${AUTHVERSE_POSTGRES_HOST:-${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal}"
     AUTHVERSE_REDIS_HOST="${AUTHVERSE_REDIS_HOST:-${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal}"
     AUTHVERSE_ELASTICSEARCH_URI="${AUTHVERSE_ELASTICSEARCH_URI:-http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200}"
-    AUTHVERSE_DB_MASTER_URL="${AUTHVERSE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT:-5432}/${AUTHVERSE_DB_NAME:-authverse}}"
+    AUTHVERSE_DB_MASTER_URL="${AUTHVERSE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT:-5432}/${AUTHVERSE_DB_NAME:-authverse}?sslmode=disable}"
     AUTHVERSE_DB_SLAVE_URL="${AUTHVERSE_DB_SLAVE_URL:-$AUTHVERSE_DB_MASTER_URL}"
   fi
+
+  prepare_cloudreve_kafka_env "$default_cloudreve_kafka_brokers"
 
   export CLOUDREVE_POSTGRES_HOST
   export CLOUDREVE_REDIS_ENDPOINT
@@ -735,7 +866,12 @@ prepare_shared_stack_env() {
   export CLOUDREVE_FTS_TIKA_ENDPOINT
   export CR_INIT_S3_ENDPOINT
   export MINIO_INIT_ENDPOINT
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_MODE
   export CLOUDREVE_GLOBAL_KAFKA_BROKERS
+  export CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_SKIP_VERIFY
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_SERVER_NAME
+  export CLOUDREVE_GLOBAL_KAFKA_TLS_CA_PATH
   export KAFKA_UI_BOOTSTRAP_SERVERS
   export KAFKA_1_ADVERTISED_LISTENER
   export KAFKA_2_ADVERTISED_LISTENER
@@ -761,10 +897,10 @@ prepare_external_auth_env() {
   AUTHVERSE_REDIS_PORT="${AUTHVERSE_REDIS_PORT:-6379}"
   AUTHVERSE_ELASTICSEARCH_URI="${AUTHVERSE_ELASTICSEARCH_URI:-http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200}"
   if is_truthy "${SWARM_AUTO_SERVICE_PREFIXES:-true}"; then
-    AUTHVERSE_DB_MASTER_URL="jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}"
+    AUTHVERSE_DB_MASTER_URL="jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}?sslmode=disable"
     AUTHVERSE_DB_SLAVE_URL="$AUTHVERSE_DB_MASTER_URL"
   else
-    AUTHVERSE_DB_MASTER_URL="${AUTHVERSE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}}"
+    AUTHVERSE_DB_MASTER_URL="${AUTHVERSE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_POSTGRES_HOST}:${AUTHVERSE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}?sslmode=disable}"
     AUTHVERSE_DB_SLAVE_URL="${AUTHVERSE_DB_SLAVE_URL:-$AUTHVERSE_DB_MASTER_URL}"
   fi
 
@@ -881,6 +1017,7 @@ prepare_image_source_env
 validate_remote_image_source_env
 prepare_auth_common_env
 prepare_secret_value_env
+prepare_cloudreve_secret_mappings
 
 COMPOSE_KIND=""
 COMPOSE_LABEL=""

@@ -168,11 +168,14 @@ vrrp_instance VI_CLOUDREVE {
 从客户端或运维机验证 VIP：
 
 ```bash
-curl -kfsS https://<vip>:28081/api/v4/site/ping
-curl -kfsS https://<vip>:28080/
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29000/minio/health/live
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29998/tika
+docker/swarm/verify-public-tls.sh --env-file .env.swarm
 ```
+
+补充说明：
+
+- `cloudreve-slave` 的 `28082` 是从站签名接口入口
+- 正确探测方式是 `POST /api/v4/slave/ping`
+- 未带签名时返回 `HTTP 200` + JSON `code=403` 属于正常结果
 
 Pgpool 需要按 PostgreSQL TLS 方式验证：
 
@@ -187,7 +190,13 @@ Redis 如果确实需要外部访问，建议只在内网验证：
 
 ```bash
 redis-cli --tls --cacert /srv/cloudreve/pki/ca/ca.crt \
-  -h <vip> -p 26379 -a '<redis-password>' PING
+  -h <vip> -p 26380 -a '<redis-password>' PING
+```
+
+OnlyOffice 对外入口也在 VIP/LB 范围内，建议一并验证：
+
+```bash
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28090/healthcheck
 ```
 
 ## 8. 当前仍需注意

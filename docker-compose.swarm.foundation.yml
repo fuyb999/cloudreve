@@ -86,8 +86,8 @@ services:
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
-      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-tasks.postgresql-1}
+      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-1
       REPMGR_NODE_NETWORK_NAME: postgresql-1
       REPMGR_ADVERTISE_HOST: postgresql-1
@@ -144,8 +144,8 @@ services:
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
-      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-tasks.postgresql-1}
+      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-2
       REPMGR_NODE_NETWORK_NAME: postgresql-2
       REPMGR_ADVERTISE_HOST: postgresql-2
@@ -202,8 +202,8 @@ services:
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
-      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-postgresql-1,postgresql-2,postgresql-3}
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-tasks.postgresql-1}
+      REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-3
       REPMGR_NODE_NETWORK_NAME: postgresql-3
       REPMGR_ADVERTISE_HOST: postgresql-3
@@ -257,7 +257,7 @@ services:
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: PGPOOL_POSTGRES_PASSWORD=postgresql_postgres_password,PGPOOL_SR_CHECK_PASSWORD=postgresql_password,PGPOOL_ADMIN_PASSWORD=pgpool_admin_password,PGPOOL_PASSWORD=postgresql_password
-      PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
+      PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:tasks.postgresql-1:5432,1:tasks.postgresql-2:5432,2:tasks.postgresql-3:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
       PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
       PGPOOL_ENABLE_LOAD_BALANCING: "no"
@@ -308,7 +308,7 @@ services:
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: PGPOOL_POSTGRES_PASSWORD=postgresql_postgres_password,PGPOOL_SR_CHECK_PASSWORD=postgresql_password,PGPOOL_ADMIN_PASSWORD=pgpool_admin_password,PGPOOL_PASSWORD=postgresql_password
-      PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
+      PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:tasks.postgresql-1:5432,1:tasks.postgresql-2:5432,2:tasks.postgresql-3:5432}
       PGPOOL_POSTGRES_USERNAME: postgres
       PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
       PGPOOL_ENABLE_LOAD_BALANCING: "no"

@@ -252,7 +252,7 @@ docker node update --label-add cloudreve.registry=true <node-name>
 8. 如果启用 `infra` 模板，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
 9. 集群模式下，Cloudreve 默认 S3 地址用 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000`，FTS Elasticsearch 地址填 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
 10. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
-11. 同时把 `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
+11. 同时把 `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE=internal-plaintext`，这样 `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL` 会自动落成 `PLAINTEXT`；Kafka UI 继续保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
 12. 如果 `SWARM_OVERLAY_ENCRYPT=true`，跨主机 Kafka 流量会由 Swarm overlay 加密；当前模板依赖这一层
 13. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui-public` 对外 TLS 端口；UI 本身仍然走内部 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
 14. 自定义镜像统一先 push 到固定 manager 上的 `registry:2`，再部署主业务栈，不要逐台 `docker load`

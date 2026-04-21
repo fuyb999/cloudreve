@@ -226,10 +226,13 @@ cp .env.swarm.prod-4x256g.example .env.swarm
 - `TIKA_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/tika:3.2.3.0-full-unrar-charset`
 - `AUTHVERSE_WEB_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/authverse/authverse-web:2024-local`
 - `AUTHVERSE_BACKEND_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/authverse/authverse-backend:2024-local`
+- `SWARM_TRUSTSTORE_IMAGE` 默认保持 `${AUTHVERSE_BACKEND_IMAGE}`，truststore 统一由 authverse-backend 镜像内 `keytool` 生成
 - `CLOUDREVE_POSTGRES_HOST` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
 - `CLOUDREVE_REDIS_ENDPOINT` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal:6379`
 - `CLOUDREVE_FTS_ELASTICSEARCH_ENDPOINT` 默认保持 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
 - `CLOUDREVE_FTS_TIKA_ENDPOINT` 默认保持 `http://${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}tika:9998`
+- `CLOUDREVE_GLOBAL_KAFKA_TLS_MODE` 默认保持 `internal-plaintext`
+- 如果你要让 Cloudreve 直连外部 TLS / SASL Kafka，再按需回填 `CLOUDREVE_GLOBAL_KAFKA_TLS_*` 与 `CLOUDREVE_GLOBAL_KAFKA_SASL_*`
 - `AUTHVERSE_POSTGRES_HOST` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
 - `AUTHVERSE_REDIS_HOST` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal`
 - `AUTHVERSE_ELASTICSEARCH_URI` 默认保持 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
@@ -446,22 +449,22 @@ docker stack services authverse-prod
 对外验收：
 
 ```bash
-curl -kfsS https://<vip>:28081/api/v4/site/ping
-curl -kfsS https://<vip>:28080/
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28082/
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28090/healthcheck
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29000/minio/health/live
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29998/tika
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29200
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28089
+docker/swarm/verify-public-tls.sh --env-file .env.swarm
 ```
+
+说明：
+
+- `28082` 对应的是 `cloudreve-slave` 从站入口，不是匿名公开页面
+- 正确探测方式是 `POST /api/v4/slave/ping`
+- 未带签名时，预期返回 `HTTP 200` 且 JSON `code=403`
+- 这表示 TLS、代理和业务鉴权都正常，不应误判成故障
 
 数据库与缓存验收：
 
 ```bash
 PGPASSWORD='<postgres-password>' PGSSLMODE=verify-ca PGSSLROOTCERT=/srv/cloudreve/pki/ca/ca.crt \
   psql -h <vip> -p 25432 -U cloudreve -d cloudreve -c 'select 1;'
-redis-cli --tls --cacert /srv/cloudreve/pki/ca/ca.crt -h <vip> -p 26379 -a '<redis-password>' PING
+redis-cli --tls --cacert /srv/cloudreve/pki/ca/ca.crt -h <vip> -p 26380 -a '<redis-password>' PING
 ```
 
 MinIO bucket 验收：
