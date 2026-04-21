@@ -105,6 +105,9 @@ func migrateDefaultStoragePolicy(l logging.Logger, client *ent.Client, ctx conte
 		return migrateDefaultLocalStoragePolicy(l, client, ctx)
 	case string(types.PolicyTypeS3):
 		return migrateDefaultS3StoragePolicy(l, client, ctx)
+	case "disabled", "disable", "none", "off", "skip":
+		l.Info("Default S3 storage policy initialization is disabled by CR_INIT_DEFAULT_STORAGE=%q, fallback to local policy.", initType)
+		return migrateDefaultLocalStoragePolicy(l, client, ctx)
 	default:
 		return fmt.Errorf("unsupported CR_INIT_DEFAULT_STORAGE %q", initType)
 	}
