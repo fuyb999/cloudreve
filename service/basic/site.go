@@ -33,18 +33,19 @@ type SiteConfig struct {
 	ForgetCaptcha bool `json:"forget_captcha,omitempty"`
 	Authn         bool `json:"authn,omitempty"`
 	// OIDC 相关字段由登录页读取，用来决定是否显示本地表单、按钮文案和自动跳转行为。
-	OIDCEnabled      bool                `json:"oidc_enabled,omitempty"`
-	OIDCDisplayName  string              `json:"oidc_display_name,omitempty"`
-	OIDCAutoRedirect bool                `json:"oidc_auto_redirect,omitempty"`
-	ReCaptchaKey     string              `json:"captcha_ReCaptchaKey,omitempty"`
-	CaptchaType      setting.CaptchaType `json:"captcha_type,omitempty"`
-	TurnstileSiteID  string              `json:"turnstile_site_id,omitempty"`
-	CapInstanceURL   string              `json:"captcha_cap_instance_url,omitempty"`
-	CapSiteKey       string              `json:"captcha_cap_site_key,omitempty"`
-	CapAssetServer   string              `json:"captcha_cap_asset_server,omitempty"`
-	RegisterEnabled  bool                `json:"register_enabled,omitempty"`
-	TosUrl           string              `json:"tos_url,omitempty"`
-	PrivacyPolicyUrl string              `json:"privacy_policy_url,omitempty"`
+	OIDCEnabled      bool                      `json:"oidc_enabled,omitempty"`
+	OIDCDisplayName  string                    `json:"oidc_display_name,omitempty"`
+	OIDCAutoRedirect bool                      `json:"oidc_auto_redirect,omitempty"`
+	OIDCRuntimeState *setting.OIDCRuntimeState `json:"oidc_runtime_state,omitempty"`
+	ReCaptchaKey     string                    `json:"captcha_ReCaptchaKey,omitempty"`
+	CaptchaType      setting.CaptchaType       `json:"captcha_type,omitempty"`
+	TurnstileSiteID  string                    `json:"turnstile_site_id,omitempty"`
+	CapInstanceURL   string                    `json:"captcha_cap_instance_url,omitempty"`
+	CapSiteKey       string                    `json:"captcha_cap_site_key,omitempty"`
+	CapAssetServer   string                    `json:"captcha_cap_asset_server,omitempty"`
+	RegisterEnabled  bool                      `json:"register_enabled,omitempty"`
+	TosUrl           string                    `json:"tos_url,omitempty"`
+	PrivacyPolicyUrl string                    `json:"privacy_policy_url,omitempty"`
 
 	// Explorer section
 	Icons                string                     `json:"icons,omitempty"`
@@ -103,7 +104,7 @@ func (s *GetSettingService) GetSiteConfig(c *gin.Context) (*SiteConfig, error) {
 		dep.Logger().Info("site config login: loaded forgot captcha")
 		authnEnabled := settings.AuthnEnabled(c)
 		dep.Logger().Info("site config login: loaded authn")
-		oidc := settings.OIDC(c)
+		oidc := user.LoadOIDCSettingForSiteConfig(c, dep)
 		dep.Logger().Info("site config login: loaded oidc")
 		registerEnabled := settings.RegisterEnabled(c)
 		dep.Logger().Info("site config login: loaded register enabled")
@@ -118,6 +119,7 @@ func (s *GetSettingService) GetSiteConfig(c *gin.Context) (*SiteConfig, error) {
 			OIDCEnabled:      oidc.Enabled,
 			OIDCDisplayName:  oidc.DisplayName,
 			OIDCAutoRedirect: oidc.AutoRedirect,
+			OIDCRuntimeState: oidc.RuntimeState,
 			RegisterEnabled:  registerEnabled && !oidc.Enabled,
 			PrivacyPolicyUrl: legalDocs.PrivacyPolicy,
 			TosUrl:           legalDocs.TermsOfService,

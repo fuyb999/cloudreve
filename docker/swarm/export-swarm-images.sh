@@ -38,7 +38,7 @@ usage() {
 
 示例：
   docker/swarm/export-swarm-images.sh --env-file .env.swarm
-  docker/swarm/export-swarm-images.sh --env-file .env.swarm.prod-4x128g.example --output-dir .
+  docker/swarm/export-swarm-images.sh --env-file .env.swarm.prod-4x256g.example --output-dir .
 EOF
 }
 

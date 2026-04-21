@@ -8,11 +8,12 @@
 #
 # 说明：
 # - 这个文件用于独立发布 PostgreSQL / Redis / Tika / OnlyOffice 这一组基础中间件。
-# - 典型方式是对同一个 stack name 再执行一次：
-#   - `docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod`
+# - 典型方式是独立发布：
+#   - `docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod-foundation`
 # - `minio-init` 不放在这里，而是跟随 `docker-compose.swarm.infra.yml` 中的 `minio`
 #   入口一起发布，避免 foundation 单独部署时出现无意义的初始化重试。
 # - 默认单节点联调走 `docker-compose.swarm.single.yml`。
+# - `pgpool-internal` 供 overlay 内部服务明文访问，`pgpool` 供外部客户端通过 PostgreSQL 协议原生 TLS 访问。
 # - `onlyoffice` 使用外置 `pgpool + redis-proxy + onlyoffice-rabbitmq`，这样才能在 Swarm 下安全开多副本。
 # - 社区版这里实现的是 Swarm 级多副本高可用编排，不是 ONLYOFFICE 商业版官方集群产品形态。
 
@@ -300,13 +301,32 @@ services:
 
   pgpool:
     <<: *service-base
-    image: ${REDIS_PROXY_IMAGE:-haproxy:3.0-alpine}
+    image: ${PGPOOL_IMAGE:-bitnamilegacy/pgpool:4.6.3-debian-12-r0}
     hostname: "{{.Node.Hostname}}-pgpool-public-{{.Task.Slot}}"
-    environment: *default-env
+    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/entrypoint.sh"]
+    command: ["/opt/bitnami/scripts/pgpool/run.sh"]
+    environment:
+      <<: *default-env
+      SWARM_SECRET_ENV_MAPPINGS: PGPOOL_POSTGRES_PASSWORD=postgresql_postgres_password,PGPOOL_SR_CHECK_PASSWORD=postgresql_password,PGPOOL_ADMIN_PASSWORD=pgpool_admin_password,PGPOOL_PASSWORD=postgresql_password
+      PGPOOL_BACKEND_NODES: ${PGPOOL_BACKEND_NODES:-0:postgresql-1:5432,1:postgresql-2:5432,2:postgresql-3:5432}
+      PGPOOL_POSTGRES_USERNAME: postgres
+      PGPOOL_SR_CHECK_USER: ${POSTGRESQL_USERNAME:-cloudreve}
+      PGPOOL_ENABLE_LOAD_BALANCING: "no"
+      PGPOOL_ENABLE_POOL_HBA: "yes"
+      PGPOOL_ADMIN_USERNAME: ${PGPOOL_ADMIN_USERNAME:-admin}
+      PGPOOL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
+      PGPOOL_ENABLE_TLS: "${PGPOOL_ENABLE_TLS:-yes}"
+      PGPOOL_TLS_CERT_FILE: "${PGPOOL_TLS_CERT_FILE:-/run/swarm-pki/services/pgpool/fullchain.crt}"
+      PGPOOL_TLS_KEY_FILE: "${PGPOOL_TLS_KEY_FILE:-/run/swarm-pki/services/pgpool/server.key}"
+      PGPOOL_TLS_PREFER_SERVER_CIPHERS: "${PGPOOL_TLS_PREFER_SERVER_CIPHERS:-yes}"
     configs:
-      - source: pgpool_public_tls_cfg_v2
-        target: /usr/local/etc/haproxy/haproxy.cfg
-        mode: 0444
+      - source: swarm_secret_wrap_v1
+        target: /usr/local/bin/swarm-secret-wrap.sh
+        mode: 0555
+    secrets:
+      - postgresql_postgres_password
+      - postgresql_password
+      - pgpool_admin_password
     ports:
       - target: 5432
         published: ${PGPOOL_PUBLIC_PORT:-15432}
@@ -317,6 +337,12 @@ services:
       - *pki-volume
     networks:
       - cloudreve_backend
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 2m
     deploy:
       replicas: ${PGPOOL_PUBLIC_REPLICAS:-2}
       update_config: *default-update-config
@@ -852,7 +878,7 @@ services:
 networks:
   cloudreve_backend:
     external: true
-    name: ${CLOUDREVE_STACK_NAME:?set CLOUDREVE_STACK_NAME}_cloudreve_backend
+    name: ${SWARM_SHARED_NETWORK:?set SWARM_SHARED_NETWORK}
 
 volumes:
   postgresql_1_data:
@@ -875,8 +901,6 @@ configs:
     file: ./docker/swarm/postgresql-repmgr-run.sh
   redis_proxy_bootstrap_v8:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
-  pgpool_public_tls_cfg_v2:
-    file: ./docker/swarm/haproxy/pgpool-public-tls.cfg
   redis_public_tls_cfg_v2:
     file: ./docker/swarm/haproxy/redis-public-tls.cfg
   http_tls_proxy_template_v2:

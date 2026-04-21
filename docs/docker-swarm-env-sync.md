@@ -14,8 +14,8 @@
 
 1. 部署脚本会先在本地 `source .env.swarm`
 2. 然后把某个 `docker-compose.swarm.<name>.yml`
-   渲染成最终 stack 配置；如果你是拆分发布，就对同一个 stack name
-   依次执行 `cloudreve`、`foundation`、`infra`
+   渲染成最终 stack 配置；如果你是拆分发布，就按独立 stack
+   依次执行 `foundation`、`infra`、`cloudreve`、`auth`
 3. 最后把渲染后的 service spec 提交给 Swarm
 
 所以：
@@ -195,9 +195,9 @@ CLOUDREVE_MASTER_PROXY_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 PGPOOL_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 REDIS_PROXY_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
 REDIS_SENTINEL_NODE_CONSTRAINT=node.labels.cloudreve.redis-sentinel==true
-ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
-ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
-ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.edge==true
+ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
+ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==true
 ```
 
 对应节点先打标签：
@@ -211,7 +211,7 @@ docker node update --label-add cloudreve.onlyoffice=true <node-name>
 docker node update --label-add cloudreve.onlyoffice-rabbitmq=true <node-name>
 ```
 
-- 默认情况下，OnlyOffice 直接复用 `cloudreve.edge`；如果你补了上面两条专用标签，再把环境变量改成：
+- 4 台生产基线默认让 OnlyOffice 使用专用标签，而不是直接使用入口标签。这样 `onlyoffice-rabbitmq` 可以固定在指定节点，`onlyoffice` 副本也能清晰分布。
 
 ```bash
 ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
@@ -250,11 +250,11 @@ docker node update --label-add cloudreve.registry=true <node-name>
 6. 可选 `bind` 服务一旦切成绝对路径，就同时加节点标签和约束
 7. 如果不确定某个路径能否在多机上保持一致，就继续使用默认 `volume` 模式
 8. 如果启用 `infra` 模板，在所有 Elasticsearch 节点先设置 `vm.max_map_count=262144`
-9. 集群模式下，Cloudreve 默认 S3 地址仍用 `http://minio-internal:9000`，FTS Elasticsearch 地址填 `http://elasticsearch-internal:9200`
-10. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `kafka:9092`
+9. 集群模式下，Cloudreve 默认 S3 地址用 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000`，FTS Elasticsearch 地址填 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
+10. 如果启用栈内 Kafka，并让 Cloudreve 使用全局 Kafka 配置，就把 brokers 填 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
 11. 同时把 `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
 12. 如果 `SWARM_OVERLAY_ENCRYPT=true`，跨主机 Kafka 流量会由 Swarm overlay 加密；当前模板依赖这一层
-13. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui-public` 对外 TLS 端口；UI 本身仍然走内部 `kafka:9092`
+13. 如果要从浏览器直接查看 Kafka 集群，就访问 `kafka-ui-public` 对外 TLS 端口；UI 本身仍然走内部 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
 14. 自定义镜像统一先 push 到固定 manager 上的 `registry:2`，再部署主业务栈，不要逐台 `docker load`
 15. 如果 `SWARM_PKI_MOUNT_TYPE=bind` 或 `SHARED_CUSTOM_FONTS_MOUNT_TYPE=bind`，要把对应目录同步到所有可能落任务的节点；Swarm 只会分发 `configs`，不会自动分发宿主机 bind 目录
 16. 仓库内已经提供 `docker/swarm/sync-swarm-assets.sh`，可以统一同步 `.env.swarm`、PKI 目录、共享字体目录
@@ -267,7 +267,7 @@ docker node update --label-add cloudreve.registry=true <node-name>
 - `docker-compose.swarm.infra.yml`
 - `docker-compose.swarm.auth.yml`
 - `.env.swarm.example`
-- `.env.swarm.prod-4x128g.example`
+- `.env.swarm.prod-4x256g.example`
 - `docker/swarm/deploy-stack.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `docker/swarm/prepare-bitnami-images.sh`

@@ -4,13 +4,13 @@
 
 - `1` 个 manager
 - `3` 个 worker
-- 每台 `128GB` 内存
+- 每台 `256GB` 内存
 - 每台 `64` 线程
-- 直接使用 [`.env.swarm.prod-4x128g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x128g.example) 作为基线
+- 直接使用 [`.env.swarm.prod-4x256g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x256g.example) 作为基线
 
 对应模板：
 
-- [`.env.swarm.prod-4x128g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x128g.example)
+- [`.env.swarm.prod-4x256g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x256g.example)
 - [`docker-compose.swarm.registry.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.registry.yml)
 - [`docker-compose.swarm.cloudreve.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.cloudreve.yml)
 - [`docker-compose.swarm.foundation.yml`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker-compose.swarm.foundation.yml)
@@ -25,6 +25,7 @@
 - [`docker/swarm/prepare-private-registry.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/prepare-private-registry.sh)
 - [`docker/swarm/publish-private-images.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/publish-private-images.sh)
 - [`docker/swarm/sync-swarm-assets.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/sync-swarm-assets.sh)
+- [`docker/swarm/setup-swarm-vip-lb.sh`](/Users/fuyb/Desktop/20260322/code/cloudreve/docker/swarm/setup-swarm-vip-lb.sh)
 
 ## 1. 主机名
 
@@ -41,15 +42,16 @@
 
 1. 配主机名、装 Docker、初始化 Swarm、worker 加入集群。
 2. 在 manager 给 4 台机器打好节点标签。
-3. 复制 [`.env.swarm.prod-4x128g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x128g.example) 为 `.env.swarm` 并回填密码、域名、固定 tag。
+3. 复制 [`.env.swarm.prod-4x256g.example`](/Users/fuyb/Desktop/20260322/code/cloudreve/.env.swarm.prod-4x256g.example) 为 `.env.swarm` 并回填密码、域名、固定 tag、VIP/LB 节点 IP。
 4. 在 manager 先生成默认根 CA 和整套业务服务证书，再把根 CA 下发到所有节点。
 5. 在所有节点执行 `prepare-private-registry.sh`，把固定 manager 上的 `registry:2` 写入 Docker `insecure-registries`。
 6. 在所有目标节点分别执行目录准备，先把 `PKI / 共享字体 / bind` 目录建好。
 7. 在 manager 部署私有仓库，先推 authverse 构建基镜像，再构建并推送 `Tika`、`authverse-web`、`authverse-backend`。
-8. 在 manager 按 `cloudreve / foundation / infra` 三个模板分别执行 `render-only`，确认无误后正式部署到同一个 `cloudreve-prod` 栈。
+8. 在 manager 按 `foundation / infra / cloudreve` 三个模板分别执行 `render-only`，确认无误后正式部署为独立 stack，并全部接入同一个 `SWARM_SHARED_NETWORK`。
 9. 主栈稳定后执行 `docker/swarm/init-authverse-db.sh`，再对 `authverse-prod` 先 `render-only`，最后正式部署。
-10. 做外部入口、数据库、Redis、MinIO、Elasticsearch、OIDC discovery、`/app-api` 的整体验收。
-11. 首次进入 Cloudreve 后台生成真实 `Slave Key`，回填 `.env.swarm`，最后再滚动部署一次主栈。
+10. 在 2 台或 3 台入口节点安装 HAProxy/Keepalived，执行 `setup-swarm-vip-lb.sh`，把所有对外服务接到统一 VIP。
+11. 做外部入口、数据库、Redis、MinIO、Elasticsearch、OIDC discovery、`/app-api` 的整体验收。
+12. 首次进入 Cloudreve 后台生成真实 `Slave Key`，回填 `.env.swarm`，最后再滚动部署一次主栈。
 
 ## 2. 初始化 Swarm
 
@@ -128,6 +130,8 @@ docker node update --label-add cloudreve.minio1=true cr-prod-mgr-11
 docker node update --label-add cloudreve.tika=true cr-prod-mgr-11
 docker node update --label-add cloudreve.kafka-ui=true cr-prod-mgr-11
 docker node update --label-add cloudreve.auth-web=true cr-prod-mgr-11
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-mgr-11
+docker node update --label-add cloudreve.onlyoffice-rabbitmq=true cr-prod-mgr-11
 
 docker node update --label-add cloudreve.slave=true cr-prod-wkr-12
 docker node update --label-add cloudreve.edge=true cr-prod-wkr-12
@@ -137,16 +141,23 @@ docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-12
 docker node update --label-add cloudreve.es1=true cr-prod-wkr-12
 docker node update --label-add cloudreve.kafka1=true cr-prod-wkr-12
 docker node update --label-add cloudreve.minio2=true cr-prod-wkr-12
+docker node update --label-add cloudreve.tika=true cr-prod-wkr-12
+docker node update --label-add cloudreve.auth-web=true cr-prod-wkr-12
 docker node update --label-add cloudreve.auth-backend=true cr-prod-wkr-12
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-wkr-12
 
 docker node update --label-add cloudreve.slave=true cr-prod-wkr-13
+docker node update --label-add cloudreve.edge=true cr-prod-wkr-13
 docker node update --label-add cloudreve.pg2=true cr-prod-wkr-13
 docker node update --label-add cloudreve.redis2=true cr-prod-wkr-13
 docker node update --label-add cloudreve.redis-sentinel=true cr-prod-wkr-13
 docker node update --label-add cloudreve.es2=true cr-prod-wkr-13
 docker node update --label-add cloudreve.kafka2=true cr-prod-wkr-13
 docker node update --label-add cloudreve.minio3=true cr-prod-wkr-13
+docker node update --label-add cloudreve.tika=true cr-prod-wkr-13
+docker node update --label-add cloudreve.auth-web=true cr-prod-wkr-13
 docker node update --label-add cloudreve.auth-backend=true cr-prod-wkr-13
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-wkr-13
 
 docker node update --label-add cloudreve.slave=true cr-prod-wkr-14
 docker node update --label-add cloudreve.edge=true cr-prod-wkr-14
@@ -158,21 +169,15 @@ docker node update --label-add cloudreve.kafka3=true cr-prod-wkr-14
 docker node update --label-add cloudreve.minio4=true cr-prod-wkr-14
 docker node update --label-add cloudreve.tika=true cr-prod-wkr-14
 docker node update --label-add cloudreve.auth-web=true cr-prod-wkr-14
+docker node update --label-add cloudreve.auth-backend=true cr-prod-wkr-14
+docker node update --label-add cloudreve.onlyoffice=true cr-prod-wkr-14
 ```
 
 说明：
 
-- 默认 `OnlyOffice` 直接复用 `cloudreve.edge` 标签池，所以这套默认打标签命令里不需要额外 `cloudreve.onlyoffice`
-- 在这份 4 节点清单里，`edge` 节点是 `cr-prod-mgr-11`、`cr-prod-wkr-12`、`cr-prod-wkr-14`，`onlyoffice` / `onlyoffice-public` 会从这 3 台里选 2 台调度
-- 如果 `OnlyOffice` 改成宿主机绝对路径挂载，或者你想让调度位置固定，就在同一轮打标签时额外补上：
-
-```bash
-docker node update --label-add cloudreve.onlyoffice=true cr-prod-mgr-11
-docker node update --label-add cloudreve.onlyoffice=true cr-prod-wkr-14
-docker node update --label-add cloudreve.onlyoffice-rabbitmq=true cr-prod-mgr-11
-```
-
-- 同时把 `.env.swarm` 里的这 3 个约束改掉：
+- 这份 `4x256G` 基线默认 4 台都打 `cloudreve.edge=true`，用于承接所有 Swarm published port 后端。
+- `OnlyOffice` 默认也打 `cloudreve.onlyoffice=true`，这样 4 个文档服务副本可以铺满 4 台；RabbitMQ 仍固定单副本在 manager。
+- `.env.swarm.prod-4x256g.example` 已经默认使用下面 3 个约束，通常不用再改：
 
 ```bash
 ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
@@ -185,7 +190,7 @@ ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==t
 先在固定的部署 manager 上：
 
 ```bash
-cp .env.swarm.prod-4x128g.example .env.swarm
+cp .env.swarm.prod-4x256g.example .env.swarm
 ```
 
 如果你准备在其它节点直接执行仓库里的准备脚本，也把同一份 `.env.swarm`
@@ -208,18 +213,26 @@ cp .env.swarm.prod-4x128g.example .env.swarm
 
 注意：
 
-- `CR_INIT_S3_ENDPOINT` 保持 `http://minio-internal:9000`
+- `SWARM_SHARED_NETWORK` 默认保持 `cloudreve-prod_backend`，所有生产 stack 都接入这一个外部 overlay 网络
+- `FOUNDATION_STACK_NAME` 默认保持 `cloudreve-prod-foundation`
+- `INFRA_STACK_NAME` 默认保持 `cloudreve-prod-infra`
+- `CLOUDREVE_STACK_NAME` 默认保持 `cloudreve-prod-app`
+- `AUTHVERSE_STACK_NAME` 默认保持 `authverse-prod`
+- `CR_INIT_S3_ENDPOINT` 默认保持 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000`
 - `CR_INIT_S3_BUCKET` 保持 `cloudreve`
 - `MINIO_DISTRIBUTED_NODES` 默认保持 `minio-1,minio-2,minio-3,minio-4`
-- `CLOUDREVE_STACK_NAME` 在这份生产模板里默认就是 `cloudreve-prod`，不要改回 `cloudreve`
 - `PRIVATE_REGISTRY_ADDR` 默认保持 `cr-prod-mgr-11:15000`
 - `PRIVATE_REGISTRY_SCHEME` 默认保持 `http`
 - `TIKA_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/cloudreve/tika:3.2.3.0-full-unrar-charset`
 - `AUTHVERSE_WEB_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/authverse/authverse-web:2024-local`
 - `AUTHVERSE_BACKEND_IMAGE` 默认保持 `${PRIVATE_REGISTRY_ADDR}/authverse/authverse-backend:2024-local`
-- `AUTHVERSE_POSTGRES_HOST` 默认保持 `${CLOUDREVE_STACK_NAME}_pgpool-internal`
-- `AUTHVERSE_REDIS_HOST` 默认保持 `${CLOUDREVE_STACK_NAME}_redis-proxy-internal`
-- `AUTHVERSE_ELASTICSEARCH_URI` 默认保持 `http://${CLOUDREVE_STACK_NAME}_elasticsearch-internal:9200`
+- `CLOUDREVE_POSTGRES_HOST` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
+- `CLOUDREVE_REDIS_ENDPOINT` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal:6379`
+- `CLOUDREVE_FTS_ELASTICSEARCH_ENDPOINT` 默认保持 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
+- `CLOUDREVE_FTS_TIKA_ENDPOINT` 默认保持 `http://${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}tika:9998`
+- `AUTHVERSE_POSTGRES_HOST` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
+- `AUTHVERSE_REDIS_HOST` 默认保持 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal`
+- `AUTHVERSE_ELASTICSEARCH_URI` 默认保持 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
 - 对外发布端口虽然很多变量名还叫 `*_HTTP_PORT`，但现在默认对外都提供 TLS
 - `.env.swarm` 不会自动同步到其它 manager，生产里固定只从一个 manager 部署
 - `deploy-stack.sh` 会把 `.env.swarm` 里的敏感值自动注册成 `${STACK_NAME}_secret_<secret-key>_<hash>` 形式的 Docker `secret`
@@ -381,18 +394,18 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 先只渲染检查：
 
 ```bash
-docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudreve-prod --render-only
-docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod --render-only
-docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod --render-only
+docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod-foundation --render-only
+docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod-infra --render-only
+docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudreve-prod-app --render-only
 docker/swarm/deploy-stack.sh auth --env-file .env.swarm --stack-name authverse-prod --render-only
 ```
 
 确认无误后正式上线：
 
 ```bash
-docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudreve-prod
-docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod
-docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod
+docker/swarm/deploy-stack.sh foundation --env-file .env.swarm --stack-name cloudreve-prod-foundation
+docker/swarm/deploy-stack.sh infra --env-file .env.swarm --stack-name cloudreve-prod-infra
+docker/swarm/deploy-stack.sh cloudreve --env-file .env.swarm --stack-name cloudreve-prod-app
 ```
 
 Cloudreve 主栈起来后，再初始化统一认证数据库并部署统一认证：
@@ -405,10 +418,11 @@ docker/swarm/deploy-stack.sh auth --env-file .env.swarm --stack-name authverse-p
 部署完成后建议立即确认 secret 引用是否正确：
 
 ```bash
-docker secret ls | grep '^cloudreve-prod_secret_'
+docker secret ls | grep '^cloudreve-prod-foundation_secret_'
+docker secret ls | grep '^cloudreve-prod-app_secret_'
 docker secret ls | grep '^authverse-prod_secret_'
-docker service inspect cloudreve-prod_cloudreve-master --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
-docker service inspect cloudreve-prod_onlyoffice --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+docker service inspect cloudreve-prod-app_cloudreve-master --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
+docker service inspect cloudreve-prod-foundation_onlyoffice --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
 docker service inspect authverse-prod_authverse-backend --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{println .SecretName}}{{end}}'
 ```
 
@@ -417,36 +431,43 @@ docker service inspect authverse-prod_authverse-backend --format '{{range .Spec.
 看服务状态：
 
 ```bash
-docker stack services cloudreve-prod
-docker stack ps cloudreve-prod
+docker stack services cloudreve-prod-foundation
+docker stack services cloudreve-prod-infra
+docker stack services cloudreve-prod-app
+docker stack services authverse-prod
 ```
 
 说明：
 
 - `minio-1..4` 的容器 hostname 会固定成 `minio-1..4`
 - 这是 MinIO 分布式自识别要求
-- 要看它实际落在哪台物理机，请用 `docker service ps cloudreve-prod_minio-1`
+- 要看它实际落在哪台物理机，请用 `docker service ps cloudreve-prod-infra_minio-1`
 
 对外验收：
 
 ```bash
-curl -kfsS https://<master-ip-or-lb>:18081/api/v4/site/ping
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<minio-ip-or-lb>:19000/minio/health/live
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<tika-ip-or-lb>:19998/tika
-curl -ksS -o /dev/null -w '%{http_code}\n' https://<es-ip-or-lb>:19200
+curl -kfsS https://<vip>:28081/api/v4/site/ping
+curl -kfsS https://<vip>:28080/
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28082/
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28090/healthcheck
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29000/minio/health/live
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29998/tika
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:29200
+curl -ksS -o /dev/null -w '%{http_code}\n' https://<vip>:28089
 ```
 
 数据库与缓存验收：
 
 ```bash
-PGPASSWORD='<postgres-password>' psql -h <pgpool-ip-or-lb> -p 15432 -U cloudreve -d cloudreve -c 'select 1;'
-redis-cli -h <redis-proxy-ip-or-lb> -p 16379 -a '<redis-password>' PING
+PGPASSWORD='<postgres-password>' PGSSLMODE=verify-ca PGSSLROOTCERT=/srv/cloudreve/pki/ca/ca.crt \
+  psql -h <vip> -p 25432 -U cloudreve -d cloudreve -c 'select 1;'
+redis-cli --tls --cacert /srv/cloudreve/pki/ca/ca.crt -h <vip> -p 26379 -a '<redis-password>' PING
 ```
 
 MinIO bucket 验收：
 
 ```bash
-docker exec -it $(docker ps --filter label=com.docker.swarm.service.name=cloudreve-prod_minio-init -q | head -n 1) \
+docker exec -it $(docker ps --filter label=com.docker.swarm.service.name=cloudreve-prod-infra_minio-init -q | head -n 1) \
   sh -lc '/opt/bitnami/minio-client/bin/mc --config-dir /tmp/.mc ls local'
 ```
 
@@ -470,3 +491,4 @@ docker exec -it $(docker ps --filter label=com.docker.swarm.service.name=cloudre
 环境文件同步策略看：
 
 - [docker-swarm-env-sync.md](/Users/fuyb/Desktop/20260322/code/cloudreve/docs/docker-swarm-env-sync.md)
+- [docker-swarm-lb-vip-plan.md](/Users/fuyb/Desktop/20260322/code/cloudreve/docs/docker-swarm-lb-vip-plan.md)

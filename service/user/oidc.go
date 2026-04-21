@@ -600,14 +600,14 @@ func syncOIDCShadowUser(c *gin.Context, dep dependency.Dep, profile *oidcIdentit
 		}
 
 		currentUser, err = userClient.Create(c, &inventory.NewUserArgs{
-			RawID:    targetUserID,
-			Username: username,
-			Email:    email,
-			Nick:     selectOIDCNickname(profile),
-			Status:   user.StatusActive,
-			GroupID:  dep.SettingProvider().DefaultGroup(c),
+			RawID:                  targetUserID,
+			Username:               username,
+			Email:                  email,
+			Nick:                   selectOIDCNickname(profile),
+			Status:                 user.StatusActive,
+			GroupID:                dep.SettingProvider().DefaultGroup(c),
 			SkipFirstUserPromotion: true,
-			Avatar:   profile.Avatar,
+			Avatar:                 profile.Avatar,
 		})
 		if err != nil {
 			_ = tx.Rollback()
@@ -846,13 +846,13 @@ func parseOIDCPayload[T any](body []byte) (*T, error) {
 }
 
 // doOIDCRequest 封装统一认证相关的出站 HTTP 请求，统一超时、上下文和错误处理。
-func doOIDCRequest(c *gin.Context, dep dependency.Dep, method string, target string, body io.Reader, header http.Header) ([]byte, error) {
+func doOIDCRequest(ctx context.Context, dep dependency.Dep, method string, target string, body io.Reader, header http.Header) ([]byte, error) {
 	resp := dep.RequestClient().Request(
 		method,
 		target,
 		body,
 		crrequest.WithTimeout(15*time.Second),
-		crrequest.WithContext(c),
+		crrequest.WithContext(ctx),
 		crrequest.WithHeader(header),
 	)
 

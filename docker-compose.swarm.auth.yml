@@ -2,7 +2,7 @@
 #
 # 设计目标：
 # 1. 统一认证独立成栈部署，不和 Cloudreve 主栈强耦合。
-# 2. 复用现有 Cloudreve Swarm 的 PostgreSQL / Redis / Elasticsearch 与 overlay 网络。
+# 2. 复用现有 Cloudreve Swarm 的 PostgreSQL / Redis / Elasticsearch 与共享 overlay 网络。
 # 3. 统一认证对外只暴露 1 个入口，由 authverse 前端内置 Nginx 负责：
 #    - `/`             -> authverse 前端静态资源
 #    - `/admin-api`    -> authverse-backend
@@ -15,8 +15,8 @@
 #    而 `authverse-backend` 访问 PG / Redis / ES 仍走共享 overlay 网络。
 #
 # 重要说明：
-# - 这个栈依赖 Cloudreve 主栈已经先部署完成，并且共享网络存在。
-# - 默认共享网络名来自 `AUTHVERSE_SHARED_NETWORK`，通常是 `cloudreve_cloudreve_backend`。
+# - 这个栈依赖 foundation / infra / cloudreve 等独立栈已经先部署完成。
+# - 默认共享网络名来自 `AUTHVERSE_SHARED_NETWORK`，通常等于 `SWARM_SHARED_NETWORK`。
 # - 如果要覆盖 OIDC RSA 密钥，支持 bind / volume 两种挂载模式；默认仍使用镜像内 classpath 密钥。
 
 x-default-env: &default-env

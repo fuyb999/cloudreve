@@ -941,6 +941,10 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 						controllers.FromJSON[adminsvc.GetSettingService](adminsvc.GetSettingParamCtx{}),
 						controllers.AdminGetSettings,
 					)
+					settings.GET("oidc/runtime-state",
+						controllers.FromQuery[adminsvc.GetOIDCRuntimeStateService](adminsvc.GetOIDCRuntimeStateParamCtx{}),
+						controllers.AdminGetOIDCRuntimeState,
+					)
 					// Patch settings
 					settings.PATCH("",
 						middleware.RequiredScopes(types.ScopeAdminWrite),

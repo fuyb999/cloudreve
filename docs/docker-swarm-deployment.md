@@ -9,7 +9,7 @@
 - `docker-compose.swarm.infra.yml`
 - `.env.swarm.example`
 - `.env.swarm.user-test.example`
-- `.env.swarm.prod-4x128g.example`
+- `.env.swarm.prod-4x256g.example`
 - `docker/swarm/deploy-stack.sh`
 - `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
@@ -25,7 +25,7 @@
 
 - `docs/docker-swarm-quickstart.md`
 
-如果你就是按 `1 manager + 3 worker + 128GB/64 线程` 上真实环境，直接看：
+如果你就是按 `1 manager + 3 worker + 256GB/64 线程` 上真实环境，直接看：
 
 - `docs/docker-swarm-production-checklist.md`
 
@@ -46,7 +46,7 @@
 当前 Swarm 栈默认采用如下拓扑：
 
 - 默认模式：`docker-compose.swarm.single.yml` 单节点全量栈
-- 拆分模式：同一个 stack name 下按 `cloudreve + foundation + infra` 三个模板分步发布
+- 拆分模式：`cloudreve + foundation + infra + auth + registry` 分别作为独立 stack 发布，并共享同一个 `SWARM_SHARED_NETWORK`
 
 默认单节点全量栈包含：
 
@@ -68,7 +68,7 @@
 - `cloudreve-master-proxy`：主站入口 Nginx
 - `cloudreve-slave`：Cloudreve 从节点
 - `cloudreve-slave-proxy`：从节点入口 Nginx
-- `postgresql-1/2/3 + pgpool-internal + pgpool`：PostgreSQL 高可用，`pgpool` 对外 TLS
+- `postgresql-1/2/3 + pgpool-internal + pgpool`：PostgreSQL 高可用，`pgpool` 对外使用 PostgreSQL 协议原生 TLS
 - `redis-1/2/3 + redis-sentinel + redis-proxy-internal + redis-proxy`：Redis 高可用，`redis-proxy` 对外 TLS
 - `minio-internal + minio`：默认 S3 兼容对象存储，`minio` 对外 TLS，`minio-internal` 供内链访问
 - `elasticsearch-internal + elasticsearch`：全文检索入口，`elasticsearch` 对外 TLS，`elasticsearch-internal` 供内链访问
@@ -116,7 +116,7 @@ YML 模板约定：
 - 栈内默认 S3 实现是单节点 `minio`
 - `cloudreve-master`：默认还是建议 `1` 副本
 - 默认 `docker/swarm/deploy-stack.sh` 直接走单节点全量模板
-- 如果要切到分布式中间件，就对同一个 stack name 再执行 `deploy-stack.sh cloudreve`、`foundation`、`infra`
+- 如果要切到分布式中间件，就按独立 stack 执行 `deploy-stack.sh foundation`、`infra`、`cloudreve`
 
 这套模板不是“让数据库共享卷跑起来”，而是：
 
@@ -356,6 +356,8 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 - `PGPOOL_PUBLIC_PORT=15432`
 - `REDIS_PROXY_PUBLIC_PORT=16379`
 
+`pgpool` 对外入口不能用普通 `bind ssl` 代理替代。PostgreSQL 客户端会先发送协议级 `SSLRequest`，必须由 Pgpool 或 PostgreSQL 协议感知的入口处理，否则外部连接容易出现 `EOF`。
+
 ## 7. 默认 S3 初始化逻辑
 
 当前模板已经不是“第一次启动后手动去后台把默认存储切成 MinIO”。
@@ -413,7 +415,7 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 
 如果你要直接在 Swarm 里启用集群版 MinIO / Elasticsearch / Kafka，打开：
 
-然后对同一个 stack name 补齐 `cloudreve / foundation / infra` 三个模板。
+然后按独立 stack 补齐 `foundation / infra / cloudreve` 三个模板，三者共享 `SWARM_SHARED_NETWORK`。
 
 集群模式下的服务拓扑是：
 
@@ -428,9 +430,9 @@ sudo docker/swarm/prepare-bind-paths.sh --services minio,elasticsearch,kafka
 
 这时：
 
-- Cloudreve 默认 S3 初始化地址仍是 `http://minio:9000`
-- Cloudreve 后台里的 FTS Elasticsearch 地址应填写 `http://elasticsearch:9200`
-- 如果 Cloudreve 要直接使用栈内 Kafka，全局 Kafka brokers 填 `kafka:9092`
+- Cloudreve 默认 S3 初始化地址是 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}minio-internal:9000`
+- Cloudreve 后台里的 FTS Elasticsearch 地址应填写 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
+- 如果 Cloudreve 要直接使用栈内 Kafka，全局 Kafka brokers 填 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
 - `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL` 保持 `PLAINTEXT`
 - Elasticsearch 所在宿主机必须先执行 `sysctl -w vm.max_map_count=262144`
 - Kafka UI 默认访问地址是 `http://<node-or-lb>:18089`
@@ -452,7 +454,7 @@ Kafka 这里默认只提供 Swarm 内部入口，不直接给 Swarm 外部客户
 如果你的第三方抽取器也在 Swarm 内部网络里，直接用：
 
 ```bash
-kafka:9092
+${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092
 ```
 
 这里是 Swarm 内部明文 bootstrap 地址。
@@ -474,35 +476,31 @@ sudo sysctl --system
 
 ## 9. 资源默认值
 
-当前模板按 `1000w` 级别元数据规模给出基础默认值：
+`.env.swarm.prod-4x256g.example` 按 `4 台 x 256GB / 64 线程` 和约 `1000w` 级元数据规模给出生产基线。
 
-- `cloudreve-master`: reservation `1C / 2G`, limit `2C / 4G`
-- `cloudreve-slave`: reservation `0.5C / 1G`, limit `1.5C / 2G`
-- `postgresql-*`: reservation `2C / 4G`, limit `4C / 8G`
-- `pgpool`: reservation `0.5C / 512M`, limit `2C / 2G`
-- `redis-*`: reservation `1C / 2G`, limit `2C / 4G`
-- `redis-sentinel`: reservation `0.25C / 256M`, limit `1C / 512M`
-- `redis-proxy`: reservation `0.25C / 256M`, limit `1C / 512M`
-- `minio`: reservation `1C / 2G`, limit `2C / 4G`
-- `elasticsearch`: reservation `2C / 4G`, limit `4C / 8G`
-- `tika`: reservation `0.5C / 1G`, limit `2C / 2G`
+核心默认值：
 
-如果启用了集群模式，建议起步值改成：
+- `cloudreve-master`: reservation `4C / 16G`, limit `12C / 32G`
+- `cloudreve-slave`: reservation `3C / 8G`, limit `8C / 20G`，默认 3 副本
+- `postgresql-*`: reservation `8C / 32G`, limit `20C / 64G`
+- `pgpool`: reservation `1C / 1G`, limit `4C / 4G`，内部和外部入口默认各 4 副本
+- `redis-*`: reservation `3C / 16G`, limit `8C / 32G`
+- `redis-proxy`: reservation `0.5C / 256M`, limit `2C / 1G`，内部和外部入口默认各 4 副本
+- `minio-1..4`: reservation `4C / 16G`, limit `12C / 32G`
+- `elasticsearch-1..3`: reservation `10C / 72G`, limit `24C / 112G`
+- `ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS=-Xms31g -Xmx31g`
+- `kafka-1..3`: reservation `4C / 16G`, limit `12C / 32G`
+- `KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS=-Xms8g -Xmx8g`
+- `tika`: reservation `3C / 8G`, limit `10C / 20G`，默认 4 副本
+- `onlyoffice`: reservation `3C / 8G`, limit `10C / 24G`，默认 4 副本
+- `authverse-backend`: reservation `3C / 8G`, limit `8C / 20G`，默认 3 副本
 
-- `minio` 代理：reservation `0.25C / 256M`, limit `1C / 512M`
-- `minio-1..4`：每节点 reservation `1C / 2G`, limit `2C / 4G`
-- `elasticsearch` 代理：reservation `0.25C / 256M`, limit `1C / 512M`
-- `elasticsearch-1..3`：每节点 reservation `2C / 6G`, limit `4C / 8G`
-- `ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS=-Xms4g -Xmx4g`
-- `kafka` 代理：reservation `0.25C / 256M`, limit `1C / 512M`
-- `kafka-1..3`：每节点 reservation `1C / 2G`, limit `2C / 4G`
-- `KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS=-Xms1g -Xmx1g`
-- `kafka-ui`：reservation `0.25C / 256M`, limit `1C / 1G`
+这套值不是把机器无脑打满。Reservation 用来保证 Swarm 能稳定调度和故障迁移，Limit 给批量索引、预览解析、认证高峰和对象存储吞吐留突发空间。
 
 另外：
 
 - Redis 默认启用 `AOF`
-- Elasticsearch 默认 `ES_JAVA_OPTS=-Xms4g -Xmx4g`
+- 4x256G 生产基线默认 `ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS=-Xms31g -Xmx31g`
 
 这些值是默认起点，不是容量上限。你仍然需要根据：
 
@@ -642,16 +640,15 @@ docker node update --label-add cloudreve.kafka-ui=true <node-kafka-ui>
 - `kafka1/2/3` 放 3 台 worker
 - `kafka-ui` 放 manager 或任意可直接访问的入口节点
 
-如果你的机器规格就是 `4 台 x 128GB 内存 / 64 线程`，并且准备直接使用仓库内的
-`.env.swarm.prod-4x128g.example`，建议按下面打标签：
+如果你的机器规格就是 `4 台 x 256GB 内存 / 64 线程`，并且准备直接使用仓库内的
+`.env.swarm.prod-4x256g.example`，建议按下面打标签：
 
-- `cr-prod-mgr-11`：`cloudreve.master`, `cloudreve.edge`, `cloudreve.registry`, `cloudreve.minio1`, `cloudreve.tika`, `cloudreve.kafka-ui`
-- `cr-prod-wkr-12`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg1`, `cloudreve.redis1`, `cloudreve.redis-sentinel`, `cloudreve.es1`, `cloudreve.kafka1`, `cloudreve.minio2`
-- `cr-prod-wkr-13`：`cloudreve.slave`, `cloudreve.pg2`, `cloudreve.redis2`, `cloudreve.redis-sentinel`, `cloudreve.es2`, `cloudreve.kafka2`, `cloudreve.minio3`
-- `cr-prod-wkr-14`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg3`, `cloudreve.redis3`, `cloudreve.redis-sentinel`, `cloudreve.es3`, `cloudreve.kafka3`, `cloudreve.minio4`, `cloudreve.tika`
-- 默认 `OnlyOffice` 也复用这 3 台 `edge` 节点；如果你改成 `bind` 绝对路径挂载，先把目录在这 3 台都准备好
-- 如果你不想让 `OnlyOffice` 在 `edge` 池里漂移，再额外给 `cr-prod-mgr-11` / `cr-prod-wkr-14` 打 `cloudreve.onlyoffice=true`，并给 `cr-prod-mgr-11` 打 `cloudreve.onlyoffice-rabbitmq=true`
-- 同时把 `.env.swarm` 改成：
+- `cr-prod-mgr-11`：`cloudreve.master`, `cloudreve.edge`, `cloudreve.registry`, `cloudreve.minio1`, `cloudreve.tika`, `cloudreve.auth-web`, `cloudreve.onlyoffice`, `cloudreve.onlyoffice-rabbitmq`, `cloudreve.kafka-ui`
+- `cr-prod-wkr-12`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg1`, `cloudreve.redis1`, `cloudreve.redis-sentinel`, `cloudreve.es1`, `cloudreve.kafka1`, `cloudreve.minio2`, `cloudreve.tika`, `cloudreve.auth-web`, `cloudreve.auth-backend`, `cloudreve.onlyoffice`
+- `cr-prod-wkr-13`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg2`, `cloudreve.redis2`, `cloudreve.redis-sentinel`, `cloudreve.es2`, `cloudreve.kafka2`, `cloudreve.minio3`, `cloudreve.tika`, `cloudreve.auth-web`, `cloudreve.auth-backend`, `cloudreve.onlyoffice`
+- `cr-prod-wkr-14`：`cloudreve.slave`, `cloudreve.edge`, `cloudreve.pg3`, `cloudreve.redis3`, `cloudreve.redis-sentinel`, `cloudreve.es3`, `cloudreve.kafka3`, `cloudreve.minio4`, `cloudreve.tika`, `cloudreve.auth-web`, `cloudreve.auth-backend`, `cloudreve.onlyoffice`
+- 默认 `OnlyOffice` 使用 4 台 `cloudreve.onlyoffice` 专用标签节点；如果你改成 `bind` 绝对路径挂载，先把目录在这 4 台都准备好
+- `.env.swarm.prod-4x256g.example` 已默认使用：
 
 ```bash
 ONLYOFFICE_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
@@ -659,12 +656,13 @@ ONLYOFFICE_PUBLIC_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice==true
 ONLYOFFICE_RABBITMQ_NODE_CONSTRAINT=node.labels.cloudreve.onlyoffice-rabbitmq==true
 ```
 
-这样做的目的不是把机器吃满，而是：
+这样做的目的是充分利用 4 台 256G 机器，但不把 reservation 设置到故障迁移无法调度：
 
 - PostgreSQL / Elasticsearch / Kafka / Redis 固定在可预期节点
 - `edge` 标签承接入口代理、`pgpool`、`redis-proxy`、`minio/elasticsearch/kafka` 代理
-- `tika` 只放 2 台机器，避免无意义铺满 4 台
-- 每台机器都保留大量系统缓存和扩容余量
+- `edge` 节点全部承接外部入口的 Swarm published port，统一由 VIP/LB 再做一次四层入口负载均衡
+- `tika` / `onlyoffice` / `authverse` 按 4 台分散，提升文档解析、预览和认证入口吞吐
+- 每台机器仍保留系统缓存、索引重建、批量任务和故障迁移余量
 
 ## 12. 准备环境变量
 
@@ -688,10 +686,10 @@ cp .env.swarm.user-test.example .env.swarm
 - TLS / Authverse / MinIO / ES / Kafka / Tika / OnlyOffice 一并打通
 - bind 路径统一落到 `/srv/cloudreve-user-test/...`
 
-如果你的环境就是 `1 manager + 3 worker`，并且每台机器都是 `128GB 内存 / 64 线程`，可以直接从这个生产基线开始：
+如果你的环境就是 `1 manager + 3 worker`，并且每台机器都是 `256GB 内存 / 64 线程`，可以直接从这个生产基线开始：
 
 ```bash
-cp .env.swarm.prod-4x128g.example .env.swarm
+cp .env.swarm.prod-4x256g.example .env.swarm
 ```
 
 至少填好这些值：
@@ -754,9 +752,9 @@ docker/swarm/deploy-stack.sh
 如果要切到拆分模板并补齐集群版 MinIO / Elasticsearch / Kafka：
 
 ```bash
-docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
-docker/swarm/deploy-stack.sh foundation --stack-name cloudreve
-docker/swarm/deploy-stack.sh infra --stack-name cloudreve
+docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod-foundation
+docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod-infra
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod-app
 ```
 
 如果你需要 Tika 自定义字体，直接在 `.env.swarm` 中设置：
@@ -769,8 +767,8 @@ TIKA_CUSTOM_FONTS_MOUNT_SOURCE=/srv/cloudreve/tika-fonts
 然后正常部署对应模板：
 
 ```bash
-docker/swarm/deploy-stack.sh foundation --stack-name cloudreve
-docker/swarm/deploy-stack.sh infra --stack-name cloudreve
+docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod-foundation
+docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod-infra
 ```
 
 说明：
@@ -812,7 +810,7 @@ docker secret ls | grep '^cloudreve.*_secret_'
 5. 重新发布 Cloudreve 业务模板：
 
 ```bash
-docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod-app
 ```
 
 如果你要使用非默认栈名，例如联调用的 `cloudreve-debug`：

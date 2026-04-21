@@ -12,7 +12,7 @@
 - `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bind-paths.sh`
 - `.env.swarm.example`
-- `.env.swarm.prod-4x128g.example`
+- `.env.swarm.prod-4x256g.example`
 
 涉及的代码仓库：
 
@@ -53,11 +53,11 @@
 推荐生产拓扑：
 
 - `authverse-web`
-  - 2 副本
+  - 4 副本
   - 负责静态资源与统一入口反向代理
   - 对外发布 `AUTHVERSE_HTTP_PORT`
 - `authverse-backend`
-  - 2 副本
+  - 3 副本
   - 负责 OAuth2/OIDC、统一授权、统一接入注册中心
   - 不直接对外发布端口，只走内部 overlay 网络
 
@@ -69,13 +69,13 @@
    - `authverse-backend`
    - `cloudreve-master`
 4. `authverse-backend` 再访问：
-   - `cloudreve_pgpool-internal`
-   - `cloudreve_redis-proxy-internal`
-   - `cloudreve_elasticsearch-internal`
+   - `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
+   - `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal`
+   - `${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal`
 
 补充说明：
 
-- 运行期业务流量走 `cloudreve_pgpool-internal`
+- 运行期业务流量走 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
 - `docker/swarm/init-authverse-db.sh` 现在默认通过 `pgpool` 的对外 TLS 入口执行初始化
 - 这样不再依赖 attachable overlay，适合把业务 overlay 收紧为 `attachable: false`
 
@@ -85,20 +85,20 @@
 
 - 1 个 manager
 - 3 个 worker
-- 每台 128GB 内存
+- 每台 256GB 内存
 - 每台 64 线程
 
-当前默认建议是偏保守、够用、不浪费资源的：
+当前 `4x256G` 生产基线会把认证入口铺到 4 台，把后端铺到 3 台 worker：
 
 - `authverse-web`
-  - 2 副本
-  - reservation：`0.5 CPU / 512M`
-  - limit：`1 CPU / 1G`
+  - 4 副本
+  - reservation：`0.5 CPU / 256M`
+  - limit：`2 CPU / 1G`
 - `authverse-backend`
-  - 2 副本
-  - reservation：`1.5 CPU / 3G`
-  - limit：`4 CPU / 6G`
-  - JVM：`-Xms2g -Xmx4g`
+  - 3 副本
+  - reservation：`3 CPU / 8G`
+  - limit：`8 CPU / 20G`
+  - JVM：`-Xms6g -Xmx12g`
 
 这套默认值适合：
 
@@ -114,7 +114,7 @@
 
 优先调：
 
-- `AUTHVERSE_BACKEND_REPLICAS=3`
+- `AUTHVERSE_BACKEND_REPLICAS`
 - `AUTHVERSE_BACKEND_CPU_LIMIT`
 - `AUTHVERSE_BACKEND_MEM_LIMIT`
 
@@ -136,7 +136,10 @@
 
 ### 4.2 与 Cloudreve 主栈的关系
 
+- `SWARM_SHARED_NETWORK`
 - `CLOUDREVE_STACK_NAME`
+- `FOUNDATION_STACK_NAME`
+- `INFRA_STACK_NAME`
 - `AUTHVERSE_SHARED_NETWORK`
 - `AUTHVERSE_CLOUDREVE_SERVICE_PREFIX`
 - `AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM`
@@ -145,8 +148,11 @@
 
 说明：
 
-- `AUTHVERSE_SHARED_NETWORK` 默认是 `${CLOUDREVE_STACK_NAME}_cloudreve_backend`
-- `AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM` 默认是 `${CLOUDREVE_STACK_NAME}_cloudreve-master:5212`
+- `AUTHVERSE_SHARED_NETWORK` 默认等于 `SWARM_SHARED_NETWORK`
+- `AUTHVERSE_CLOUDREVE_INTERNAL_UPSTREAM` 默认是 `${CLOUDREVE_APP_SERVICE_PREFIX}cloudreve-master:5212`
+- `AUTHVERSE_POSTGRES_HOST` 默认是 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
+- `AUTHVERSE_REDIS_HOST` 默认是 `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal`
+- `AUTHVERSE_ELASTICSEARCH_URI` 默认是 `http://${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal:9200`
 - 如果统一认证入口域名和 Cloudreve 站点域名不同，通常要额外设置 `AUTHVERSE_CLOUDREVE_HOST_HEADER`
 
 ### 4.3 数据与中间件
@@ -200,11 +206,11 @@ AUTHVERSE_OIDC_PUBLIC_KEY_PATH=file:/run/authverse/oidc/public.pem
 
 先确认主栈已经部署成功，并且这些入口可用：
 
-- `cloudreve_pgpool-internal`
-- `cloudreve_redis-proxy-internal`
-- `cloudreve_elasticsearch`
-- `cloudreve-master`
-- `cloudreve_backend` overlay 网络
+- `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}pgpool-internal`
+- `${CLOUDREVE_FOUNDATION_SERVICE_PREFIX}redis-proxy-internal`
+- `${CLOUDREVE_INFRA_SERVICE_PREFIX}elasticsearch-internal`
+- `${CLOUDREVE_APP_SERVICE_PREFIX}cloudreve-master`
+- `SWARM_SHARED_NETWORK` 指定的 overlay 网络
 
 如果主栈还没起来，先按现有文档完成：
 
@@ -213,10 +219,10 @@ AUTHVERSE_OIDC_PUBLIC_KEY_PATH=file:/run/authverse/oidc/public.pem
 
 ### 5.2 准备统一认证参数
 
-如果你是 4 台 128G 生产环境，建议直接从：
+如果你是 4 台 256G 生产环境，建议直接从：
 
 ```bash
-cp .env.swarm.prod-4x128g.example .env.swarm
+cp .env.swarm.prod-4x256g.example .env.swarm
 ```
 
 至少确认这些值已经回填：
@@ -539,7 +545,7 @@ sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services authver
 如果你现在就要按真实环境往前推，最短路径就是：
 
 ```bash
-cp .env.swarm.prod-4x128g.example .env.swarm
+cp .env.swarm.prod-4x256g.example .env.swarm
 sudo docker/swarm/prepare-bind-paths.sh --env-file .env.swarm --services authverse
 docker/swarm/init-authverse-db.sh --env-file .env.swarm
 docker/swarm/build-auth-images.sh --env-file .env.swarm

@@ -207,6 +207,41 @@ const (
 	OIDCConfigModeRemote   OIDCConfigMode = "remote"
 )
 
+type OIDCRuntimeConfigSource string
+
+const (
+	OIDCRuntimeConfigSourceLocal         OIDCRuntimeConfigSource = "local"
+	OIDCRuntimeConfigSourceRemote        OIDCRuntimeConfigSource = "remote"
+	OIDCRuntimeConfigSourceRemoteCache   OIDCRuntimeConfigSource = "remote_cache"
+	OIDCRuntimeConfigSourceLocalFallback OIDCRuntimeConfigSource = "local_fallback"
+)
+
+type OIDCRuntimeStatus string
+
+const (
+	OIDCRuntimeStatusDisabled      OIDCRuntimeStatus = "disabled"
+	OIDCRuntimeStatusStandard      OIDCRuntimeStatus = "standard"
+	OIDCRuntimeStatusRemoteReady   OIDCRuntimeStatus = "remote_ready"
+	OIDCRuntimeStatusRemoteCached  OIDCRuntimeStatus = "remote_cached"
+	OIDCRuntimeStatusLocalFallback OIDCRuntimeStatus = "local_fallback"
+	OIDCRuntimeStatusRemoteError   OIDCRuntimeStatus = "remote_error"
+)
+
+type OIDCRuntimeState struct {
+	Status         OIDCRuntimeStatus       `json:"status"`
+	Source         OIDCRuntimeConfigSource `json:"source"`
+	BindingCode    string                  `json:"binding_code,omitempty"`
+	ClientID       string                  `json:"client_id,omitempty"`
+	Scope          string                  `json:"scope,omitempty"`
+	SSOURL         string                  `json:"sso_url,omitempty"`
+	WellKnownURL   string                  `json:"wellknown_url,omitempty"`
+	CacheExpiresAt *time.Time              `json:"cache_expires_at,omitempty"`
+	LastSuccessAt  *time.Time              `json:"last_success_at,omitempty"`
+	LastAttemptAt  *time.Time              `json:"last_attempt_at,omitempty"`
+	LastError      string                  `json:"last_error,omitempty"`
+	LastErrorAt    *time.Time              `json:"last_error_at,omitempty"`
+}
+
 // OIDCSetting 对应后台“参数设置 -> 用户会话 -> OIDC”的统一认证配置。
 // 开关打开后，前后端都会切换到统一认证链路；关闭时则完全回退到原有本地登录逻辑。
 type OIDCSetting struct {
@@ -228,6 +263,8 @@ type OIDCSetting struct {
 	// Scope 至少需要包含 openid、user_info、user.read，以及网盘运行态鉴权实际使用的
 	// UserInfo.Read、Admin.Read、Files.Read、Files.Write、Workflow.Read、Workflow.Write、Shares.Read、Shares.Write。
 	Scope string
+	// RuntimeState 描述当前实际生效的运行态来源、缓存与回退信息。
+	RuntimeState *OIDCRuntimeState `json:"runtime_state,omitempty"`
 }
 
 type EmailTemplate struct {

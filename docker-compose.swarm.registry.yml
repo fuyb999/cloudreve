@@ -4,6 +4,7 @@
 # - 只在 1 台固定节点上部署一个 `registry:2`
 # - 其它 Swarm 节点通过固定地址远程拉取自定义镜像
 # - 不再要求每台节点手工 `docker load`
+# - registry 也接入统一 `SWARM_SHARED_NETWORK`，便于在 Swarm 内部统一排查网络。
 #
 # 使用前提：
 # - 先在每台节点执行 `docker/swarm/prepare-private-registry.sh`
@@ -62,6 +63,8 @@ services:
       - type: ${PRIVATE_REGISTRY_DATA_MOUNT_TYPE:-bind}
         source: ${PRIVATE_REGISTRY_DATA_MOUNT_SOURCE:-/srv/cloudreve/registry}
         target: /var/lib/registry
+    networks:
+      - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:5000/v2/ >/dev/null 2>&1 || exit 1"]
       interval: 20s
@@ -87,3 +90,8 @@ services:
 
 volumes:
   private_registry_data:
+
+networks:
+  cloudreve_backend:
+    external: true
+    name: ${SWARM_SHARED_NETWORK:?set SWARM_SHARED_NETWORK}

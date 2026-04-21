@@ -7,10 +7,11 @@
 #
 # 重要说明：
 # - 默认单节点全量联调模板在 `docker-compose.swarm.single.yml`。
-# - 这个文件只承载 Cloudreve 主站 / 从站 / 入口代理。
+# - 这个文件只承载 Cloudreve 主站 / 从站 / 入口代理，可以作为独立 stack 发布。
 # - PostgreSQL / Redis / Tika / OnlyOffice
 #   已经拆到 `docker-compose.swarm.foundation.yml`。
 # - MinIO / Elasticsearch / Kafka / Kafka UI 集群形态在 `docker-compose.swarm.infra.yml`。
+# - 多个 stack 统一接入 `SWARM_SHARED_NETWORK` 指定的外部 overlay 网络。
 # - Cloudreve 运行目录仍统一支持 `*_MOUNT_TYPE + *_MOUNT_SOURCE`。
 # - `cloudreve-master` 可以通过 `CR_INIT_*` 在首次初始化时直接创建默认 S3 存储策略。
 # - 生产里更推荐把自定义镜像先 push 到单点 `registry:2` 私有仓库，再让其它节点远程拉取。
@@ -75,12 +76,12 @@ services:
       CR_CONF_System.Listen: ":5212"
       CR_CONF_System.ProxyHeader: X-Forwarded-For
       CR_CONF_Database.Type: postgres
-      CR_CONF_Database.Host: pgpool-internal
+      CR_CONF_Database.Host: ${CLOUDREVE_POSTGRES_HOST:-pgpool-internal}
       CR_CONF_Database.Port: "5432"
       CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
       CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
-      CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-proxy:6379}
-      CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-true}
+      CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-proxy-internal:6379}
+      CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-false}
       CR_CONF_Redis.TLSSkipVerify: ${CLOUDREVE_REDIS_TLS_SKIP_VERIFY:-false}
       CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
@@ -331,7 +332,7 @@ services:
 networks:
   cloudreve_backend:
     external: true
-    name: ${CLOUDREVE_STACK_NAME:?set CLOUDREVE_STACK_NAME}_cloudreve_backend
+    name: ${SWARM_SHARED_NETWORK:?set SWARM_SHARED_NETWORK}
 
 volumes:
   cloudreve_master_runtime:

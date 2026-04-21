@@ -44,7 +44,7 @@ usage() {
 
 示例：
   docker/swarm/prepare-bitnami-images.sh --check
-  docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm.prod-4x128g.example
+  docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm.prod-4x256g.example
   docker/swarm/prepare-bitnami-images.sh --env-file .env.swarm --pull
 EOF
 }

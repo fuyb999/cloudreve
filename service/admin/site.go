@@ -25,6 +25,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/thumb"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
+	"github.com/cloudreve/Cloudreve/v4/service/user"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -301,6 +302,11 @@ type (
 	GetSettingParamCtx struct{}
 )
 
+type (
+	GetOIDCRuntimeStateService  struct{}
+	GetOIDCRuntimeStateParamCtx struct{}
+)
+
 func (s *GetSettingService) GetSetting(c *gin.Context) (map[string]string, error) {
 	dep := dependency.FromContext(c)
 	res, err := dep.SettingClient().Gets(c, lo.Filter(s.Keys, func(item string, index int) bool {
@@ -312,6 +318,18 @@ func (s *GetSettingService) GetSetting(c *gin.Context) (map[string]string, error
 	}
 
 	return res, nil
+}
+
+func (s *GetOIDCRuntimeStateService) Get(c *gin.Context) (*setting.OIDCRuntimeState, error) {
+	dep := dependency.FromContext(c)
+	state := user.GetOIDCRuntimeState(c, dep)
+	if state == nil {
+		return &setting.OIDCRuntimeState{
+			Status: setting.OIDCRuntimeStatusDisabled,
+			Source: setting.OIDCRuntimeConfigSourceLocal,
+		}, nil
+	}
+	return state, nil
 }
 
 type (

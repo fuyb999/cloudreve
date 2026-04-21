@@ -9,7 +9,7 @@
 - `docker-compose.swarm.infra.yml`
 - `.env.swarm.example`
 - `.env.swarm.user-test.example`
-- `.env.swarm.prod-4x128g.example`
+- `.env.swarm.prod-4x256g.example`
 - `docker/swarm/deploy-stack.sh`
 - `docker/swarm/export-swarm-images.sh`
 - `docker/swarm/prepare-bitnami-images.sh`
@@ -36,7 +36,7 @@
 
 - `docs/docker-swarm-auth-deployment.md`
 
-如果你就是按 `1 manager + 3 worker + 128GB/64 线程` 上真实环境，直接看：
+如果你就是按 `1 manager + 3 worker + 256GB/64 线程` 上真实环境，直接看：
 
 - `docs/docker-swarm-production-checklist.md`
 
@@ -59,7 +59,7 @@
 - 默认 `docker/swarm/deploy-stack.sh` 会直接使用单节点全量模板
 - 默认单节点模板也会把 `authverse-web + authverse-backend` 一起部署进主栈
 - 默认单节点部署后会自动执行一次 `docker/swarm/init-authverse-db.sh`
-- 对同一个 stack name 再执行 `deploy-stack.sh infra` 时，会切成 4 节点 MinIO + 3 节点 Elasticsearch + 3 节点 Kafka
+- 拆分发布时，`foundation / infra / cloudreve / auth / registry` 分别是独立 stack，并共享 `SWARM_SHARED_NETWORK`
 - Kafka UI 会一起挂上，默认对外端口 `18089`
 - 默认单节点模板里 OnlyOffice 8 也会一起起来；生产样例仍可通过 `ONLYOFFICE_REPLICAS=0` 关闭
 - 自定义镜像现在建议统一放到单点 `registry:2` 仓库栈，其它节点远程拉取
@@ -78,7 +78,7 @@
 
 - `.env.swarm.example` 默认让单节点 authverse 直接使用本地镜像 tag
 - `.env.swarm.user-test.example` 是把 4 节点生产基线裁成 1 台 Linux 的用户测试版
-- `.env.swarm.prod-4x128g.example` 仍然按私有仓库远程 tag 组织
+- `.env.swarm.prod-4x256g.example` 仍然按私有仓库远程 tag 组织
 
 ## 2. 上线前准备
 
@@ -124,10 +124,10 @@ cp .env.swarm.user-test.example .env.swarm
 - 默认 bind 路径统一落到 `/srv/cloudreve-user-test/...`
 - 运行镜像与 authverse 构建基镜像默认都走私有仓库
 
-如果你的拓扑是 `1 manager + 3 worker`，并且每台机器都是 `128GB / 64 线程`，可以直接改用：
+如果你的拓扑是 `1 manager + 3 worker`，并且每台机器都是 `256GB / 64 线程`，可以直接改用：
 
 ```bash
-cp .env.swarm.prod-4x128g.example .env.swarm
+cp .env.swarm.prod-4x256g.example .env.swarm
 ```
 
 3. 给 PostgreSQL / Redis / registry 节点打标签。
@@ -283,12 +283,12 @@ docker/swarm/export-swarm-images.sh --env-file .env.swarm --output-dir .
 docker/swarm/deploy-stack.sh
 ```
 
-如果要按拆分模板把同一个生产栈补齐：
+如果要按拆分模板补齐生产多栈：
 
 ```bash
-docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve
-docker/swarm/deploy-stack.sh foundation --stack-name cloudreve
-docker/swarm/deploy-stack.sh infra --stack-name cloudreve
+docker/swarm/deploy-stack.sh foundation --stack-name cloudreve-prod-foundation
+docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod-infra
+docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod-app
 ```
 
 如果你确实需要给 Tika 指定宿主机字体目录，直接在 `.env.swarm` 里设置：
@@ -343,10 +343,10 @@ docker secret ls | grep '^cloudreve.*_secret_'
 
 如果你准备把第三方抽取链路也切到栈内 Kafka：
 
-- Cloudreve 全局 Kafka brokers：`kafka:9092`
-- 第三方抽取器如果也在 Swarm 内部网络，Kafka brokers 也填 `kafka:9092`
+- Cloudreve 全局 Kafka brokers：`${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
+- 第三方抽取器如果也在 Swarm 内部网络，Kafka brokers 也填 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`
 - `CLOUDREVE_GLOBAL_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`
-- Kafka UI 也直接连 `kafka:9092`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
+- Kafka UI 也直接连 `${CLOUDREVE_INFRA_SERVICE_PREFIX}kafka:9092`，并保持 `KAFKA_UI_SECURITY_PROTOCOL=PLAINTEXT`
 - 如果 `SWARM_OVERLAY_ENCRYPT=true`，跨主机 overlay 流量会由 Swarm 加密；当前 Kafka 模板就依赖这一层
 
 ## 6. 多节点模式才需要回填从节点密钥
@@ -355,7 +355,7 @@ docker secret ls | grep '^cloudreve.*_secret_'
 2. 创建 slave node
 3. 复制生成的从节点密钥（`Slave Key`）
 4. 把 `.env.swarm` 中的 `CLOUDREVE_SLAVE_SECRET` 替换成真实值
-5. 重新执行一次 `docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve`
+5. 重新执行一次 `docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod-app`
 
 如果你不是用默认栈名，也可以直接：
 
@@ -385,8 +385,8 @@ STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh cloudreve
 - `elasticsearch-1..3`: 每节点 `2C / 6G` reservation, `4C / 8G` limit
 - `kafka-1..3`: 每节点 `1C / 2G` reservation, `2C / 4G` limit
 - `kafka-ui`: `0.25C / 256M` reservation, `1C / 1G` limit
-- `ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS="-Xms4g -Xmx4g"`
-- `KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS="-Xms1g -Xmx1g"`
+- `ELASTICSEARCH_CLUSTER_NODE_JAVA_OPTS="-Xms31g -Xmx31g"`
+- `KAFKA_CLUSTER_NODE_JVM_HEAP_OPTS="-Xms8g -Xmx8g"`
 
 这只是生产默认起点，不是所有场景的上限。你仍然需要根据：
 
@@ -397,10 +397,10 @@ STACK_NAME=cloudreve-debug docker/swarm/deploy-stack.sh cloudreve
 
 继续调高。
 
-如果你的拓扑就是 `1 manager + 3 worker`，并且每台 `128GB / 64 线程`，仓库里已经给了
+如果你的拓扑就是 `1 manager + 3 worker`，并且每台 `256GB / 64 线程`，仓库里已经给了
 可直接复制的生产基线：
 
-- `.env.swarm.prod-4x128g.example`
+- `.env.swarm.prod-4x256g.example`
 
 它默认启用：
 

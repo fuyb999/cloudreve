@@ -35,6 +35,7 @@ usage() {
   ca/truststore.p12
   services/<service>/tls.crt
   services/<service>/tls.key
+  services/<service>/server.key
   services/<service>/fullchain.crt
   services/<service>/haproxy.pem
 EOF
@@ -226,6 +227,7 @@ issue_service_cert() {
   local cert_dir="$pki_root/services/$service"
   local ca_dir="$pki_root/ca"
   local key_file="$cert_dir/tls.key"
+  local server_key_file="$cert_dir/server.key"
   local csr_file="$cert_dir/tls.csr"
   local crt_file="$cert_dir/tls.crt"
   local fullchain_file="$cert_dir/fullchain.crt"
@@ -241,6 +243,11 @@ issue_service_cert() {
   common_name="${common_name#IP:}"
 
   if [[ "$FORCE_CERTS" -eq 0 && -f "$key_file" && -f "$crt_file" ]]; then
+    cat "$crt_file" "$ca_dir/ca.crt" >"$fullchain_file"
+    cat "$key_file" "$crt_file" "$ca_dir/ca.crt" >"$pem_file"
+    cp "$key_file" "$server_key_file"
+    chmod 0600 "$key_file"
+    chmod 0644 "$server_key_file" "$crt_file" "$fullchain_file" "$pem_file"
     echo "[skip] $service 证书已存在"
     return 0
   fi
@@ -268,8 +275,10 @@ EOF
 
   cat "$crt_file" "$ca_dir/ca.crt" >"$fullchain_file"
   cat "$key_file" "$crt_file" "$ca_dir/ca.crt" >"$pem_file"
+  cp "$key_file" "$server_key_file"
 
   chmod 0600 "$key_file"
+  chmod 0644 "$server_key_file"
   chmod 0644 "$crt_file" "$fullchain_file" "$pem_file"
   rm -f "$csr_file" "$ext_file"
   echo "[done] 已签发 $service"

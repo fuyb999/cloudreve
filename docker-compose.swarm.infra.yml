@@ -7,9 +7,9 @@
 #   - 同名 `elasticsearch` 入口：3 节点 Elasticsearch 集群 + 1 个代理入口
 #   - 同名 `kafka` 入口：3 节点 Kafka KRaft 集群 + 1 个内部 bootstrap 代理
 #   - `kafka-ui`：专门访问 Kafka 集群的管理界面
-# - 典型方式是对同一个 stack name 再执行一次：
-#   - `docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod`
-# - 这样会把这些服务并入同一套 Swarm 栈，而不再依赖 `--with-cluster`
+# - 典型方式是独立发布：
+#   - `docker/swarm/deploy-stack.sh infra --stack-name cloudreve-prod-infra`
+# - 这样会把这些服务作为独立 Swarm 栈接入 `SWARM_SHARED_NETWORK`，而不再依赖 `--with-cluster`
 # - 建议在真实环境中给这些节点单独打 label，并把数据目录改成真实物理路径
 # - Kafka 这 3 个固定 KRaft 节点必须使用 `endpoint_mode: dnsrr`
 #   避免 Swarm VIP / 内部负载均衡介入控制面连接
@@ -902,4 +902,4 @@ volumes:
 networks:
   cloudreve_backend:
     external: true
-    name: ${CLOUDREVE_STACK_NAME:?set CLOUDREVE_STACK_NAME}_cloudreve_backend
+    name: ${SWARM_SHARED_NETWORK:?set SWARM_SHARED_NETWORK}

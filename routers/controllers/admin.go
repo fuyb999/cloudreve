@@ -30,6 +30,17 @@ func AdminGetSettings(c *gin.Context) {
 	c.JSON(200, serializer.Response{Data: res})
 }
 
+func AdminGetOIDCRuntimeState(c *gin.Context) {
+	service := ParametersFromContext[*admin.GetOIDCRuntimeStateService](c, admin.GetOIDCRuntimeStateParamCtx{})
+	res, err := service.Get(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: res})
+}
+
 func AdminSetSettings(c *gin.Context) {
 	service := ParametersFromContext[*admin.SetSettingService](c, admin.SetSettingParamCtx{})
 	res, err := service.SetSetting(c)
