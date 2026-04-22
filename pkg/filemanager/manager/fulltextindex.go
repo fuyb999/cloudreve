@@ -111,12 +111,15 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 		OwnerID: &m.user.ID,
 	}
 
+	var publicVisibility *publicshare.VisibilityResult
+
 	if base != nil && base.FileSystem() == constants.FileSystemPublic {
 		publicService := publicshare.NewService(m.l, m.dep.FileClient(), m.dep.SettingClient(), m.hasher)
 		visibility, err := publicService.ResolveVisibility(ctx, m.user)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve public visibility for search: %w", err)
 		}
+		publicVisibility = visibility
 
 		filter := visibility.Filter
 		searchReq.OwnerID = nil
@@ -158,6 +161,19 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 
 	// Traverse each file in result
 	files := lo.FilterMap(results, func(result searcher.SearchResult, _ int) (FullTextSearchResult, bool) {
+		if base != nil && base.FileSystem() == constants.FileSystemPublic {
+			file, err := m.resolvePublicSearchResultFile(ctx, result.FileID, publicVisibility)
+			if err != nil {
+				m.l.Debug("Failed to resolve public file %d for full text search: %s, skipping.", result.FileID, err)
+				return FullTextSearchResult{}, false
+			}
+
+			return FullTextSearchResult{
+				File:    file,
+				Content: result.Text,
+			}, true
+		}
+
 		file, err := m.TraverseFile(ctx, result.FileID)
 		if err != nil {
 			m.l.Debug("Failed to traverse file %d for full text search: %s, skipping.", result.FileID, err)
@@ -179,6 +195,21 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 		Hits:  files,
 		Total: total,
 	}, nil
+}
+
+func (m *manager) resolvePublicSearchResultFile(ctx context.Context, fileID int, visibility *publicshare.VisibilityResult) (fs.File, error) {
+	publicService := publicshare.NewService(m.l, m.dep.FileClient(), m.dep.SettingClient(), m.hasher)
+	fileModel, err := m.dep.FileClient().GetByID(context.WithValue(ctx, inventory.LoadFileMetadata{}, true), fileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load public file %d: %w", fileID, err)
+	}
+
+	publicURI, err := publicService.ResolveVisibleURI(ctx, fileModel, visibility)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve public uri for file %d: %w", fileID, err)
+	}
+
+	return m.Get(ctx, publicURI, dbfs.WithFilePublicMetadata())
 }
 
 func init() {

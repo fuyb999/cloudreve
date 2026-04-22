@@ -151,6 +151,62 @@ func (s *Service) RootOwnerURI(ctx context.Context, root *ent.File) (*fs.URI, er
 	return base, nil
 }
 
+// ResolveVisibleURI builds the public-facing URI for a target file under the
+// resolved visibility snapshot. For projected public roots, the returned URI
+// uses the same alias path exposed by the public navigator.
+func (s *Service) ResolveVisibleURI(ctx context.Context, target *ent.File, visibility *VisibilityResult) (*fs.URI, error) {
+	if target == nil {
+		return nil, fmt.Errorf("public target not found")
+	}
+	if visibility == nil {
+		visibility = &VisibilityResult{}
+	}
+
+	grant, found := rootGrantForAncestors(target, visibility.RootGrants)
+	if !found {
+		return nil, fmt.Errorf("public target %d is not visible", target.ID)
+	}
+
+	rootID, err := s.RootID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve public root id: %w", err)
+	}
+
+	ancestors, err := s.fileClient.GetAncestorFiles(ctx, target)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load public ancestors for %d: %w", target.ID, err)
+	}
+
+	uri := BuildPublicURI()
+	if grant.RootFileID != rootID {
+		uri = uri.Join(ProjectedRootAlias(s.hasher, grant))
+	}
+
+	rootIndex := -1
+	for i, ancestor := range ancestors {
+		if ancestor != nil && ancestor.ID == grant.RootFileID {
+			rootIndex = i
+			break
+		}
+	}
+
+	if rootIndex < 0 {
+		if target.ID == grant.RootFileID {
+			return uri, nil
+		}
+		return nil, fmt.Errorf("public root grant %d missing from target %d ancestor chain", grant.RootFileID, target.ID)
+	}
+
+	for _, ancestor := range ancestors[rootIndex+1:] {
+		if ancestor == nil || strings.TrimSpace(ancestor.Name) == "" {
+			continue
+		}
+		uri = uri.Join(ancestor.Name)
+	}
+
+	return uri, nil
+}
+
 func isHiddenPublicRoot(root *ent.File) bool {
 	return root != nil && root.Name == inventory.RootFolderName && root.FileChildren == 0
 }

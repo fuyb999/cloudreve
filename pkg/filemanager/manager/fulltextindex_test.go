@@ -20,6 +20,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	inventorytypes "github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
@@ -787,6 +788,144 @@ func TestQueueFullTextReconcileDoesNotMergeIntoUnrelatedPendingTaskWithoutCorrel
 	originalState := mustParseState(t, pending.PrivateState)
 	if originalState.Len() != 1 || !originalState.Contains(701) || originalState.Contains(702) {
 		t.Fatalf("expected unrelated pending task to stay unchanged, got %+v", originalState.Items())
+	}
+}
+
+func TestSearchFullTextReturnsPublicVisibleURI(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	user := &ent.User{
+		ID: 7,
+		Edges: ent.UserEdges{
+			Group: &ent.Group{Permissions: &boolset.BooleanSet{}},
+		},
+	}
+	indexer := &testSearchIndexer{
+		results: []searcher.SearchResult{
+			{FileID: 22, OwnerID: 9, Text: "keyword"},
+		},
+		total: 1,
+	}
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			9:  {ID: 9, Name: inventory.RootFolderName, OwnerID: -1, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9"},
+			20: {ID: 20, Name: "部门空间", OwnerID: 9, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9.20"},
+			22: {
+				ID:       22,
+				Name:     "方案.docx",
+				OwnerID:  9,
+				Type:     int(inventorytypes.FileTypeFile),
+				TreePath: "1.9.20.22",
+			},
+		},
+		rootByOwner: map[int]*ent.File{
+			7: {ID: 1, Name: inventory.RootFolderName, OwnerID: 7, Type: int(inventorytypes.FileTypeFolder)},
+			9: {ID: 2, Name: inventory.RootFolderName, OwnerID: 9, Type: int(inventorytypes.FileTypeFolder)},
+		},
+		ancestorByID: map[int][]*ent.File{
+			20: {
+				{ID: 1, Name: inventory.RootFolderName, OwnerID: -1},
+				{ID: 9, Name: inventory.RootFolderName, OwnerID: -1},
+				{ID: 20, Name: "部门空间", OwnerID: 9},
+			},
+			22: {
+				{ID: 1, Name: inventory.RootFolderName, OwnerID: -1},
+				{ID: 9, Name: inventory.RootFolderName, OwnerID: -1},
+				{ID: 20, Name: "部门空间", OwnerID: 9},
+				{ID: 22, Name: "方案.docx", OwnerID: 9},
+			},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			9: {
+				"部门空间__" + hashid.EncodeFileID(hasher, 20): {ID: 20, Name: "部门空间", OwnerID: 9, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9.20"},
+			},
+			20: {
+				"方案.docx": {ID: 22, Name: "方案.docx", OwnerID: 9, Type: int(inventorytypes.FileTypeFile), TreePath: "1.9.20.22"},
+			},
+		},
+	}
+
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     user,
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings:      testSettingProvider{enabled: true},
+			searchIndexer: indexer,
+			fileClient:    fileClient,
+			settingClient: testSettingClient{
+				values: map[string]string{
+					publicshare.PublicRootFileIDSetting: "9",
+				},
+			},
+			userClient: &testUserClient{
+				userByID: map[int]*ent.User{
+					7: user,
+					9: {ID: 9, Edges: ent.UserEdges{Group: &ent.Group{Permissions: &boolset.BooleanSet{}}}},
+				},
+			},
+			registry: queue.NewTaskRegistry(),
+			config:   testConfigProvider{},
+			hasher:   hasher,
+		},
+		hasher: hasher,
+		fs: dbfs.NewDatabaseFS(
+			user,
+			fileClient,
+			nil,
+			logging.NewConsoleLogger(logging.LevelError),
+			nil,
+			testSettingProvider{enabled: true},
+			testSettingClient{
+				values: map[string]string{
+					publicshare.PublicRootFileIDSetting: "9",
+				},
+			},
+			nil,
+			hasher,
+			&testUserClient{
+				userByID: map[int]*ent.User{
+					7: user,
+					9: {ID: 9, Edges: ent.UserEdges{Group: &ent.Group{Permissions: &boolset.BooleanSet{}}}},
+				},
+			},
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+		),
+	}
+	defer m.Recycle()
+
+	ctx := context.WithValue(context.Background(), publicshare.VisibilityOverrideCtx{}, &publicshare.VisibilityResult{
+		RootGrants: []publicshare.RootGrant{
+			{
+				RootFileID:   20,
+				RootOwnerID:  9,
+				RootName:     "部门空间",
+				RootTreePath: "1.9.20",
+				Actions: map[publicshare.Action]bool{
+					publicshare.ActionList:     true,
+					publicshare.ActionDownload: true,
+				},
+			},
+		},
+	})
+	base := mustURI(t, "cloudreve://public")
+
+	results, err := m.SearchFullText(ctx, "keyword", 0, base)
+	if err != nil {
+		t.Fatalf("failed to search full text: %v", err)
+	}
+	if results == nil || len(results.Hits) != 1 {
+		t.Fatalf("unexpected search results: %+v", results)
+	}
+	if got, want := results.Hits[0].File.Uri(false).String(), publicshare.BuildPublicURI().Join("部门空间__"+hashid.EncodeFileID(hasher, 20), "方案.docx").String(); got != want {
+		t.Fatalf("unexpected public search uri: got %q want %q", got, want)
 	}
 }
 
@@ -2716,9 +2855,12 @@ func (c testConfigProvider) Slave() *conf.Slave {
 
 type testSearchIndexer struct {
 	searcher.SearchIndexer
-	deleted  []int
-	upserted int
-	lastDoc  *searcher.SearchFileDocument
+	deleted   []int
+	upserted  int
+	lastDoc   *searcher.SearchFileDocument
+	results   []searcher.SearchResult
+	total     int64
+	searchErr error
 }
 
 func (s *testSearchIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
@@ -2741,7 +2883,22 @@ func (s *testSearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int) 
 }
 
 func (s *testSearchIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
-	return nil, 0, nil
+	if s.searchErr != nil {
+		return nil, 0, s.searchErr
+	}
+
+	total := s.total
+	if total == 0 {
+		total = int64(len(s.results))
+	}
+	if req == nil || req.Offset <= 0 {
+		return append([]searcher.SearchResult(nil), s.results...), total, nil
+	}
+	if req.Offset >= len(s.results) {
+		return nil, total, nil
+	}
+
+	return append([]searcher.SearchResult(nil), s.results[req.Offset:]...), total, nil
 }
 
 func (s *testSearchIndexer) IndexReady(ctx context.Context) (bool, error) {

@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 )
 
 func TestCheckActionByFileAdminIgnoresVisibilityOverride(t *testing.T) {
@@ -82,8 +82,9 @@ func TestCheckActionByFileAdminIgnoresVisibilityOverride(t *testing.T) {
 
 type adminOverrideTestFileClient struct {
 	inventory.FileClient
-	root     *ent.File
-	children []*ent.File
+	root             *ent.File
+	children         []*ent.File
+	ancestorByTarget map[int][]*ent.File
 }
 
 func (c *adminOverrideTestFileClient) GetByID(ctx context.Context, id int) (*ent.File, error) {
@@ -102,6 +103,16 @@ func (c *adminOverrideTestFileClient) GetChildFiles(ctx context.Context, args *i
 	return &inventory.ListFileResult{}, nil
 }
 
+func (c *adminOverrideTestFileClient) GetAncestorFiles(ctx context.Context, target *ent.File) ([]*ent.File, error) {
+	if target != nil && c.ancestorByTarget != nil {
+		if items, ok := c.ancestorByTarget[target.ID]; ok {
+			return append([]*ent.File(nil), items...), nil
+		}
+	}
+
+	return nil, inventory.ErrTreePathQueryUnavailable
+}
+
 func testAdminPermissions() *boolset.BooleanSet {
 	permissions := &boolset.BooleanSet{}
 	boolset.Sets(map[types.GroupPermission]bool{
@@ -112,9 +123,9 @@ func testAdminPermissions() *boolset.BooleanSet {
 
 func TestDecisionFromVisibilityRejectsMissingUploadGrant(t *testing.T) {
 	target := &ent.File{
-		ID:       22,
+		ID:           22,
 		FileChildren: 20,
-		TreePath: "10.20.22",
+		TreePath:     "10.20.22",
 		Edges: ent.FileEdges{
 			Parent: &ent.File{ID: 20},
 		},

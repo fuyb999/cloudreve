@@ -93,3 +93,95 @@ func TestBuildVisibilityFilterUsesTreePathOnlyForPublicSubtree(t *testing.T) {
 		t.Fatalf("unexpected tree path prefixes: %+v", filter.Match.StringValues)
 	}
 }
+
+func TestResolveVisibleURIReturnsPublicSubtreePath(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	service := NewService(
+		logging.NewConsoleLogger(logging.LevelError),
+		&adminOverrideTestFileClient{},
+		testSettingClient{values: map[string]string{
+			PublicRootFileIDSetting: "9",
+		}},
+		hasher,
+	)
+
+	target := &ent.File{ID: 12, Name: "说明.txt", TreePath: "1.9.10.12"}
+	service.fileClient = &adminOverrideTestFileClient{
+		root: &ent.File{ID: 9, Name: inventory.RootFolderName},
+		ancestorByTarget: map[int][]*ent.File{
+			12: {
+				{ID: 1, Name: inventory.RootFolderName},
+				{ID: 9, Name: inventory.RootFolderName},
+				{ID: 10, Name: "研发部"},
+				{ID: 12, Name: "说明.txt"},
+			},
+		},
+	}
+
+	uri, err := service.ResolveVisibleURI(context.Background(), target, &VisibilityResult{
+		RootGrants: []RootGrant{
+			{
+				RootFileID:   9,
+				RootName:     DefaultRootName,
+				RootTreePath: "1.9",
+				Actions:      map[Action]bool{ActionList: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to resolve visible uri: %v", err)
+	}
+	if got, want := uri.String(), BuildPublicURI().Join("研发部", "说明.txt").String(); got != want {
+		t.Fatalf("unexpected visible uri: got %q want %q", got, want)
+	}
+}
+
+func TestResolveVisibleURIReturnsProjectedRootAliasPath(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	service := NewService(
+		logging.NewConsoleLogger(logging.LevelError),
+		&adminOverrideTestFileClient{},
+		testSettingClient{values: map[string]string{
+			PublicRootFileIDSetting: "9",
+		}},
+		hasher,
+	)
+
+	target := &ent.File{ID: 22, Name: "方案.docx", TreePath: "1.9.20.22"}
+	service.fileClient = &adminOverrideTestFileClient{
+		root: &ent.File{ID: 9, Name: inventory.RootFolderName},
+		ancestorByTarget: map[int][]*ent.File{
+			22: {
+				{ID: 1, Name: inventory.RootFolderName},
+				{ID: 9, Name: inventory.RootFolderName},
+				{ID: 20, Name: "部门空间"},
+				{ID: 22, Name: "方案.docx"},
+			},
+		},
+	}
+
+	grant := RootGrant{
+		RootFileID:   20,
+		RootName:     "部门空间",
+		RootTreePath: "1.9.20",
+		Actions:      map[Action]bool{ActionList: true},
+	}
+	uri, err := service.ResolveVisibleURI(context.Background(), target, &VisibilityResult{
+		RootGrants: []RootGrant{grant},
+	})
+	if err != nil {
+		t.Fatalf("failed to resolve visible uri: %v", err)
+	}
+	want := BuildPublicURI().Join(ProjectedRootAlias(hasher, grant), "方案.docx").String()
+	if got := uri.String(); got != want {
+		t.Fatalf("unexpected projected visible uri: got %q want %q", got, want)
+	}
+}
