@@ -8,6 +8,8 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
+	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -75,7 +77,9 @@ func TestVerifyAndRetrieveUserSkipsOpaqueBearerToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
+	engine := gin.New()
+	engine.ContextWithFallback = true
+	c := gin.CreateTestContextOnly(w, engine)
 	c.Request = httptest.NewRequest("GET", "/", nil)
 	c.Request.Header.Set(AuthorizationHeader, TokenHeaderPrefix+"opaque-token")
 
@@ -86,5 +90,64 @@ func TestVerifyAndRetrieveUserSkipsOpaqueBearerToken(t *testing.T) {
 	}
 	if !shouldContinue {
 		t.Fatalf("expected opaque bearer token to fall through to OIDC verification")
+	}
+}
+
+func TestCheckScopeAllowsLocalAdminForAdminScopes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	engine := gin.New()
+	engine.ContextWithFallback = true
+	c := gin.CreateTestContextOnly(w, engine)
+	permissions := &boolset.BooleanSet{}
+	boolset.Sets(map[types.GroupPermission]bool{
+		types.GroupPermissionIsAdmin: true,
+	}, permissions)
+	c.Request = httptest.NewRequest("GET", "/api/v4/admin/summary", nil)
+
+	adminUser := &ent.User{
+		ID: 1,
+		Edges: ent.UserEdges{
+			Group: &ent.Group{Permissions: permissions},
+		},
+	}
+	util.WithValue(c, inventory.UserCtx{}, adminUser)
+	util.WithValue(c, ScopeContextKey{}, []string{types.ScopeFilesRead})
+	util.WithValue(c, inventory.OIDCAccessTokenCtx{}, "provider-token")
+
+	if err := CheckScope(c, types.ScopeAdminRead); err != nil {
+		t.Fatalf("expected local admin to satisfy Admin.Read without upstream scope, got %v", err)
+	}
+	if err := CheckScope(c, types.ScopeAdminWrite); err != nil {
+		t.Fatalf("expected local admin to satisfy Admin.Write without upstream scope, got %v", err)
+	}
+}
+
+func TestCheckScopeDoesNotBypassNonAdminScopesForLocalAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	engine := gin.New()
+	engine.ContextWithFallback = true
+	c := gin.CreateTestContextOnly(w, engine)
+	permissions := &boolset.BooleanSet{}
+	boolset.Sets(map[types.GroupPermission]bool{
+		types.GroupPermissionIsAdmin: true,
+	}, permissions)
+	adminUser := &ent.User{
+		ID: 1,
+		Edges: ent.UserEdges{
+			Group: &ent.Group{Permissions: permissions},
+		},
+	}
+
+	c.Request = httptest.NewRequest("GET", "/api/v4/file/search", nil)
+	util.WithValue(c, inventory.UserCtx{}, adminUser)
+	util.WithValue(c, ScopeContextKey{}, []string{types.ScopeAdminRead})
+	util.WithValue(c, inventory.OIDCAccessTokenCtx{}, "provider-token")
+
+	if err := CheckScope(c, types.ScopeFilesRead); err == nil {
+		t.Fatal("expected non-admin scope to remain enforced for local admin")
 	}
 }

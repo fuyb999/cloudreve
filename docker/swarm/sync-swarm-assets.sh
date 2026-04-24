@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 TARGETS="${TARGETS:-${SWARM_SYNC_TARGETS:-}}"
 SSH_USER="${SSH_USER:-${SWARM_SYNC_SSH_USER:-}}"
@@ -11,14 +12,17 @@ MODE="check"
 SYNC_ENV="yes"
 SYNC_PKI="auto"
 SYNC_FONTS="auto"
+USE_SUDO="${USE_SUDO:-${SWARM_SYNC_USE_SUDO:-no}}"
 HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
+ENV_BASE_FILE_PATH=""
+REMOTE_ENV_BASE_FILE=""
 
 usage() {
   cat <<'EOF'
 用法：
   docker/swarm/sync-swarm-assets.sh [--env-file 文件] [--targets "host1,host2"] [--ssh-user 用户]
                                     [--remote-env-file 文件] [--check] [--apply]
-                                    [--no-sync-env] [--no-sync-pki] [--no-sync-fonts]
+                                    [--no-sync-env] [--no-sync-pki] [--no-sync-fonts] [--sudo]
 
 说明：
   这个脚本用于在多机 Swarm 环境里统一同步运行资产：
@@ -42,6 +46,7 @@ usage() {
   --no-sync-env           不同步 `.env.swarm`
   --no-sync-pki           不同步 PKI 目录
   --no-sync-fonts         不同步共享字体目录
+  --sudo                  远端创建目录和写入文件时使用 sudo
   -h, --help              显示帮助
 
 示例：
@@ -88,6 +93,10 @@ while [[ $# -gt 0 ]]; do
       SYNC_FONTS="no"
       shift
       ;;
+    --sudo)
+      USE_SUDO="yes"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -105,12 +114,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:-$ENV_FILE}"
+if [[ -n "${ENV_BASE_FILE:-}" ]]; then
+  ENV_BASE_FILE_PATH="$(resolve_swarm_env_path "$ENV_BASE_FILE" "$(dirname "$ENV_FILE")")"
+  REMOTE_ENV_BASE_FILE="${REMOTE_ENV_BASE_FILE:-$(dirname "$REMOTE_ENV_FILE")/$(basename "$ENV_BASE_FILE_PATH")}"
+fi
 SWARM_PKI_MOUNT_TYPE="${SWARM_PKI_MOUNT_TYPE:-bind}"
 SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
 SWARM_PKI_LOCAL_SOURCE="${SWARM_PKI_LOCAL_SOURCE:-$SWARM_PKI_MOUNT_SOURCE}"
@@ -148,6 +158,58 @@ resolve_target() {
     printf '%s@%s\n' "$SSH_USER" "$target"
   else
     printf '%s\n' "$target"
+  fi
+}
+
+use_remote_sudo() {
+  case "$USE_SUDO" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+remote_mkdir_p() {
+  local target="$1"
+  shift || true
+  local mkdir_cmd="mkdir -p"
+  local remote_dir
+
+  for remote_dir in "$@"; do
+    mkdir_cmd+=" $(printf '%q' "$remote_dir")"
+  done
+
+  if use_remote_sudo; then
+    ssh "$target" "sudo $mkdir_cmd"
+  else
+    ssh "$target" "$mkdir_cmd"
+  fi
+}
+
+sync_file_to_remote() {
+  local src="$1"
+  local target="$2"
+  local dst="$3"
+
+  if use_remote_sudo; then
+    rsync -az --rsync-path="sudo rsync" "$src" "$target:$dst"
+  else
+    rsync -az "$src" "$target:$dst"
+  fi
+}
+
+sync_dir_to_remote() {
+  local src="$1"
+  local target="$2"
+  local dst="$3"
+
+  if use_remote_sudo; then
+    rsync -az --delete --omit-dir-times --no-perms --rsync-path="sudo rsync" "$src/" "$target:$dst/"
+  else
+    rsync -az "$src/" "$target:$dst/"
   fi
 }
 
@@ -200,6 +262,9 @@ fi
 
 if [[ "$SYNC_ENV" == "yes" ]]; then
   require_local_path "$ENV_FILE" ".env 文件"
+  if [[ -n "$ENV_BASE_FILE_PATH" ]]; then
+    require_local_path "$ENV_BASE_FILE_PATH" "基础 .env 文件"
+  fi
 fi
 if should_sync_pki; then
   require_local_path "$SWARM_PKI_LOCAL_SOURCE" "PKI 目录"
@@ -231,6 +296,9 @@ while IFS= read -r raw_target <&3; do
   echo "[$HOST_NAME] 目标节点：$target"
   if [[ "$SYNC_ENV" == "yes" ]]; then
     echo "[$HOST_NAME]   ENV   $ENV_FILE -> $REMOTE_ENV_FILE"
+    if [[ -n "$ENV_BASE_FILE_PATH" ]]; then
+      echo "[$HOST_NAME]   BASE  $ENV_BASE_FILE_PATH -> $REMOTE_ENV_BASE_FILE"
+    fi
   else
     echo "[$HOST_NAME]   ENV   已跳过"
   fi
@@ -251,6 +319,9 @@ while IFS= read -r raw_target <&3; do
     remote_dirs=()
     if [[ "$SYNC_ENV" == "yes" ]]; then
       remote_dirs+=("$(dirname "$REMOTE_ENV_FILE")")
+      if [[ -n "$ENV_BASE_FILE_PATH" ]]; then
+        remote_dirs+=("$(dirname "$REMOTE_ENV_BASE_FILE")")
+      fi
     fi
     if should_sync_pki; then
       remote_dirs+=("$SWARM_PKI_MOUNT_SOURCE")
@@ -260,21 +331,20 @@ while IFS= read -r raw_target <&3; do
     fi
 
     if [[ ${#remote_dirs[@]} -gt 0 ]]; then
-      mkdir_cmd="mkdir -p"
-      for remote_dir in "${remote_dirs[@]}"; do
-        mkdir_cmd+=" $(printf '%q' "$remote_dir")"
-      done
-      ssh "$target" "$mkdir_cmd"
+      remote_mkdir_p "$target" "${remote_dirs[@]}"
     fi
 
     if [[ "$SYNC_ENV" == "yes" ]]; then
-      rsync -az "$ENV_FILE" "$target:$REMOTE_ENV_FILE"
+      if [[ -n "$ENV_BASE_FILE_PATH" ]]; then
+        sync_file_to_remote "$ENV_BASE_FILE_PATH" "$target" "$REMOTE_ENV_BASE_FILE"
+      fi
+      sync_file_to_remote "$ENV_FILE" "$target" "$REMOTE_ENV_FILE"
     fi
     if should_sync_pki; then
-      rsync -az "$SWARM_PKI_LOCAL_SOURCE/" "$target:$SWARM_PKI_MOUNT_SOURCE/"
+      sync_dir_to_remote "$SWARM_PKI_LOCAL_SOURCE" "$target" "$SWARM_PKI_MOUNT_SOURCE"
     fi
     if should_sync_fonts; then
-      rsync -az "$SHARED_CUSTOM_FONTS_LOCAL_SOURCE/" "$target:$SHARED_CUSTOM_FONTS_MOUNT_SOURCE/"
+      sync_dir_to_remote "$SHARED_CUSTOM_FONTS_LOCAL_SOURCE" "$target" "$SHARED_CUSTOM_FONTS_MOUNT_SOURCE"
     fi
 
     echo "[$HOST_NAME]   [DONE] $target 同步完成"

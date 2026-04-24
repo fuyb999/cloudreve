@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 HOSTS="${HOSTS:-}"
 CA_FILE="${CA_FILE:-}"
@@ -70,10 +71,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 if [[ -z "$CA_FILE" ]]; then
   if [[ -n "${SWARM_PKI_LOCAL_SOURCE:-}" && -f "${SWARM_PKI_LOCAL_SOURCE}/ca/ca.crt" ]]; then

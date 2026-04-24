@@ -433,7 +433,7 @@ func RuleFromMetadata(target *ent.File) *Rule {
 }
 
 func isAdminUser(user *ent.User) bool {
-	return user != nil && user.Edges.Group != nil && user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin))
+	return inventory.UserIsAdmin(user)
 }
 
 func (s *Service) ResolveVisibility(ctx context.Context, user *ent.User) (*VisibilityResult, error) {
@@ -480,6 +480,7 @@ func (s *Service) resolveVisibilityLocal(ctx context.Context, user *ent.User) (*
 				RootOwnerID:  item.File.OwnerID,
 				RootName:     item.File.Name,
 				RootTreePath: item.File.TreePath,
+				Scope:        RootGrantScopeSubtree,
 				Actions: lo.SliceToMap(ActionOrder, func(action Action) (Action, bool) {
 					return action, true
 				}),
@@ -526,6 +527,7 @@ func (s *Service) resolveVisibilityLocal(ctx context.Context, user *ent.User) (*
 			RootOwnerID:  binding.File.OwnerID,
 			RootName:     binding.File.Name,
 			RootTreePath: binding.File.TreePath,
+			Scope:        RootGrantScopeSubtree,
 			Actions:      actions,
 		})
 	}
@@ -596,6 +598,9 @@ func decisionFromVisibility(target *ent.File, action Action, visibility *Visibil
 	if visibility == nil {
 		visibility = &VisibilityResult{}
 	}
+	if !MatchFileFilter(visibility.Filter, target) {
+		return &ActionDecision{Allowed: false, Action: action, Reason: "root_not_visible"}
+	}
 
 	rootGrant, found := rootGrantForAncestors(target, visibility.RootGrants)
 	if !found {
@@ -637,19 +642,15 @@ func rootGrantForAncestors(target *ent.File, grants []RootGrant) (RootGrant, boo
 		matchedDepth = -1
 	)
 	for _, grant := range grants {
-		if grant.RootFileID == targetID {
-			return grant, true
+		if !RootGrantCoversFile(grant, targetID, targetPath) {
+			continue
 		}
 
 		grantPath := strings.TrimSpace(grant.RootTreePath)
-		if grantPath == "" || targetPath == "" {
-			continue
+		depth := 0
+		if grantPath != "" {
+			depth = len(strings.Split(grantPath, "."))
 		}
-		if targetPath != grantPath && !strings.HasPrefix(targetPath, grantPath+".") {
-			continue
-		}
-
-		depth := len(strings.Split(grantPath, "."))
 		if depth > matchedDepth {
 			matched = grant
 			matchedDepth = depth

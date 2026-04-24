@@ -11,6 +11,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
@@ -364,6 +365,9 @@ func CheckScope(c *gin.Context, requiredScopes ...string) error {
 	if !hasScopes {
 		return nil
 	}
+	if localAdminSatisfiesAdminScopes(c, requiredScopes...) {
+		return nil
+	}
 
 	// Build a set of token scopes including implicit read permissions from write scopes
 	scopeSet := make(map[string]struct{}, len(tokenScopes)*2)
@@ -384,6 +388,20 @@ func CheckScope(c *gin.Context, requiredScopes ...string) error {
 	}
 
 	return nil
+}
+
+func localAdminSatisfiesAdminScopes(ctx context.Context, requiredScopes ...string) bool {
+	if len(requiredScopes) == 0 {
+		return false
+	}
+	for _, required := range requiredScopes {
+		if required != types.ScopeAdminRead && required != types.ScopeAdminWrite {
+			return false
+		}
+	}
+
+	u := inventory.UserFromContext(ctx)
+	return inventory.UserIsAdmin(u)
 }
 
 // extractWriteResource extracts the resource name from a write scope.

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -25,7 +26,14 @@ import (
 
 const (
 	CallbackFailedStatusCode = http.StatusUnauthorized
+	slowCurrentUserThreshold = 200 * time.Millisecond
 )
+
+func logSlowCurrentUserStage(c *gin.Context, dep dependency.Dep, stage string, start time.Time) {
+	if elapsed := time.Since(start); elapsed >= slowCurrentUserThreshold {
+		dep.Logger().Warning("CurrentUser slow stage=%s duration=%s method=%s path=%s", stage, elapsed, c.Request.Method, c.Request.URL.RequestURI())
+	}
+}
 
 // SignRequired 验证请求签名
 func SignRequired(authInstance auth.Auth) gin.HandlerFunc {
@@ -53,7 +61,9 @@ func CurrentUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dep := dependency.FromContext(c)
 		isHMACAuth := strings.HasPrefix(c.GetHeader(auth.AuthorizationHeader), auth.TokenHeaderPrefixCr)
+		stageStart := time.Now()
 		shouldContinue, err := dep.TokenAuth().VerifyAndRetrieveUser(c)
+		logSlowCurrentUserStage(c, dep, "verify_and_retrieve_user", stageStart)
 		if err != nil {
 			c.JSON(200, serializer.Err(c, err))
 			c.Abort()
@@ -61,25 +71,33 @@ func CurrentUser() gin.HandlerFunc {
 		}
 
 		if shouldContinue && !isHMACAuth {
+			stageStart = time.Now()
 			if _, err := usersvc.TryVerifyOIDCAccessToken(c); err != nil {
+				logSlowCurrentUserStage(c, dep, "try_verify_oidc_should_continue", stageStart)
 				c.JSON(200, serializer.Err(c, err))
 				c.Abort()
 				return
 			}
+			logSlowCurrentUserStage(c, dep, "try_verify_oidc_should_continue", stageStart)
 		}
 
 		uid := inventory.UserIDFromContext(c)
 		if uid == 0 && dep.SettingProvider().OIDCEnabled(c) && !isHMACAuth {
+			stageStart = time.Now()
 			if _, err := usersvc.TryVerifyOIDCAccessToken(c); err != nil {
+				logSlowCurrentUserStage(c, dep, "try_verify_oidc_fallback", stageStart)
 				c.JSON(200, serializer.Err(c, err))
 				c.Abort()
 				return
 			}
+			logSlowCurrentUserStage(c, dep, "try_verify_oidc_fallback", stageStart)
 			uid = inventory.UserIDFromContext(c)
 		}
 
 		if uid == 0 {
+			stageStart = time.Now()
 			anonymous, err := dep.UserClient().AnonymousUser(c)
+			logSlowCurrentUserStage(c, dep, "anonymous_user", stageStart)
 			if err != nil {
 				c.JSON(200, serializer.Err(c, serializer.NewError(serializer.CodeDBError, "failed to get anonymous user", err)))
 				c.Abort()
@@ -91,11 +109,14 @@ func CurrentUser() gin.HandlerFunc {
 			return
 		}
 
+		stageStart = time.Now()
 		if err := SetUserCtx(c, uid); err != nil {
+			logSlowCurrentUserStage(c, dep, "set_user_ctx", stageStart)
 			c.JSON(200, serializer.Err(c, err))
 			c.Abort()
 			return
 		}
+		logSlowCurrentUserStage(c, dep, "set_user_ctx", stageStart)
 
 		c.Next()
 	}
@@ -327,7 +348,7 @@ func OSSCallbackAuth() gin.HandlerFunc {
 func IsAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := inventory.UserFromContext(c)
-		if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+		if !inventory.UserIsAdmin(user) {
 			c.JSON(200, serializer.ErrWithDetails(c, serializer.CodeNoPermissionErr, "", nil))
 			c.Abort()
 			return

@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
@@ -80,7 +81,7 @@ func (m *manager) GetDirectLink(ctx context.Context, urls ...*fs.URI) ([]DirectL
 
 		if url.FileSystem() != constants.FileSystemPublic &&
 			file.OwnerID() != m.user.ID &&
-			!m.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+			!inventory.UserIsAdmin(m.user) {
 			ae.Add(url.String(), fs.ErrOwnerOnly)
 			continue
 		}
@@ -102,7 +103,7 @@ func (m *manager) GetDirectLink(ctx context.Context, urls ...*fs.URI) ([]DirectL
 		}
 
 		if useRedirect {
-			reuseExisting := !m.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionUniqueRedirectDirectLink))
+			reuseExisting := !inventory.UserHasGroupPermission(m.user, types.GroupPermissionUniqueRedirectDirectLink)
 			// Use redirect source
 			link, err := fileClient.CreateDirectLink(ctx, file.ID(), file.Name(), m.user.Edges.Group.SpeedLimit, reuseExisting)
 			if err != nil {

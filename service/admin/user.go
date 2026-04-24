@@ -9,7 +9,6 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
-	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
@@ -179,7 +178,7 @@ func (s *UpsertUserService) Update(c *gin.Context) (*GetUserResponse, error) {
 		return nil, serializer.NewError(serializer.CodeNotFound, "User not found", nil)
 	}
 
-	if s.User.ID == 1 && existing.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+	if s.User.ID == 1 && inventory.UserIsAdmin(existing) {
 		if s.User.GroupUsers != existing.GroupUsers {
 			return nil, serializer.NewError(serializer.CodeInvalidActionOnDefaultUser, "Cannot change default user's group", nil)
 		}

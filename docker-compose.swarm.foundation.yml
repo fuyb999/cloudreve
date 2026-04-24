@@ -86,7 +86,7 @@ services:
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-tasks.postgresql-1}
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-1
       REPMGR_NODE_NETWORK_NAME: postgresql-1
@@ -144,7 +144,7 @@ services:
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-tasks.postgresql-1}
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-2
       REPMGR_NODE_NETWORK_NAME: postgresql-2
@@ -202,7 +202,7 @@ services:
       POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
-      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-tasks.postgresql-1}
+      REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-3
       REPMGR_NODE_NETWORK_NAME: postgresql-3
@@ -776,7 +776,7 @@ services:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: onlyoffice_font_bootstrap_v1
+      - source: onlyoffice_font_bootstrap_v2
         target: /usr/local/bin/onlyoffice-font-bootstrap.sh
         mode: 0555
     secrets:
@@ -905,7 +905,7 @@ configs:
     file: ./docker/swarm/haproxy/redis-public-tls.cfg
   http_tls_proxy_template_v2:
     file: ./docker/swarm/nginx/http-tls-proxy.conf.template
-  onlyoffice_font_bootstrap_v1:
+  onlyoffice_font_bootstrap_v2:
     file: ./docker/swarm/onlyoffice-font-bootstrap.sh
 
 secrets:

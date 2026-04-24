@@ -126,6 +126,94 @@ func TestConstrainRemoteDecisionToVisibilityUsesDeepestGrant(t *testing.T) {
 	}
 }
 
+func TestConstrainRemoteDecisionToVisibilityDoesNotInheritSelfScopeToDescendants(t *testing.T) {
+	target := &ent.File{ID: 21, TreePath: "10.20.21"}
+	decision := &ActionDecision{
+		Allowed: true,
+		Action:  ActionUpload,
+		Actions: map[Action]bool{
+			ActionUpload: true,
+		},
+		Reason: "allowed",
+	}
+
+	constrained := constrainRemoteDecisionToVisibility(target, ActionUpload, &VisibilityResult{
+		RootGrants: []RootGrant{
+			{
+				RootFileID:   20,
+				RootTreePath: "10.20",
+				Scope:        RootGrantScopeSelf,
+				Actions: map[Action]bool{
+					ActionUpload: true,
+				},
+			},
+		},
+	}, decision)
+
+	if constrained.Allowed {
+		t.Fatalf("expected self scope grant not to authorize descendants")
+	}
+	if constrained.Reason != "root_not_visible" {
+		t.Fatalf("unexpected deny reason: %s", constrained.Reason)
+	}
+}
+
+func TestConstrainRemoteDecisionToVisibilityRejectsTargetExcludedByFilter(t *testing.T) {
+	target := &ent.File{ID: 40, OwnerID: 7, TreePath: "10.20.30.40"}
+	decision := &ActionDecision{
+		Allowed: true,
+		Action:  ActionUpload,
+		Actions: map[Action]bool{
+			ActionList:   true,
+			ActionUpload: true,
+		},
+		Reason: "nearest_policy_allowed",
+	}
+
+	constrained := constrainRemoteDecisionToVisibility(target, ActionUpload, &VisibilityResult{
+		Filter: &FileFilterExpr{
+			Operator: FileFilterOpAnd,
+			Children: []*FileFilterExpr{
+				{
+					Match: &FileFilterMatch{
+						Kind:         FileFilterMatchTreePathIn,
+						StringValues: []string{"10.20"},
+					},
+				},
+				{
+					Operator: FileFilterOpNot,
+					Children: []*FileFilterExpr{
+						{
+							Match: &FileFilterMatch{
+								Kind:         FileFilterMatchTreePathIn,
+								StringValues: []string{"10.20.30"},
+							},
+						},
+					},
+				},
+			},
+		},
+		RootGrants: []RootGrant{
+			{
+				RootFileID:   20,
+				RootOwnerID:  7,
+				RootTreePath: "10.20",
+				Actions: map[Action]bool{
+					ActionList:   true,
+					ActionUpload: true,
+				},
+			},
+		},
+	}, decision)
+
+	if constrained == nil || constrained.Allowed {
+		t.Fatalf("expected excluded target to be rejected, got %+v", constrained)
+	}
+	if constrained.Reason != "root_not_visible" {
+		t.Fatalf("unexpected deny reason: %s", constrained.Reason)
+	}
+}
+
 func TestCheckActionRemoteAllowsWritablePublicRoot(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

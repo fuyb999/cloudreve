@@ -930,7 +930,7 @@ func (f *DBFS) TraverseFile(ctx context.Context, fileID int) (fs.File, error) {
 		return nil, err
 	}
 
-	if fileModel.OwnerID != f.user.ID && !f.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+	if fileModel.OwnerID != f.user.ID && !inventory.UserIsAdmin(f.user) {
 		return nil, fs.ErrOwnerOnly.WithError(fmt.Errorf("only file owner can traverse file's uri"))
 	}
 

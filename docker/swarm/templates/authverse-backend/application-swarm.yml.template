@@ -1,0 +1,92 @@
+server:
+  port: ${AUTHVERSE_BACKEND_PORT}
+  forward-headers-strategy: framework
+
+spring:
+  datasource:
+    dynamic:
+      datasource:
+        master:
+          url: "${AUTHVERSE_DB_MASTER_URL}"
+          username: "${AUTHVERSE_DB_USERNAME}"
+          password: "${AUTHVERSE_DB_PASSWORD}"
+        slave:
+          url: "${AUTHVERSE_DB_SLAVE_URL}"
+          username: "${AUTHVERSE_DB_SLAVE_USERNAME}"
+          password: "${AUTHVERSE_DB_SLAVE_PASSWORD}"
+  data:
+    redis:
+      host: "${AUTHVERSE_REDIS_HOST}"
+      port: ${AUTHVERSE_REDIS_PORT}
+      password: "${AUTHVERSE_REDIS_PASSWORD}"
+      database: ${AUTHVERSE_REDIS_DATABASE}
+      ssl:
+        enabled: ${AUTHVERSE_REDIS_SSL_ENABLED}
+  servlet:
+    multipart:
+      max-file-size: "${AUTHVERSE_MAX_FILE_SIZE}"
+      max-request-size: "${AUTHVERSE_MAX_REQUEST_SIZE}"
+
+authverse:
+  tenant:
+    enable: ${AUTHVERSE_TENANT_ENABLED}
+  web:
+    admin-ui:
+      url: "${AUTHVERSE_PUBLIC_BASE_URL}"
+  cloudreve:
+    base-uri: "${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL}"
+  search:
+    elasticsearch:
+      enabled: ${AUTHVERSE_ELASTICSEARCH_ENABLED}
+      uris:
+        - "${AUTHVERSE_ELASTICSEARCH_URI}"
+      connection-timeout: "${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT}"
+      socket-timeout: "${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT}"
+      connection-request-timeout: "${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT}"
+  oidc:
+    enabled: ${AUTHVERSE_OIDC_ENABLED}
+    issuer: "${AUTHVERSE_PUBLIC_BASE_URL}"
+    rsa:
+      auto-generate: ${AUTHVERSE_OIDC_RSA_AUTO_GENERATE}
+      private-key-path: "${AUTHVERSE_OIDC_PRIVATE_KEY_PATH}"
+      public-key-path: "${AUTHVERSE_OIDC_PUBLIC_KEY_PATH}"
+      key-id: "${AUTHVERSE_OIDC_KEY_ID}"
+    callback:
+      enabled: ${AUTHVERSE_TOKEN_CALLBACK_ENABLED}
+      timeout: ${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS}
+      retry-times: ${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES}
+      retry-interval: ${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS}
+  websocket:
+    sender-type: "${AUTHVERSE_WEBSOCKET_SENDER_TYPE}"
+
+yudao:
+  tenant:
+    enable: ${AUTHVERSE_TENANT_ENABLED}
+  web:
+    admin-ui:
+      url: "${AUTHVERSE_PUBLIC_BASE_URL}"
+  cloudreve:
+    base-uri: "${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL}"
+  search:
+    elasticsearch:
+      enabled: ${AUTHVERSE_ELASTICSEARCH_ENABLED}
+      uris:
+        - "${AUTHVERSE_ELASTICSEARCH_URI}"
+      connection-timeout: "${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT}"
+      socket-timeout: "${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT}"
+      connection-request-timeout: "${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT}"
+  oidc:
+    enabled: ${AUTHVERSE_OIDC_ENABLED}
+    issuer: "${AUTHVERSE_PUBLIC_BASE_URL}"
+    rsa:
+      auto-generate: ${AUTHVERSE_OIDC_RSA_AUTO_GENERATE}
+      private-key-path: "${AUTHVERSE_OIDC_PRIVATE_KEY_PATH}"
+      public-key-path: "${AUTHVERSE_OIDC_PUBLIC_KEY_PATH}"
+      key-id: "${AUTHVERSE_OIDC_KEY_ID}"
+    callback:
+      enabled: ${AUTHVERSE_TOKEN_CALLBACK_ENABLED}
+      timeout: ${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS}
+      retry-times: ${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES}
+      retry-interval: ${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS}
+  websocket:
+    sender-type: "${AUTHVERSE_WEBSOCKET_SENDER_TYPE}"

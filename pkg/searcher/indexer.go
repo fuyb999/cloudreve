@@ -3,45 +3,45 @@ package searcher
 import (
 	"context"
 	"io"
-	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
+	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 )
 
 type SearchAttachmentDocument struct {
-	ID        string            `json:"id"`
-	ParentID  string            `json:"parent_id,omitempty"`
-	Depth     int               `json:"depth,omitempty"`
-	EntityID  int               `json:"entity_id,omitempty"`
-	Type      string            `json:"type,omitempty"`
-	Name      string            `json:"name,omitempty"`
-	Path      string            `json:"path,omitempty"`
-	Bucket    string            `json:"bucket,omitempty"`
-	Size      int64             `json:"size,omitempty"`
-	MimeType  string            `json:"mime_type,omitempty"`
-	Source    string            `json:"source,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Content   string            `json:"content,omitempty"`
-	CreatedAt time.Time         `json:"created_at,omitempty"`
-	UpdatedAt time.Time         `json:"updated_at,omitempty"`
+	ID        string              `json:"id"`
+	ParentID  string              `json:"parent_id,omitempty"`
+	Depth     int                 `json:"depth,omitempty"`
+	EntityID  int                 `json:"entity_id,omitempty"`
+	Type      string              `json:"type,omitempty"`
+	Name      string              `json:"name,omitempty"`
+	Path      string              `json:"path,omitempty"`
+	Bucket    string              `json:"bucket,omitempty"`
+	Size      int64               `json:"size,omitempty"`
+	MimeType  string              `json:"mime_type,omitempty"`
+	Source    string              `json:"source,omitempty"`
+	Metadata  map[string]string   `json:"metadata,omitempty"`
+	Content   string              `json:"content,omitempty"`
+	CreatedAt util.DateTimeSecond `json:"created_at,omitempty"`
+	UpdatedAt util.DateTimeSecond `json:"updated_at,omitempty"`
 }
 
 type SearchFileVersionDocument struct {
-	ID              string         `json:"id"`
-	EntityID        int            `json:"entity_id"`
-	EntityType      string         `json:"entity_type"`
-	EntityTypeValue int            `json:"entity_type_value"`
-	Source          string         `json:"source,omitempty"`
-	Size            int64          `json:"size,omitempty"`
-	CreatedAt       time.Time      `json:"created_at,omitempty"`
-	UpdatedAt       time.Time      `json:"updated_at,omitempty"`
-	StoragePolicyID int            `json:"storage_policy_id,omitempty"`
-	StorageType     string         `json:"storage_type,omitempty"`
-	Bucket          string         `json:"bucket,omitempty"`
-	MimeType        string         `json:"mime_type,omitempty"`
-	ReferenceCount  int            `json:"reference_count,omitempty"`
-	Encrypted       bool           `json:"encrypted,omitempty"`
-	Props           map[string]any `json:"props,omitempty"`
+	ID              string              `json:"id"`
+	EntityID        int                 `json:"entity_id"`
+	EntityType      string              `json:"entity_type"`
+	EntityTypeValue int                 `json:"entity_type_value"`
+	Source          string              `json:"source,omitempty"`
+	Size            int64               `json:"size,omitempty"`
+	CreatedAt       util.DateTimeSecond `json:"created_at,omitempty"`
+	UpdatedAt       util.DateTimeSecond `json:"updated_at,omitempty"`
+	StoragePolicyID int                 `json:"storage_policy_id,omitempty"`
+	StorageType     string              `json:"storage_type,omitempty"`
+	Bucket          string              `json:"bucket,omitempty"`
+	MimeType        string              `json:"mime_type,omitempty"`
+	ReferenceCount  int                 `json:"reference_count,omitempty"`
+	Encrypted       bool                `json:"encrypted,omitempty"`
+	Props           map[string]any      `json:"props,omitempty"`
 }
 
 type SearchFileDocument struct {
@@ -54,15 +54,22 @@ type SearchFileDocument struct {
 	FileExt         string                     `json:"file_ext,omitempty"`
 	FileType        int                        `json:"file_type"`
 	Size            int64                      `json:"size"`
-	CreatedAt       time.Time                  `json:"created_at,omitempty"`
-	UpdatedAt       time.Time                  `json:"updated_at,omitempty"`
+	CreatedAt       util.DateTimeSecond        `json:"created_at,omitempty"`
+	UpdatedAt       util.DateTimeSecond        `json:"updated_at,omitempty"`
 	IsSymbolic      bool                       `json:"is_symbolic,omitempty"`
 	Shared          bool                       `json:"shared,omitempty"`
 	TreePath        string                     `json:"tree_path,omitempty"`
+	OwnerURI        string                     `json:"owner_uri,omitempty"`
+	PublicURI       string                     `json:"public_uri,omitempty"`
+	SearchURIs      []string                   `json:"search_uris,omitempty"`
+	SearchPaths     []string                   `json:"search_paths,omitempty"`
 	StoragePolicyID int                        `json:"storage_policy_id,omitempty"`
 	StorageType     string                     `json:"storage_type,omitempty"`
 	StorageBucket   string                     `json:"storage_bucket,omitempty"`
 	Metadata        map[string]string          `json:"metadata,omitempty"`
+	MetadataKeys    []string                   `json:"metadata_keys,omitempty"`
+	Tags            []string                   `json:"tags,omitempty"`
+	CustomProps     map[string]any             `json:"custom_props,omitempty"`
 	MetadataText    string                     `json:"metadata_text,omitempty"`
 	Props           map[string]any             `json:"props,omitempty"`
 	PathText        string                     `json:"path_text,omitempty"`
@@ -70,7 +77,7 @@ type SearchFileDocument struct {
 	LatestVersion   *SearchFileVersionDocument `json:"latest_version,omitempty"`
 	Attachments     []SearchAttachmentDocument `json:"attachments,omitempty"`
 	SnapshotVersion int                        `json:"snapshot_version"`
-	SynchronizedAt  time.Time                  `json:"synchronized_at,omitempty"`
+	SynchronizedAt  util.DateTimeSecond        `json:"synchronized_at,omitempty"`
 }
 
 type SearchResult struct {
@@ -85,6 +92,7 @@ type SearchRequest struct {
 	Query            string                      `json:"query"`
 	Offset           int                         `json:"offset"`
 	OwnerID          *int                        `json:"owner_id,omitempty"`
+	SearchBaseURI    string                      `json:"search_base_uri,omitempty"`
 	VisibilityFilter *publicshare.FileFilterExpr `json:"visibility_filter,omitempty"`
 }
 

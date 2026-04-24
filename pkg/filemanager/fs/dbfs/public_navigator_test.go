@@ -225,6 +225,127 @@ func TestPublicNavigatorGrantForFileMatchesTreePathAcrossDifferentOwners(t *test
 	}
 }
 
+func TestPublicNavigatorGrantForFileDoesNotMatchSelfScopeDescendant(t *testing.T) {
+	n := &publicNavigator{
+		visibility: &publicshare.VisibilityResult{
+			RootGrants: []publicshare.RootGrant{
+				{RootFileID: 20, RootOwnerID: -1, RootTreePath: "10.20", Scope: publicshare.RootGrantScopeSelf},
+			},
+		},
+	}
+
+	target := &File{
+		Model: &ent.File{
+			ID:       88,
+			OwnerID:  12345,
+			TreePath: "10.20.88",
+			Name:     "spec.md",
+			Type:     int(types.FileTypeFile),
+		},
+	}
+
+	if _, ok := n.grantForFile(target); ok {
+		t.Fatal("expected self scope grant not to match descendant file")
+	}
+}
+
+func TestPublicNavigatorGrantForFileUsesMoreSpecificDescendantGrant(t *testing.T) {
+	n := &publicNavigator{
+		visibility: &publicshare.VisibilityResult{
+			RootGrants: []publicshare.RootGrant{
+				{
+					RootFileID:   20,
+					RootOwnerID:  -1,
+					RootTreePath: "10.20",
+					Actions: map[publicshare.Action]bool{
+						publicshare.ActionDownload: true,
+					},
+				},
+				{
+					RootFileID:   30,
+					RootOwnerID:  -1,
+					RootTreePath: "10.20.30",
+					Actions: map[publicshare.Action]bool{
+						publicshare.ActionDownload: false,
+					},
+				},
+			},
+		},
+	}
+
+	target := &File{
+		Model: &ent.File{
+			ID:       88,
+			OwnerID:  12345,
+			TreePath: "10.20.30.88",
+			Name:     "blocked.pdf",
+			Type:     int(types.FileTypeFile),
+		},
+	}
+
+	filtered, ok := n.filter(context.Background(), target)
+	if !ok || filtered == nil {
+		t.Fatal("expected target to remain visible under more specific grant")
+	}
+	if filtered.Capabilities().Enabled(int(NavigatorCapabilityDownloadFile)) {
+		t.Fatalf("expected descendant deny grant to disable download capability")
+	}
+}
+
+func TestPublicNavigatorFilterRejectsTargetExcludedByVisibilityFilter(t *testing.T) {
+	n := &publicNavigator{
+		visibility: &publicshare.VisibilityResult{
+			Filter: &publicshare.FileFilterExpr{
+				Operator: publicshare.FileFilterOpAnd,
+				Children: []*publicshare.FileFilterExpr{
+					{
+						Match: &publicshare.FileFilterMatch{
+							Kind:         publicshare.FileFilterMatchTreePathIn,
+							StringValues: []string{"10.20"},
+						},
+					},
+					{
+						Operator: publicshare.FileFilterOpNot,
+						Children: []*publicshare.FileFilterExpr{
+							{
+								Match: &publicshare.FileFilterMatch{
+									Kind:         publicshare.FileFilterMatchTreePathIn,
+									StringValues: []string{"10.20.30"},
+								},
+							},
+						},
+					},
+				},
+			},
+			RootGrants: []publicshare.RootGrant{
+				{
+					RootFileID:   20,
+					RootOwnerID:  -1,
+					RootTreePath: "10.20",
+					Actions: map[publicshare.Action]bool{
+						publicshare.ActionList:   true,
+						publicshare.ActionUpload: true,
+					},
+				},
+			},
+		},
+	}
+
+	target := &File{
+		Model: &ent.File{
+			ID:       40,
+			OwnerID:  12345,
+			TreePath: "10.20.30.40",
+			Name:     "secret.docx",
+			Type:     int(types.FileTypeFile),
+		},
+	}
+
+	if filtered, ok := n.filter(context.Background(), target); ok || filtered != nil {
+		t.Fatalf("expected target excluded by visibility filter to be rejected, got %+v", filtered)
+	}
+}
+
 func TestShouldDeferPublicCapabilityCheck(t *testing.T) {
 	t.Run("public-root", func(t *testing.T) {
 		uri, err := fs.NewUriFromString("cloudreve://public")

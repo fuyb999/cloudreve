@@ -28,7 +28,12 @@ import (
 	"github.com/samber/lo"
 )
 
-const ftsSnapshotVersion = 2
+const ftsSnapshotVersion = 3
+
+const (
+	ftsMetadataTagPrefix        = "tag:"
+	ftsMetadataCustomPropPrefix = "props:"
+)
 
 var tikaMarkupTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
 
@@ -125,6 +130,8 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 
 	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
 	pathText := buildFTSSearchPathText(ownerURI, publicURI)
+	searchURIs := buildFTSSearchURIs(ownerURI, publicURI)
+	searchPaths := buildFTSSearchPaths(ownerURI, publicURI)
 	attachments = append(attachments, embeddedAttachments...)
 
 	doc := &searcher.SearchFileDocument{
@@ -137,13 +144,20 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 		FileExt:         firstNonEmpty(fileModel.FileExt, util.Ext(fileModel.Name)),
 		FileType:        fileModel.Type,
 		Size:            fileModel.Size,
-		CreatedAt:       fileModel.CreatedAt,
-		UpdatedAt:       fileModel.UpdatedAt,
+		CreatedAt:       util.NewDateTimeSecond(fileModel.CreatedAt),
+		UpdatedAt:       util.NewDateTimeSecond(fileModel.UpdatedAt),
 		IsSymbolic:      fileModel.IsSymbolic,
 		Shared:          len(fileModel.Edges.Shares) > 0,
 		TreePath:        fileModel.TreePath,
+		OwnerURI:        uriString(ownerURI),
+		PublicURI:       uriString(publicURI),
+		SearchURIs:      searchURIs,
+		SearchPaths:     searchPaths,
 		StoragePolicyID: fileModel.StoragePolicyFiles,
 		Metadata:        metadata,
+		MetadataKeys:    metadataKeys(metadata),
+		Tags:            metadataTags(metadata),
+		CustomProps:     metadataCustomProps(metadata),
 		MetadataText:    joinMetadata(metadata),
 		Props:           mapFromFileProps(fileModel.Props),
 		PathText:        pathText,
@@ -151,7 +165,7 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 		LatestVersion:   latestVersion,
 		Attachments:     attachments,
 		SnapshotVersion: ftsSnapshotVersion,
-		SynchronizedAt:  time.Now(),
+		SynchronizedAt:  util.NewDateTimeSecond(time.Now()),
 	}
 
 	if filePolicy != nil {
@@ -229,6 +243,75 @@ func buildFTSSearchPathText(ownerURI *fs.URI, publicURI *fs.URI) string {
 	appendPath(ownerURI)
 
 	return strings.Join(paths, "\n")
+}
+
+func buildFTSSearchURIs(ownerURI *fs.URI, publicURI *fs.URI) []string {
+	uris := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	appendURI := func(uri *fs.URI) {
+		raw := uriString(uri)
+		if raw == "" {
+			return
+		}
+		if _, ok := seen[raw]; ok {
+			return
+		}
+
+		seen[raw] = struct{}{}
+		uris = append(uris, raw)
+	}
+
+	appendURI(publicURI)
+	appendURI(ownerURI)
+	return uris
+}
+
+func buildFTSSearchPaths(ownerURI *fs.URI, publicURI *fs.URI) []string {
+	paths := make([]string, 0, 8)
+	seen := map[string]struct{}{}
+	appendPath := func(uri *fs.URI) {
+		for _, raw := range uriScopePaths(uri) {
+			if _, ok := seen[raw]; ok {
+				continue
+			}
+
+			seen[raw] = struct{}{}
+			paths = append(paths, raw)
+		}
+	}
+
+	appendPath(publicURI)
+	appendPath(ownerURI)
+	return paths
+}
+
+func uriScopePaths(uri *fs.URI) []string {
+	if uri == nil || uri.U == nil {
+		return nil
+	}
+
+	base := uri.Root()
+	elements := uri.Elements()
+	paths := make([]string, 0, len(elements)+1)
+	paths = append(paths, uriString(base))
+	current := base
+	for _, elem := range elements {
+		current = current.Join(elem)
+		if raw := uriString(current); raw != "" {
+			paths = append(paths, raw)
+		}
+	}
+
+	return paths
+}
+
+func uriString(uri *fs.URI) string {
+	if uri == nil || uri.U == nil {
+		return ""
+	}
+
+	raw := uri.SetQuery("").String()
+	return strings.TrimSuffix(raw, "/")
 }
 
 func searchableURIText(uri *fs.URI) string {
@@ -832,8 +915,8 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 			Size:      object.Size,
 			MimeType:  object.MimeType,
 			Source:    object.Path,
-			CreatedAt: primaryEntity.CreatedAt(),
-			UpdatedAt: primaryEntity.UpdatedAt(),
+			CreatedAt: util.NewDateTimeSecond(primaryEntity.CreatedAt()),
+			UpdatedAt: util.NewDateTimeSecond(primaryEntity.UpdatedAt()),
 			Metadata:  cloneStringMap(object.Metadata),
 		}
 		if textArtifact, ok := textArtifacts[sidecarAttachmentTextObjectID(objectName)]; ok {
@@ -1063,8 +1146,8 @@ func buildSearchVersion(entity *ent.Entity, fileName string, policy *ent.Storage
 		EntityTypeValue: entity.Type,
 		Source:          entity.Source,
 		Size:            entity.Size,
-		CreatedAt:       entity.CreatedAt,
-		UpdatedAt:       entity.UpdatedAt,
+		CreatedAt:       util.NewDateTimeSecond(entity.CreatedAt),
+		UpdatedAt:       util.NewDateTimeSecond(entity.UpdatedAt),
 		StoragePolicyID: entity.StoragePolicyEntities,
 		ReferenceCount:  entity.ReferenceCount,
 		Encrypted:       entity.Props != nil && entity.Props.EncryptMetadata != nil,
@@ -1096,6 +1179,49 @@ func joinMetadata(metadata map[string]string) string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+func metadataKeys(metadata map[string]string) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	keys := lo.Keys(metadata)
+	sort.Strings(keys)
+	return keys
+}
+
+func metadataTags(metadata map[string]string) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	tags := make([]string, 0)
+	for key := range metadata {
+		if tag, ok := strings.CutPrefix(key, ftsMetadataTagPrefix); ok && strings.TrimSpace(tag) != "" {
+			tags = append(tags, tag)
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func metadataCustomProps(metadata map[string]string) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	props := make(map[string]any)
+	for key, value := range metadata {
+		if propID, ok := strings.CutPrefix(key, ftsMetadataCustomPropPrefix); ok && strings.TrimSpace(propID) != "" {
+			props[propID] = value
+		}
+	}
+	if len(props) == 0 {
+		return nil
+	}
+
+	return props
 }
 
 func mapFromFileProps(props *types.FileProps) map[string]any {

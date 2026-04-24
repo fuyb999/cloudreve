@@ -10,6 +10,7 @@ import (
 
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	inventorydebug "github.com/cloudreve/Cloudreve/v4/inventory/debug"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/jpillora/backoff"
 )
@@ -39,6 +40,7 @@ type (
 		metric       *metric
 		quit         chan struct{}
 		ready        chan struct{}
+		taskPushed   chan struct{}
 		scheduler    Scheduler
 		stopOnce     sync.Once
 		stopFlag     int32
@@ -77,6 +79,7 @@ func New(l logging.Logger, taskClient inventory.TaskClient, registry TaskRegistr
 		scheduler:    NewFifoScheduler(0, l),
 		quit:         make(chan struct{}),
 		ready:        make(chan struct{}, 1),
+		taskPushed:   make(chan struct{}, 1),
 		metric:       &metric{},
 		options:      o,
 		logger:       l,
@@ -195,6 +198,7 @@ func (q *queue) QueueTask(ctx context.Context, t Task) error {
 	if err := q.scheduler.Queue(t); err != nil {
 		return err
 	}
+	q.notifyTaskPushed()
 	owner := ""
 	if t.Owner() != nil {
 		owner = t.Owner().Email
@@ -214,7 +218,15 @@ func (q *queue) newContext(t Task) context.Context {
 	ctx = context.WithValue(ctx, logging.CorrelationIDCtx{}, t.CorrelationID())
 	ctx = context.WithValue(ctx, logging.LoggerCtx{}, l)
 	ctx = context.WithValue(ctx, inventory.UserCtx{}, t.Owner())
+	ctx = context.WithValue(ctx, inventorydebug.SkipDbLogging{}, true)
 	return ctx
+}
+
+func (q *queue) notifyTaskPushed() {
+	select {
+	case q.taskPushed <- struct{}{}:
+	default:
+	}
 }
 
 func (q *queue) work(t Task) {
@@ -403,6 +415,8 @@ func (q *queue) start() {
 								close(tasks)
 								return
 							}
+						case <-q.taskPushed:
+							// Wake immediately when a new task is queued instead of waiting for the next pull interval.
 						case <-time.After(q.taskPullInterval):
 							// sleep to fetch new Task
 						}

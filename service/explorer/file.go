@@ -27,6 +27,8 @@ import (
 	"github.com/samber/lo"
 )
 
+const slowListFileThreshold = 200 * time.Millisecond
+
 // SingleFileService 对单文件进行操作的五福，path为文件完整路径
 type SingleFileService struct {
 	Path string `uri:"path" json:"path" binding:"required,min=1,max=65535"`
@@ -188,6 +190,7 @@ func (service *ListFileService) List(c *gin.Context) (*ListResponse, error) {
 	pageSize := service.PageSize
 	streamed := false
 	hasher := dep.HashIDEncoder()
+	listStart := time.Now()
 	parent, res, err := m.List(c, uri, &manager.ListArgs{
 		Page:           service.Page,
 		PageSize:       pageSize,
@@ -206,11 +209,18 @@ func (service *ListFileService) List(c *gin.Context) (*ListResponse, error) {
 			}))
 		},
 	})
+	if elapsed := time.Since(listStart); elapsed >= slowListFileThreshold {
+		dep.Logger().Warning("ListFileService.List slow stage=manager_list duration=%s uri=%s page=%d page_size=%d", elapsed, service.Uri, service.Page, pageSize)
+	}
 	if err != nil {
 		return nil, err
 	}
 
+	buildStart := time.Now()
 	listResponse := BuildListResponse(c, user, parent, res, hasher)
+	if elapsed := time.Since(buildStart); elapsed >= slowListFileThreshold {
+		dep.Logger().Warning("ListFileService.List slow stage=build_list_response duration=%s uri=%s items=%d", elapsed, service.Uri, len(res.Files))
+	}
 	if streamed {
 		WriteEventSource(c, "list", listResponse)
 		return nil, ErrSSETakeOver
@@ -408,7 +418,7 @@ func (s *FileURLService) GetArchiveDownloadSession(c *gin.Context) (*FileURLResp
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
 	}
 
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionArchiveDownload)) {
+	if !inventory.UserHasGroupPermission(user, types.GroupPermissionArchiveDownload) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "", nil)
 	}
 
@@ -610,7 +620,7 @@ func (s *DeleteFileService) Delete(c *gin.Context) error {
 		return serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
 	}
 
-	if s.UnlinkOnly && !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionAdvanceDelete)) {
+	if s.UnlinkOnly && !inventory.UserHasGroupPermission(user, types.GroupPermissionAdvanceDelete) {
 		return serializer.NewError(serializer.CodeNoPermissionErr, "advance delete permission is required", nil)
 	}
 
@@ -806,7 +816,7 @@ func (s *ArchiveListFilesService) List(c *gin.Context) (*ArchiveListFilesRespons
 	user := inventory.UserFromContext(c)
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionArchiveTask)) {
+	if !inventory.UserHasGroupPermission(user, types.GroupPermissionArchiveTask) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "Group not allowed to extract archive files", nil)
 	}
 

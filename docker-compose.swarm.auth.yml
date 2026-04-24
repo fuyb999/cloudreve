@@ -117,20 +117,23 @@ services:
     <<: *service-base
     image: ${AUTHVERSE_BACKEND_IMAGE:?set AUTHVERSE_BACKEND_IMAGE}
     hostname: "{{.Node.Hostname}}-authverse-backend-{{.Task.Slot}}"
-    entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/__cacert_entrypoint.sh"]
-    command: ["sh", "-c", "exec java $$$$JAVA_OPTS -jar app.jar $$$$ARGS"]
+    entrypoint: ["/__cacert_entrypoint.sh", "/usr/local/bin/java-service-launch.sh"]
     environment:
       <<: *default-env
-      SWARM_SECRET_ENV_MAPPINGS: ARGS=authverse_backend_args
       SPRING_PROFILES_ACTIVE: local
-      JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS_EFFECTIVE:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}
-      JAVA_TOOL_OPTIONS: ${AUTHVERSE_JAVA_TOOL_OPTIONS:--Djavax.net.ssl.trustStore=/run/swarm-pki/ca/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit}
-    configs:
-      - source: swarm_secret_wrap_v1
-        target: /usr/local/bin/swarm-secret-wrap.sh
-        mode: 0555
+      JAVA_LAUNCH_MODE: jar
+      JAVA_APP_JAR: /opt/authverse-backend/app.jar
+      JAVA_APP_ARGS: ${AUTHVERSE_BACKEND_EXTRA_ARGS:-}
+      JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}
+      JAVA_TOOL_OPTIONS: "${AUTHVERSE_JAVA_TOOL_OPTIONS:-}"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: ${AUTHVERSE_BACKEND_ADDITIONAL_CONFIG:-optional:file:/run/secrets/authverse-backend-application.yml}
     secrets:
-      - authverse_backend_args
+      - source: authverse_backend_application
+        target: authverse-backend-application.yml
+    configs:
+      - source: java_service_launch_v2
+        target: /usr/local/bin/java-service-launch.sh
+        mode: 0555
     volumes:
       - *localtime-volume
       - *pki-volume
@@ -172,12 +175,12 @@ volumes:
   authverse_oidc_keys:
 
 configs:
-  swarm_secret_wrap_v1:
-    file: ./docker/swarm/swarm-secret-wrap.sh
+  java_service_launch_v2:
+    file: ./docker/swarm/java-service-launch.sh
   authverse_proxy_template_v1:
     file: ./docker/swarm/nginx/authverse-proxy.conf.template
 
 secrets:
-  authverse_backend_args:
+  authverse_backend_application:
     external: true
-    name: ${SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME:?set SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME}
+    name: ${SWARM_SECRET_AUTHVERSE_BACKEND_APPLICATION_NAME:?set SWARM_SECRET_AUTHVERSE_BACKEND_APPLICATION_NAME}

@@ -18,6 +18,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 )
@@ -30,11 +31,12 @@ type (
 		Index int     `json:"index"`
 	}
 	SlaveUploadTaskState struct {
-		MaxParallel          int                 `json:"max_parallel"`
-		Files                []SlaveUploadEntity `json:"files"`
-		Transferred          map[int]interface{} `json:"transferred"`
-		UserID               int                 `json:"user_id"`
-		First5TransferErrors string              `json:"first_5_transfer_errors,omitempty"`
+		MaxParallel          int                           `json:"max_parallel"`
+		Files                []SlaveUploadEntity           `json:"files"`
+		Transferred          map[int]interface{}           `json:"transferred"`
+		UserID               int                           `json:"user_id"`
+		First5TransferErrors string                        `json:"first_5_transfer_errors,omitempty"`
+		PublicVisibility     *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 	}
 	SlaveUploadTask struct {
 		*queue.InMemoryTask
@@ -90,6 +92,9 @@ func (t *SlaveUploadTask) Do(ctx context.Context) (task.Status, error) {
 	}
 
 	t.state = state
+	if t.state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, t.state.PublicVisibility)
+	}
 	if t.state.Transferred == nil {
 		t.state.Transferred = make(map[int]interface{})
 	}

@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 MODE="apply"
 SERVICES="all"
@@ -75,10 +76,7 @@ if [[ "$MODE" == "apply" && "${EUID:-$(id -u)}" -ne 0 ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 map_legacy_mount_var() {
   local legacy_var="$1"

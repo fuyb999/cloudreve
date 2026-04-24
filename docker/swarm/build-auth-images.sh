@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 IMAGE_KEYS="${IMAGE_KEYS:-AUTHVERSE_WEB,AUTHVERSE_BACKEND}"
 PULL_BASE="no"
@@ -65,10 +66,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 AUTHVERSE_FRONTEND_DIR="${AUTHVERSE_FRONTEND_DIR:-$ROOT_DIR/../authverse}"
 AUTHVERSE_BACKEND_DIR="${AUTHVERSE_BACKEND_DIR:-$ROOT_DIR/../authverse-backend}"

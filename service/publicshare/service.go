@@ -184,6 +184,7 @@ func buildVisibleRoots(c *gin.Context, grants []acl.RootGrant) []VisibleRootResp
 	}
 
 	dep := dependency.FromContext(c)
+	publicRootID, _ := newService(c).RootID(c)
 	res := make([]VisibleRootResponse, 0, len(grants))
 	for _, grant := range grants {
 		res = append(res, VisibleRootResponse{
@@ -192,12 +193,21 @@ func buildVisibleRoots(c *gin.Context, grants []acl.RootGrant) []VisibleRootResp
 			Owner:     encodedOwner(dep.HashIDEncoder(), grant.RootOwnerID),
 			OwnerID:   grant.RootOwnerID,
 			TreePath:  grant.RootTreePath,
-			PublicURI: acl.BuildPublicURI().Join(grant.RootName).String(),
+			PublicURI: buildVisibleRootURI(dep.HashIDEncoder(), publicRootID, grant),
 			Actions:   grant.Actions,
 		})
 	}
 
 	return res
+}
+
+func buildVisibleRootURI(hasher hashid.Encoder, publicRootID int, grant acl.RootGrant) string {
+	uri := acl.BuildPublicURI()
+	if publicRootID > 0 && grant.RootFileID != publicRootID {
+		uri = uri.Join(acl.ProjectedRootAlias(hasher, grant))
+	}
+
+	return uri.String()
 }
 
 func parsePublicURI(raw string) (*fs.URI, error) {
@@ -404,7 +414,7 @@ func resolveVisiblePublicFile(c *gin.Context, raw string) (*dbfs.File, *fs.URI, 
 
 func hasPublicManagedReadScope(c *gin.Context) bool {
 	user := inventory.UserFromContext(c)
-	if user != nil && user.Edges.Group != nil && user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+	if inventory.UserIsAdmin(user) {
 		return true
 	}
 	if inventory.OIDCGrantTypeFromContext(c) != "client_credentials" {

@@ -52,73 +52,6 @@ type elasticsearchSearchResponse struct {
 	} `json:"hits"`
 }
 
-// ElasticsearchTime serializes/deserializes time values using the
-// yyyy-MM-dd HH:mm:ss format required by the Elasticsearch index mapping.
-type elasticsearchAttachmentDocument struct {
-	ID        string              `json:"id"`
-	ParentID  string              `json:"parent_id,omitempty"`
-	Depth     int                 `json:"depth,omitempty"`
-	EntityID  int                 `json:"entity_id,omitempty"`
-	Type      string              `json:"type,omitempty"`
-	Name      string              `json:"name,omitempty"`
-	Path      string              `json:"path,omitempty"`
-	Bucket    string              `json:"bucket,omitempty"`
-	Size      int64               `json:"size,omitempty"`
-	MimeType  string              `json:"mime_type,omitempty"`
-	Source    string              `json:"source,omitempty"`
-	Metadata  map[string]string   `json:"metadata,omitempty"`
-	Content   string              `json:"content,omitempty"`
-	CreatedAt util.DateTimeSecond `json:"created_at,omitempty"`
-	UpdatedAt util.DateTimeSecond `json:"updated_at,omitempty"`
-}
-
-type elasticsearchFileVersionDocument struct {
-	ID              string              `json:"id"`
-	EntityID        int                 `json:"entity_id"`
-	EntityType      string              `json:"entity_type"`
-	EntityTypeValue int                 `json:"entity_type_value"`
-	Source          string              `json:"source,omitempty"`
-	Size            int64               `json:"size,omitempty"`
-	CreatedAt       util.DateTimeSecond `json:"created_at,omitempty"`
-	UpdatedAt       util.DateTimeSecond `json:"updated_at,omitempty"`
-	StoragePolicyID int                 `json:"storage_policy_id,omitempty"`
-	StorageType     string              `json:"storage_type,omitempty"`
-	Bucket          string              `json:"bucket,omitempty"`
-	MimeType        string              `json:"mime_type,omitempty"`
-	ReferenceCount  int                 `json:"reference_count,omitempty"`
-	Encrypted       bool                `json:"encrypted,omitempty"`
-	Props           map[string]any      `json:"props,omitempty"`
-}
-
-type elasticsearchFileDocument struct {
-	ID              string                            `json:"id"`
-	FileID          int                               `json:"file_id"`
-	OwnerID         int                               `json:"owner_id"`
-	EntityID        int                               `json:"entity_id,omitempty"`
-	ParentID        int                               `json:"parent_id,omitempty"`
-	FileName        string                            `json:"file_name"`
-	FileExt         string                            `json:"file_ext,omitempty"`
-	FileType        int                               `json:"file_type"`
-	Size            int64                             `json:"size"`
-	CreatedAt       util.DateTimeSecond               `json:"created_at,omitempty"`
-	UpdatedAt       util.DateTimeSecond               `json:"updated_at,omitempty"`
-	IsSymbolic      bool                              `json:"is_symbolic,omitempty"`
-	Shared          bool                              `json:"shared,omitempty"`
-	TreePath        string                            `json:"tree_path,omitempty"`
-	StoragePolicyID int                               `json:"storage_policy_id,omitempty"`
-	StorageType     string                            `json:"storage_type,omitempty"`
-	StorageBucket   string                            `json:"storage_bucket,omitempty"`
-	Metadata        map[string]string                 `json:"metadata,omitempty"`
-	MetadataText    string                            `json:"metadata_text,omitempty"`
-	Props           map[string]any                    `json:"props,omitempty"`
-	PathText        string                            `json:"path_text,omitempty"`
-	Content         string                            `json:"content,omitempty"`
-	LatestVersion   *elasticsearchFileVersionDocument `json:"latest_version,omitempty"`
-	Attachments     []elasticsearchAttachmentDocument `json:"attachments,omitempty"`
-	SnapshotVersion int                               `json:"snapshot_version"`
-	SynchronizedAt  util.DateTimeSecond               `json:"synchronized_at,omitempty"`
-}
-
 func NewElasticsearchIndexer(cfg *setting.FTSIndexElasticsearchSetting, l logging.Logger) (*ElasticsearchIndexer, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if cfg.SkipTLSVerify {
@@ -236,7 +169,7 @@ func (e *ElasticsearchIndexer) upsertFileOnce(ctx context.Context, doc *searcher
 		return nil
 	}
 
-	body, err := json.Marshal(newElasticsearchDocument(doc))
+	body, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("failed to marshal search document: %w", err)
 	}
@@ -329,7 +262,7 @@ func (e *ElasticsearchIndexer) bulkUpsertFilesOnce(ctx context.Context, docs []*
 			return fmt.Errorf("failed to encode bulk action: %w", err)
 		}
 
-		if err := encoder.Encode(newElasticsearchDocument(doc)); err != nil {
+		if err := encoder.Encode(doc); err != nil {
 			return fmt.Errorf("failed to encode bulk document: %w", err)
 		}
 	}
@@ -424,6 +357,13 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 		if filter := publicshare.ToElasticsearchFilter(req.VisibilityFilter); filter != nil {
 			filters = append(filters, filter)
 		}
+	}
+	if req != nil && req.SearchBaseURI != "" {
+		filters = append(filters, map[string]any{
+			"term": map[string]any{
+				"search_paths": req.SearchBaseURI,
+			},
+		})
 	}
 
 	queryString := ""
@@ -581,7 +521,7 @@ func elasticsearchDocumentSizeWithinLimit(doc *searcher.SearchFileDocument, maxB
 		return true
 	}
 
-	raw, err := json.Marshal(newElasticsearchDocument(doc))
+	raw, err := json.Marshal(doc)
 	if err != nil {
 		return false
 	}
@@ -609,7 +549,7 @@ func elasticsearchShrinkRatio(doc *searcher.SearchFileDocument, maxBytes int) fl
 		return 0.8
 	}
 
-	raw, err := json.Marshal(newElasticsearchDocument(doc))
+	raw, err := json.Marshal(doc)
 	if err != nil || len(raw) == 0 {
 		return 0.8
 	}
@@ -738,163 +678,6 @@ func bestHighlightSnippet(highlight map[string][]string, fallback ...string) str
 	return ""
 }
 
-func newElasticsearchDocument(doc *searcher.SearchFileDocument) *elasticsearchFileDocument {
-	if doc == nil {
-		return nil
-	}
-
-	res := &elasticsearchFileDocument{
-		ID:              doc.ID,
-		FileID:          doc.FileID,
-		OwnerID:         doc.OwnerID,
-		EntityID:        doc.EntityID,
-		ParentID:        doc.ParentID,
-		FileName:        doc.FileName,
-		FileExt:         doc.FileExt,
-		FileType:        doc.FileType,
-		Size:            doc.Size,
-		CreatedAt:       util.NewDateTimeSecond(doc.CreatedAt),
-		UpdatedAt:       util.NewDateTimeSecond(doc.UpdatedAt),
-		IsSymbolic:      doc.IsSymbolic,
-		Shared:          doc.Shared,
-		TreePath:        doc.TreePath,
-		StoragePolicyID: doc.StoragePolicyID,
-		StorageType:     doc.StorageType,
-		StorageBucket:   doc.StorageBucket,
-		Metadata:        doc.Metadata,
-		MetadataText:    doc.MetadataText,
-		Props:           doc.Props,
-		PathText:        doc.PathText,
-		Content:         doc.Content,
-		SnapshotVersion: doc.SnapshotVersion,
-		SynchronizedAt:  util.NewDateTimeSecond(doc.SynchronizedAt),
-	}
-
-	if doc.LatestVersion != nil {
-		res.LatestVersion = &elasticsearchFileVersionDocument{
-			ID:              doc.LatestVersion.ID,
-			EntityID:        doc.LatestVersion.EntityID,
-			EntityType:      doc.LatestVersion.EntityType,
-			EntityTypeValue: doc.LatestVersion.EntityTypeValue,
-			Source:          doc.LatestVersion.Source,
-			Size:            doc.LatestVersion.Size,
-			CreatedAt:       util.NewDateTimeSecond(doc.LatestVersion.CreatedAt),
-			UpdatedAt:       util.NewDateTimeSecond(doc.LatestVersion.UpdatedAt),
-			StoragePolicyID: doc.LatestVersion.StoragePolicyID,
-			StorageType:     doc.LatestVersion.StorageType,
-			Bucket:          doc.LatestVersion.Bucket,
-			MimeType:        doc.LatestVersion.MimeType,
-			ReferenceCount:  doc.LatestVersion.ReferenceCount,
-			Encrypted:       doc.LatestVersion.Encrypted,
-			Props:           doc.LatestVersion.Props,
-		}
-	}
-
-	if len(doc.Attachments) > 0 {
-		res.Attachments = make([]elasticsearchAttachmentDocument, 0, len(doc.Attachments))
-		for _, attachment := range doc.Attachments {
-			res.Attachments = append(res.Attachments, elasticsearchAttachmentDocument{
-				ID:        attachment.ID,
-				ParentID:  attachment.ParentID,
-				Depth:     attachment.Depth,
-				EntityID:  attachment.EntityID,
-				Type:      attachment.Type,
-				Name:      attachment.Name,
-				Path:      attachment.Path,
-				Bucket:    attachment.Bucket,
-				Size:      attachment.Size,
-				MimeType:  attachment.MimeType,
-				Source:    attachment.Source,
-				Metadata:  attachment.Metadata,
-				Content:   attachment.Content,
-				CreatedAt: util.NewDateTimeSecond(attachment.CreatedAt),
-				UpdatedAt: util.NewDateTimeSecond(attachment.UpdatedAt),
-			})
-		}
-	}
-
-	return res
-}
-
-func (d *elasticsearchFileDocument) toSearchFileDocument() *searcher.SearchFileDocument {
-	if d == nil {
-		return nil
-	}
-
-	res := &searcher.SearchFileDocument{
-		ID:              d.ID,
-		FileID:          d.FileID,
-		OwnerID:         d.OwnerID,
-		EntityID:        d.EntityID,
-		ParentID:        d.ParentID,
-		FileName:        d.FileName,
-		FileExt:         d.FileExt,
-		FileType:        d.FileType,
-		Size:            d.Size,
-		CreatedAt:       d.CreatedAt.Time(),
-		UpdatedAt:       d.UpdatedAt.Time(),
-		IsSymbolic:      d.IsSymbolic,
-		Shared:          d.Shared,
-		TreePath:        d.TreePath,
-		StoragePolicyID: d.StoragePolicyID,
-		StorageType:     d.StorageType,
-		StorageBucket:   d.StorageBucket,
-		Metadata:        d.Metadata,
-		MetadataText:    d.MetadataText,
-		Props:           d.Props,
-		PathText:        d.PathText,
-		Content:         d.Content,
-		SnapshotVersion: d.SnapshotVersion,
-		SynchronizedAt:  d.SynchronizedAt.Time(),
-	}
-
-	if d.LatestVersion != nil {
-		res.LatestVersion = &searcher.SearchFileVersionDocument{
-			ID:              d.LatestVersion.ID,
-			EntityID:        d.LatestVersion.EntityID,
-			EntityType:      d.LatestVersion.EntityType,
-			EntityTypeValue: d.LatestVersion.EntityTypeValue,
-			Source:          d.LatestVersion.Source,
-			Size:            d.LatestVersion.Size,
-			CreatedAt:       d.LatestVersion.CreatedAt.Time(),
-			UpdatedAt:       d.LatestVersion.UpdatedAt.Time(),
-			StoragePolicyID: d.LatestVersion.StoragePolicyID,
-			StorageType:     d.LatestVersion.StorageType,
-			Bucket:          d.LatestVersion.Bucket,
-			MimeType:        d.LatestVersion.MimeType,
-			ReferenceCount:  d.LatestVersion.ReferenceCount,
-			Encrypted:       d.LatestVersion.Encrypted,
-			Props:           d.LatestVersion.Props,
-		}
-	}
-
-	if len(d.Attachments) > 0 {
-		res.Attachments = make([]searcher.SearchAttachmentDocument, 0, len(d.Attachments))
-		for _, attachment := range d.Attachments {
-			res.Attachments = append(res.Attachments, searcher.SearchAttachmentDocument{
-				ID:        attachment.ID,
-				ParentID:  attachment.ParentID,
-				Depth:     attachment.Depth,
-				EntityID:  attachment.EntityID,
-				Type:      attachment.Type,
-				Name:      attachment.Name,
-				Path:      attachment.Path,
-				Bucket:    attachment.Bucket,
-				Size:      attachment.Size,
-				MimeType:  attachment.MimeType,
-				Source:    attachment.Source,
-				Metadata:  attachment.Metadata,
-				Content:   attachment.Content,
-				CreatedAt: attachment.CreatedAt.Time(),
-				UpdatedAt: attachment.UpdatedAt.Time(),
-			})
-		}
-	}
-
-	return res
-}
-
-// NewElasticsearchTime converts a standard time to ElasticsearchTime.
 func elasticsearchIndexDefinition() map[string]any {
 	return map[string]any{
 		"mappings": map[string]any{
@@ -914,10 +697,17 @@ func elasticsearchIndexDefinition() map[string]any {
 				"is_symbolic":       map[string]any{"type": "boolean"},
 				"shared":            map[string]any{"type": "boolean"},
 				"tree_path":         map[string]any{"type": "keyword"},
+				"owner_uri":         map[string]any{"type": "keyword"},
+				"public_uri":        map[string]any{"type": "keyword"},
+				"search_uris":       map[string]any{"type": "keyword"},
+				"search_paths":      map[string]any{"type": "keyword"},
 				"storage_policy_id": map[string]any{"type": "integer"},
 				"storage_type":      map[string]any{"type": "keyword"},
 				"storage_bucket":    textWithKeywordMapping(),
 				"metadata":          map[string]any{"type": "flattened"},
+				"metadata_keys":     map[string]any{"type": "keyword"},
+				"tags":              map[string]any{"type": "keyword"},
+				"custom_props":      map[string]any{"type": "flattened"},
 				"metadata_text":     map[string]any{"type": "text"},
 				"props":             map[string]any{"type": "flattened"},
 				"path_text":         map[string]any{"type": "text"},

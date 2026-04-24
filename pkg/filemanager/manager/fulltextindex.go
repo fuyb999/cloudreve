@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -147,6 +148,10 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 		}
 
 		searchReq.VisibilityFilter = filter
+	} else if base != nil && base.FileSystem() == constants.FileSystemMy {
+		if normalized := m.normalizeFullTextSearchBaseURI(base); normalized != "" {
+			searchReq.SearchBaseURI = normalized
+		}
 	}
 
 	results, total, err := indexer.Search(ctx, searchReq)
@@ -195,6 +200,23 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 		Hits:  files,
 		Total: total,
 	}, nil
+}
+
+func (m *manager) normalizeFullTextSearchBaseURI(base *fs.URI) string {
+	if base == nil || base.U == nil {
+		return ""
+	}
+
+	normalized := base.SetQuery("")
+	if normalized.FileSystem() == constants.FileSystemMy && normalized.U.User == nil && m != nil && m.user != nil {
+		userID := hashid.EncodeUserID(m.hasher, m.user.ID)
+		if userID == "" {
+			return ""
+		}
+		normalized.U.User = url.User(userID)
+	}
+
+	return normalized.String()
 }
 
 func (m *manager) resolvePublicSearchResultFile(ctx context.Context, fileID int, visibility *publicshare.VisibilityResult) (fs.File, error) {

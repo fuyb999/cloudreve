@@ -43,6 +43,7 @@ type remoteRootGrant struct {
 	OwnerID  int64           `json:"ownerId"`
 	TreePath string          `json:"treePath"`
 	Name     string          `json:"name"`
+	Scope    string          `json:"scope"`
 	Actions  map[string]bool `json:"actions"`
 }
 
@@ -247,9 +248,6 @@ func toLocalVisibilityResult(payload *remoteVisibilityResult) *VisibilityResult 
 		Filter:     toLocalFilterExpr(payload.FileFilterAST),
 		RootGrants: make([]RootGrant, 0, len(payload.RootGrants)),
 	}
-	if result.Filter == nil {
-		result.Filter = FalseFilter()
-	}
 
 	for _, grant := range payload.RootGrants {
 		result.RootGrants = append(result.RootGrants, RootGrant{
@@ -257,8 +255,12 @@ func toLocalVisibilityResult(payload *remoteVisibilityResult) *VisibilityResult 
 			RootOwnerID:  int(grant.OwnerID),
 			RootName:     grant.Name,
 			RootTreePath: grant.TreePath,
+			Scope:        grant.Scope,
 			Actions:      toLocalActions(grant.Actions),
 		})
+	}
+	if result.Filter == nil {
+		result.Filter = BuildVisibilityFilter(result.RootGrants)
 	}
 
 	return result
@@ -329,6 +331,15 @@ func constrainRemoteDecisionToVisibility(target *ent.File, action Action, visibi
 
 	if visibility == nil {
 		visibility = &VisibilityResult{}
+	}
+	if !MatchFileFilter(visibility.Filter, target) {
+		return &ActionDecision{
+			Allowed:    false,
+			Action:     action,
+			RootFileID: target.ID,
+			Actions:    denyAllActions(),
+			Reason:     "root_not_visible",
+		}
 	}
 
 	rootGrant, found := rootGrantForAncestors(target, visibility.RootGrants)

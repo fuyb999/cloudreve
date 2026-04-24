@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 CLI_STACK_NAME="${STACK_NAME:-}"
 RESOLVED_DIR="${RESOLVED_DIR:-$ROOT_DIR/.tmp}"
@@ -285,22 +286,85 @@ validate_remote_image_source_env() {
 
 prepare_auth_common_env() {
   AUTHVERSE_DB_NAME="${AUTHVERSE_DB_NAME:-authverse}"
+  AUTHVERSE_BACKEND_PORT="${AUTHVERSE_BACKEND_PORT:-48080}"
   AUTHVERSE_DB_USERNAME="${AUTHVERSE_DB_USERNAME:-${POSTGRESQL_USERNAME:-cloudreve}}"
   AUTHVERSE_DB_PASSWORD="${AUTHVERSE_DB_PASSWORD:-${POSTGRESQL_PASSWORD:-}}"
   AUTHVERSE_DB_SLAVE_USERNAME="${AUTHVERSE_DB_SLAVE_USERNAME:-$AUTHVERSE_DB_USERNAME}"
   AUTHVERSE_DB_SLAVE_PASSWORD="${AUTHVERSE_DB_SLAVE_PASSWORD:-$AUTHVERSE_DB_PASSWORD}"
   AUTHVERSE_REDIS_PASSWORD="${AUTHVERSE_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
+  AUTHVERSE_REDIS_DATABASE="${AUTHVERSE_REDIS_DATABASE:-0}"
+  AUTHVERSE_REDIS_SSL_ENABLED="${AUTHVERSE_REDIS_SSL_ENABLED:-false}"
   AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL="${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:-${CLOUDREVE_SITE_URL:-}}"
-  AUTHVERSE_JAVA_OPTS_BASE="${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}"
+  AUTHVERSE_MAX_FILE_SIZE="${AUTHVERSE_MAX_FILE_SIZE:-64MB}"
+  AUTHVERSE_MAX_REQUEST_SIZE="${AUTHVERSE_MAX_REQUEST_SIZE:-128MB}"
+  AUTHVERSE_TENANT_ENABLED="${AUTHVERSE_TENANT_ENABLED:-false}"
+  AUTHVERSE_ELASTICSEARCH_ENABLED="${AUTHVERSE_ELASTICSEARCH_ENABLED:-true}"
+  AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT="${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s}"
+  AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT="${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s}"
+  AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT="${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s}"
+  AUTHVERSE_OIDC_ENABLED="${AUTHVERSE_OIDC_ENABLED:-true}"
+  AUTHVERSE_OIDC_RSA_AUTO_GENERATE="${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false}"
+  AUTHVERSE_OIDC_PRIVATE_KEY_PATH="${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem}"
+  AUTHVERSE_OIDC_PUBLIC_KEY_PATH="${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem}"
+  AUTHVERSE_OIDC_KEY_ID="${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod}"
+  AUTHVERSE_TOKEN_CALLBACK_ENABLED="${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true}"
+  AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS="${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000}"
+  AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES="${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3}"
+  AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS="${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000}"
+  AUTHVERSE_WEBSOCKET_SENDER_TYPE="${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
 
+  export AUTHVERSE_BACKEND_PORT
   export AUTHVERSE_DB_NAME
   export AUTHVERSE_DB_USERNAME
   export AUTHVERSE_DB_PASSWORD
   export AUTHVERSE_DB_SLAVE_USERNAME
   export AUTHVERSE_DB_SLAVE_PASSWORD
   export AUTHVERSE_REDIS_PASSWORD
+  export AUTHVERSE_REDIS_DATABASE
+  export AUTHVERSE_REDIS_SSL_ENABLED
   export AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL
-  export AUTHVERSE_JAVA_OPTS_BASE
+  export AUTHVERSE_MAX_FILE_SIZE
+  export AUTHVERSE_MAX_REQUEST_SIZE
+  export AUTHVERSE_TENANT_ENABLED
+  export AUTHVERSE_ELASTICSEARCH_ENABLED
+  export AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT
+  export AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT
+  export AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT
+  export AUTHVERSE_OIDC_ENABLED
+  export AUTHVERSE_OIDC_RSA_AUTO_GENERATE
+  export AUTHVERSE_OIDC_PRIVATE_KEY_PATH
+  export AUTHVERSE_OIDC_PUBLIC_KEY_PATH
+  export AUTHVERSE_OIDC_KEY_ID
+  export AUTHVERSE_TOKEN_CALLBACK_ENABLED
+  export AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS
+  export AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES
+  export AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS
+  export AUTHVERSE_WEBSOCKET_SENDER_TYPE
+}
+
+prepare_java_truststore_env() {
+  local truststore_path="${SWARM_TRUSTSTORE_PATH:-${SWARM_PKI_MOUNT_TARGET:-/run/swarm-pki}/ca/truststore.p12}"
+  local truststore_type="${SWARM_TRUSTSTORE_TYPE:-PKCS12}"
+  local truststore_password="${SWARM_TRUSTSTORE_PASSWORD:-changeit}"
+
+  AUTHVERSE_JAVA_TOOL_OPTIONS="${AUTHVERSE_JAVA_TOOL_OPTIONS:-}"
+  if [[ -z "$AUTHVERSE_JAVA_TOOL_OPTIONS" ]]; then
+    AUTHVERSE_JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=${truststore_path} -Djavax.net.ssl.trustStoreType=${truststore_type} -Djavax.net.ssl.trustStorePassword=${truststore_password}"
+  fi
+
+  KAFKA_UI_TRUSTSTORE_LOCATION="${KAFKA_UI_TRUSTSTORE_LOCATION:-$truststore_path}"
+  KAFKA_UI_TRUSTSTORE_TYPE="${KAFKA_UI_TRUSTSTORE_TYPE:-$truststore_type}"
+  KAFKA_UI_TRUSTSTORE_PASSWORD="${KAFKA_UI_TRUSTSTORE_PASSWORD:-$truststore_password}"
+  KAFKA_UI_JAVA_TOOL_OPTIONS="${KAFKA_UI_JAVA_TOOL_OPTIONS:-}"
+  if [[ -z "$KAFKA_UI_JAVA_TOOL_OPTIONS" ]]; then
+    KAFKA_UI_JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=${KAFKA_UI_TRUSTSTORE_LOCATION} -Djavax.net.ssl.trustStoreType=${KAFKA_UI_TRUSTSTORE_TYPE} -Djavax.net.ssl.trustStorePassword=${KAFKA_UI_TRUSTSTORE_PASSWORD}"
+  fi
+
+  export AUTHVERSE_JAVA_TOOL_OPTIONS
+  export KAFKA_UI_TRUSTSTORE_LOCATION
+  export KAFKA_UI_TRUSTSTORE_TYPE
+  export KAFKA_UI_TRUSTSTORE_PASSWORD
+  export KAFKA_UI_JAVA_TOOL_OPTIONS
 }
 
 prepare_secret_value_env() {
@@ -410,95 +474,54 @@ build_onlyoffice_amqp_uri() {
   printf 'amqp://%s:%s@%s:%s/%s' "$user" "$password" "$host" "$port" "$vhost"
 }
 
-build_authverse_backend_args() {
-  local db_master_url
-  local db_slave_url
-  local redis_host
-  local redis_port
-  local elasticsearch_uri
+render_env_template_to_stdout() {
+  local template_file="$1"
 
-  if [[ "$COMPOSE_KIND" == "single" ]]; then
-    db_master_url="${AUTHVERSE_SINGLE_DB_MASTER_URL:?set AUTHVERSE_SINGLE_DB_MASTER_URL}"
-    db_slave_url="${AUTHVERSE_SINGLE_DB_SLAVE_URL:?set AUTHVERSE_SINGLE_DB_SLAVE_URL}"
-    redis_host="${AUTHVERSE_SINGLE_REDIS_HOST:?set AUTHVERSE_SINGLE_REDIS_HOST}"
-    redis_port="${AUTHVERSE_SINGLE_REDIS_PORT:-6379}"
-    elasticsearch_uri="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:?set AUTHVERSE_SINGLE_ELASTICSEARCH_URI}"
-  else
-    db_master_url="${AUTHVERSE_DB_MASTER_URL:?set AUTHVERSE_DB_MASTER_URL}"
-    db_slave_url="${AUTHVERSE_DB_SLAVE_URL:?set AUTHVERSE_DB_SLAVE_URL}"
-    redis_host="${AUTHVERSE_REDIS_HOST:?set AUTHVERSE_REDIS_HOST}"
-    redis_port="${AUTHVERSE_REDIS_PORT:-6379}"
-    elasticsearch_uri="${AUTHVERSE_ELASTICSEARCH_URI:?set AUTHVERSE_ELASTICSEARCH_URI}"
+  if [[ ! -f "$template_file" ]]; then
+    echo "找不到模板文件: $template_file" >&2
+    exit 1
   fi
 
-  printf '%s' "\
---server.port=48080 \
---server.forward-headers-strategy=framework \
---spring.datasource.dynamic.datasource.master.url=${db_master_url} \
---spring.datasource.dynamic.datasource.master.username=${AUTHVERSE_DB_USERNAME:?set AUTHVERSE_DB_USERNAME} \
---spring.datasource.dynamic.datasource.master.password=${AUTHVERSE_DB_PASSWORD:?set AUTHVERSE_DB_PASSWORD} \
---spring.datasource.dynamic.datasource.slave.url=${db_slave_url} \
---spring.datasource.dynamic.datasource.slave.username=${AUTHVERSE_DB_SLAVE_USERNAME:?set AUTHVERSE_DB_SLAVE_USERNAME} \
---spring.datasource.dynamic.datasource.slave.password=${AUTHVERSE_DB_SLAVE_PASSWORD:?set AUTHVERSE_DB_SLAVE_PASSWORD} \
---spring.data.redis.host=${redis_host} \
---spring.data.redis.port=${redis_port} \
---spring.data.redis.password=${AUTHVERSE_REDIS_PASSWORD:?set AUTHVERSE_REDIS_PASSWORD} \
---spring.data.redis.database=${AUTHVERSE_REDIS_DATABASE:-0} \
---spring.data.redis.ssl.enabled=${AUTHVERSE_REDIS_SSL_ENABLED:-true} \
---spring.servlet.multipart.max-file-size=${AUTHVERSE_MAX_FILE_SIZE:-64MB} \
---spring.servlet.multipart.max-request-size=${AUTHVERSE_MAX_REQUEST_SIZE:-128MB} \
-"
+  if command -v envsubst >/dev/null 2>&1; then
+    envsubst <"$template_file"
+    return 0
+  fi
+
+  LC_ALL=C LANG=C perl - "$template_file" <<'PERL'
+use strict;
+use warnings;
+
+my $template_file = shift @ARGV;
+open my $fh, '<', $template_file or die "cannot open template $template_file: $!";
+local $/;
+my $content = <$fh>;
+close $fh;
+
+$content =~ s/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/
+  exists $ENV{$1} ? $ENV{$1} : die "missing env variable: $1\n"
+/ge;
+
+print $content;
+PERL
 }
 
-build_authverse_backend_java_opts() {
-  local elasticsearch_uri
+register_stack_secret_from_template() {
+  local export_var="$1"
+  local secret_key="$2"
+  local template_file="$3"
+  local required="${4:-1}"
+  local rendered_value
 
-  if [[ "$COMPOSE_KIND" == "single" ]]; then
-    elasticsearch_uri="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:?set AUTHVERSE_SINGLE_ELASTICSEARCH_URI}"
-  else
-    elasticsearch_uri="${AUTHVERSE_ELASTICSEARCH_URI:?set AUTHVERSE_ELASTICSEARCH_URI}"
+  if [[ ! -f "$template_file" ]]; then
+    if [[ "$required" == "1" ]]; then
+      echo "缺少模板文件，无法生成 secret：$template_file" >&2
+      exit 1
+    fi
+    return 0
   fi
 
-  printf '%s' "\
-${AUTHVERSE_JAVA_OPTS_BASE} \
--Dauthverse.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
--Dyudao.tenant.enable=${AUTHVERSE_TENANT_ENABLED:-false} \
--Dauthverse.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
--Dyudao.web.admin-ui.url=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
--Dauthverse.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
--Dyudao.cloudreve.base-uri=${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL:?set AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL} \
--Dauthverse.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
--Dyudao.search.elasticsearch.enabled=${AUTHVERSE_ELASTICSEARCH_ENABLED:-true} \
--Dauthverse.search.elasticsearch.uris[0]=${elasticsearch_uri} \
--Dyudao.search.elasticsearch.uris[0]=${elasticsearch_uri} \
--Dauthverse.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
--Dyudao.search.elasticsearch.connection-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT:-3s} \
--Dauthverse.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
--Dyudao.search.elasticsearch.socket-timeout=${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT:-10s} \
--Dauthverse.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
--Dyudao.search.elasticsearch.connection-request-timeout=${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:-3s} \
--Dauthverse.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
--Dyudao.oidc.enabled=${AUTHVERSE_OIDC_ENABLED:-true} \
--Dauthverse.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
--Dyudao.oidc.issuer=${AUTHVERSE_PUBLIC_BASE_URL:?set AUTHVERSE_PUBLIC_BASE_URL} \
--Dauthverse.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
--Dyudao.oidc.rsa.auto-generate=${AUTHVERSE_OIDC_RSA_AUTO_GENERATE:-false} \
--Dauthverse.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
--Dyudao.oidc.rsa.private-key-path=${AUTHVERSE_OIDC_PRIVATE_KEY_PATH:-classpath:oidc/private.pem} \
--Dauthverse.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
--Dyudao.oidc.rsa.public-key-path=${AUTHVERSE_OIDC_PUBLIC_KEY_PATH:-classpath:oidc/public.pem} \
--Dauthverse.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
--Dyudao.oidc.rsa.key-id=${AUTHVERSE_OIDC_KEY_ID:-oidc-rsa-key-prod} \
--Dauthverse.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
--Dyudao.oidc.callback.enabled=${AUTHVERSE_TOKEN_CALLBACK_ENABLED:-true} \
--Dauthverse.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
--Dyudao.oidc.callback.timeout=${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS:-5000} \
--Dauthverse.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
--Dyudao.oidc.callback.retry-times=${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES:-3} \
--Dauthverse.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
--Dyudao.oidc.callback.retry-interval=${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS:-1000} \
--Dauthverse.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis} \
--Dyudao.websocket.sender-type=${AUTHVERSE_WEBSOCKET_SENDER_TYPE:-redis}"
+  rendered_value="$(render_env_template_to_stdout "$template_file")"
+  register_stack_secret "$export_var" "$secret_key" "$rendered_value" "$required"
 }
 
 build_stack_secret_name() {
@@ -578,7 +601,11 @@ prepare_stack_secrets() {
       register_stack_secret "SWARM_SECRET_MINIO_ROOT_PASSWORD_NAME" "minio_root_password" "${MINIO_ROOT_PASSWORD:-}" 1
       ;;
     auth)
-      register_stack_secret "SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME" "authverse_backend_args" "$(build_authverse_backend_args)" 1
+      register_stack_secret_from_template \
+        "SWARM_SECRET_AUTHVERSE_BACKEND_APPLICATION_NAME" \
+        "authverse_backend_application" \
+        "$ROOT_DIR/docker/swarm/templates/authverse-backend/application-swarm.yml.template" \
+        1
       ;;
     single)
       register_stack_secret "SWARM_SECRET_CLOUDREVE_SESSION_SECRET_NAME" "cloudreve_session_secret" "${CLOUDREVE_SESSION_SECRET:-}" 1
@@ -594,7 +621,11 @@ prepare_stack_secrets() {
       register_stack_secret "SWARM_SECRET_ONLYOFFICE_RABBITMQ_PASSWORD_NAME" "onlyoffice_rabbitmq_password" "${ONLYOFFICE_RABBITMQ_PASSWORD:-}" 1
       register_stack_secret "SWARM_SECRET_ONLYOFFICE_JWT_SECRET_NAME" "onlyoffice_jwt_secret" "${ONLYOFFICE_JWT_SECRET:-}" 1
       register_stack_secret "SWARM_SECRET_ONLYOFFICE_AMQP_URI_NAME" "onlyoffice_amqp_uri" "$(build_onlyoffice_amqp_uri)" 1
-      register_stack_secret "SWARM_SECRET_AUTHVERSE_BACKEND_ARGS_NAME" "authverse_backend_args" "$(build_authverse_backend_args)" 1
+      register_stack_secret_from_template \
+        "SWARM_SECRET_AUTHVERSE_BACKEND_APPLICATION_NAME" \
+        "authverse_backend_application" \
+        "$ROOT_DIR/docker/swarm/templates/authverse-backend/application-swarm.yml.template" \
+        1
       ;;
     *)
       ;;
@@ -666,7 +697,7 @@ prepare_single_auth_env() {
   AUTHVERSE_SINGLE_POSTGRES_PORT="${AUTHVERSE_SINGLE_POSTGRES_PORT:-5432}"
   AUTHVERSE_SINGLE_REDIS_HOST="${AUTHVERSE_SINGLE_REDIS_HOST:-redis-1}"
   AUTHVERSE_SINGLE_REDIS_PORT="${AUTHVERSE_SINGLE_REDIS_PORT:-6379}"
-  AUTHVERSE_SINGLE_ELASTICSEARCH_URI="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:-https://elasticsearch:9200}"
+  AUTHVERSE_SINGLE_ELASTICSEARCH_URI="${AUTHVERSE_SINGLE_ELASTICSEARCH_URI:-http://elasticsearch:9200}"
   AUTHVERSE_SINGLE_DB_MASTER_URL="${AUTHVERSE_SINGLE_DB_MASTER_URL:-jdbc:postgresql://${AUTHVERSE_SINGLE_POSTGRES_HOST}:${AUTHVERSE_SINGLE_POSTGRES_PORT}/${AUTHVERSE_DB_NAME}?sslmode=disable}"
   AUTHVERSE_SINGLE_DB_SLAVE_URL="${AUTHVERSE_SINGLE_DB_SLAVE_URL:-$AUTHVERSE_SINGLE_DB_MASTER_URL}"
 
@@ -679,8 +710,6 @@ prepare_single_auth_env() {
   export AUTHVERSE_SINGLE_DB_MASTER_URL
   export AUTHVERSE_SINGLE_DB_SLAVE_URL
 
-  AUTHVERSE_JAVA_OPTS_EFFECTIVE="$(build_authverse_backend_java_opts)"
-  export AUTHVERSE_JAVA_OPTS_EFFECTIVE
 }
 
 is_truthy() {
@@ -918,9 +947,7 @@ prepare_external_auth_env() {
   export AUTHVERSE_DB_SLAVE_URL
 
   AUTHVERSE_REDIS_SSL_ENABLED="${AUTHVERSE_REDIS_SSL_ENABLED:-false}"
-  AUTHVERSE_JAVA_OPTS_EFFECTIVE="$(build_authverse_backend_java_opts)"
   export AUTHVERSE_REDIS_SSL_ENABLED
-  export AUTHVERSE_JAVA_OPTS_EFFECTIVE
 
   if [[ "$RENDER_ONLY" -eq 0 ]]; then
     ensure_shared_overlay_network "$AUTHVERSE_SHARED_NETWORK"
@@ -1007,15 +1034,13 @@ fi
 
 mkdir -p "$RESOLVED_DIR"
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 prepare_common_mount_env
 prepare_image_source_env
 validate_remote_image_source_env
 prepare_auth_common_env
+prepare_java_truststore_env
 prepare_secret_value_env
 prepare_cloudreve_secret_mappings
 

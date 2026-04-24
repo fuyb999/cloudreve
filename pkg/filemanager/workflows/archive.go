@@ -24,6 +24,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager/entitysource"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gofrs/uuid"
@@ -42,15 +43,16 @@ type (
 	CreateArchiveTaskPhase string
 
 	CreateArchiveTaskState struct {
-		Uris               []string                     `json:"uris,omitempty"`
-		Dst                string                       `json:"dst,omitempty"`
-		TempPath           string                       `json:"temp_path,omitempty"`
-		ArchiveFile        string                       `json:"archive_file,omitempty"`
-		Phase              CreateArchiveTaskPhase       `json:"phase,omitempty"`
-		SlaveUploadTaskID  int                          `json:"slave__upload_task_id,omitempty"`
-		SlaveArchiveTaskID int                          `json:"slave__archive_task_id,omitempty"`
-		SlaveCompressState *SlaveCreateArchiveTaskState `json:"slave_compress_state,omitempty"`
-		Failed             int                          `json:"failed,omitempty"`
+		Uris               []string                      `json:"uris,omitempty"`
+		Dst                string                        `json:"dst,omitempty"`
+		TempPath           string                        `json:"temp_path,omitempty"`
+		ArchiveFile        string                        `json:"archive_file,omitempty"`
+		Phase              CreateArchiveTaskPhase        `json:"phase,omitempty"`
+		SlaveUploadTaskID  int                           `json:"slave__upload_task_id,omitempty"`
+		SlaveArchiveTaskID int                           `json:"slave__archive_task_id,omitempty"`
+		SlaveCompressState *SlaveCreateArchiveTaskState  `json:"slave_compress_state,omitempty"`
+		Failed             int                           `json:"failed,omitempty"`
+		PublicVisibility   *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 		NodeState          `json:",inline"`
 	}
 )
@@ -75,11 +77,12 @@ func init() {
 }
 
 // NewCreateArchiveTask creates a new CreateArchiveTask
-func NewCreateArchiveTask(ctx context.Context, src []string, dst string) (queue.Task, error) {
+func NewCreateArchiveTask(ctx context.Context, src []string, dst string, visibility *publicshare.VisibilityResult) (queue.Task, error) {
 	state := &CreateArchiveTaskState{
-		Uris:      src,
-		Dst:       dst,
-		NodeState: NodeState{},
+		Uris:             src,
+		Dst:              dst,
+		PublicVisibility: visibility,
+		NodeState:        NodeState{},
 	}
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -124,6 +127,9 @@ func (m *CreateArchiveTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 	m.state = state
+	if m.state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, m.state.PublicVisibility)
+	}
 
 	// select node
 	node, err := allocateNode(ctx, dep, &m.state.NodeState, types.NodeCapabilityCreateArchive)
@@ -316,8 +322,9 @@ func (m *CreateArchiveTask) createAndAwaitSlaveUploading(ctx context.Context, de
 					Src:  m.state.SlaveCompressState.ZipFilePath,
 				},
 			},
-			MaxParallel: dep.SettingProvider().MaxParallelTransfer(ctx),
-			UserID:      u.ID,
+			MaxParallel:      dep.SettingProvider().MaxParallelTransfer(ctx),
+			UserID:           u.ID,
+			PublicVisibility: m.state.PublicVisibility,
 		}
 
 		payloadStr, err := json.Marshal(payload)

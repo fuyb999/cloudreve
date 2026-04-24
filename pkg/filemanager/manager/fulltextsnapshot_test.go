@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -41,6 +42,47 @@ func TestBuildFTSSearchPathTextKeepsOwnerPathForNonPublicFile(t *testing.T) {
 	pathText := buildFTSSearchPathText(ownerURI, nil)
 	if got, want := pathText, "cloudreve://owner@my/docs/readme.txt"; got != want {
 		t.Fatalf("unexpected path text: got %q want %q", got, want)
+	}
+}
+
+func TestBuildFTSSearchPathsIncludesAncestorScopes(t *testing.T) {
+	ownerBase, err := fs.NewUriFromString(fs.NewMyUri("owner"))
+	if err != nil {
+		t.Fatalf("failed to create owner uri: %v", err)
+	}
+	ownerURI := ownerBase.Join("docs", "reports", "readme.txt")
+	publicURI := publicshare.BuildPublicURI().Join("reports", "readme.txt")
+
+	got := buildFTSSearchPaths(ownerURI, publicURI)
+	want := []string{
+		"cloudreve://public",
+		"cloudreve://public/reports",
+		"cloudreve://public/reports/readme.txt",
+		"cloudreve://owner@my",
+		"cloudreve://owner@my/docs",
+		"cloudreve://owner@my/docs/reports",
+		"cloudreve://owner@my/docs/reports/readme.txt",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected search paths: got %#v want %#v", got, want)
+	}
+}
+
+func TestMetadataSearchFieldsExtractTagsAndCustomProps(t *testing.T) {
+	metadata := map[string]string{
+		"tag:important": "1",
+		"props:review":  "approved",
+		"music:title":   "Song",
+	}
+
+	if got, want := metadataKeys(metadata), []string{"music:title", "props:review", "tag:important"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected metadata keys: got %#v want %#v", got, want)
+	}
+	if got, want := metadataTags(metadata), []string{"important"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected tags: got %#v want %#v", got, want)
+	}
+	if got := metadataCustomProps(metadata); !reflect.DeepEqual(got, map[string]any{"review": "approved"}) {
+		t.Fatalf("unexpected custom props: got %#v", got)
 	}
 }
 

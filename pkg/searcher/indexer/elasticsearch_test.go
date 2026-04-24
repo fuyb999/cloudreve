@@ -147,25 +147,25 @@ func TestElasticsearchDocumentJSONUsesCustomTimeFormat(t *testing.T) {
 		FileName:  "report.pdf",
 		FileType:  0,
 		Size:      128,
-		CreatedAt: baseTime,
-		UpdatedAt: baseTime.Add(2 * time.Minute),
+		CreatedAt: util.NewDateTimeSecond(baseTime),
+		UpdatedAt: util.NewDateTimeSecond(baseTime.Add(2 * time.Minute)),
 		LatestVersion: &searcher.SearchFileVersionDocument{
 			ID:        "entity-1",
 			EntityID:  99,
-			CreatedAt: baseTime.Add(4 * time.Minute),
-			UpdatedAt: baseTime.Add(5 * time.Minute),
+			CreatedAt: util.NewDateTimeSecond(baseTime.Add(4 * time.Minute)),
+			UpdatedAt: util.NewDateTimeSecond(baseTime.Add(5 * time.Minute)),
 		},
 		Attachments: []searcher.SearchAttachmentDocument{
 			{
 				ID:        "att-1",
-				CreatedAt: baseTime.Add(6 * time.Minute),
-				UpdatedAt: baseTime.Add(7 * time.Minute),
+				CreatedAt: util.NewDateTimeSecond(baseTime.Add(6 * time.Minute)),
+				UpdatedAt: util.NewDateTimeSecond(baseTime.Add(7 * time.Minute)),
 			},
 		},
-		SynchronizedAt: baseTime.Add(8 * time.Minute),
+		SynchronizedAt: util.NewDateTimeSecond(baseTime.Add(8 * time.Minute)),
 	}
 
-	raw, err := json.Marshal(newElasticsearchDocument(doc))
+	raw, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatalf("failed to marshal elasticsearch document: %v", err)
 	}
@@ -219,14 +219,9 @@ func TestElasticsearchDocumentRoundTripsCustomTimeFormat(t *testing.T) {
 		]
 	}`)
 
-	var doc elasticsearchFileDocument
+	var doc searcher.SearchFileDocument
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("failed to unmarshal elasticsearch document: %v", err)
-	}
-
-	roundTripped := doc.toSearchFileDocument()
-	if roundTripped == nil {
-		t.Fatal("expected round-tripped document")
 	}
 
 	checkTime := func(label string, got, want time.Time) {
@@ -235,13 +230,13 @@ func TestElasticsearchDocumentRoundTripsCustomTimeFormat(t *testing.T) {
 		}
 	}
 
-	checkTime("created_at", roundTripped.CreatedAt, time.Date(2026, 4, 1, 20, 15, 16, 0, time.Local))
-	checkTime("updated_at", roundTripped.UpdatedAt, time.Date(2026, 4, 1, 20, 17, 16, 0, time.Local))
-	checkTime("synchronized_at", roundTripped.SynchronizedAt, time.Date(2026, 4, 1, 20, 23, 16, 0, time.Local))
-	checkTime("latest_version.created_at", roundTripped.LatestVersion.CreatedAt, time.Date(2026, 4, 1, 20, 19, 16, 0, time.Local))
-	checkTime("latest_version.updated_at", roundTripped.LatestVersion.UpdatedAt, time.Date(2026, 4, 1, 20, 20, 16, 0, time.Local))
-	checkTime("attachment.created_at", roundTripped.Attachments[0].CreatedAt, time.Date(2026, 4, 1, 20, 21, 16, 0, time.Local))
-	checkTime("attachment.updated_at", roundTripped.Attachments[0].UpdatedAt, time.Date(2026, 4, 1, 20, 22, 16, 0, time.Local))
+	checkTime("created_at", doc.CreatedAt.Time(), time.Date(2026, 4, 1, 20, 15, 16, 0, time.Local))
+	checkTime("updated_at", doc.UpdatedAt.Time(), time.Date(2026, 4, 1, 20, 17, 16, 0, time.Local))
+	checkTime("synchronized_at", doc.SynchronizedAt.Time(), time.Date(2026, 4, 1, 20, 23, 16, 0, time.Local))
+	checkTime("latest_version.created_at", doc.LatestVersion.CreatedAt.Time(), time.Date(2026, 4, 1, 20, 19, 16, 0, time.Local))
+	checkTime("latest_version.updated_at", doc.LatestVersion.UpdatedAt.Time(), time.Date(2026, 4, 1, 20, 20, 16, 0, time.Local))
+	checkTime("attachment.created_at", doc.Attachments[0].CreatedAt.Time(), time.Date(2026, 4, 1, 20, 21, 16, 0, time.Local))
+	checkTime("attachment.updated_at", doc.Attachments[0].UpdatedAt.Time(), time.Date(2026, 4, 1, 20, 22, 16, 0, time.Local))
 }
 
 func TestElasticsearchIndexDefinitionUsesCustomDateFormat(t *testing.T) {
@@ -259,6 +254,76 @@ func TestElasticsearchIndexDefinitionUsesCustomDateFormat(t *testing.T) {
 	} {
 		if got := mapping["format"]; got != util.DateTimeSecondFormat {
 			t.Fatalf("unexpected %s format: got %v want %s", field, got, util.DateTimeSecondFormat)
+		}
+	}
+}
+
+func TestElasticsearchIndexDefinitionCoversAdvancedSearchFields(t *testing.T) {
+	definition := elasticsearchIndexDefinition()
+	mappings := definition["mappings"].(map[string]any)
+	properties := mappings["properties"].(map[string]any)
+
+	for _, field := range []string{
+		"file_name",
+		"file_ext",
+		"file_type",
+		"size",
+		"created_at",
+		"updated_at",
+		"metadata",
+		"metadata_keys",
+		"tags",
+		"custom_props",
+		"owner_uri",
+		"public_uri",
+		"search_uris",
+		"search_paths",
+		"tree_path",
+	} {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("expected mapping to include %s", field)
+		}
+	}
+}
+
+func TestElasticsearchSearchFiltersBySearchBaseURI(t *testing.T) {
+	transport := &testElasticsearchTransport{
+		statuses: []int{http.StatusOK},
+		bodies:   []string{`{"hits":{"total":{"value":0},"hits":[]}}`},
+	}
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{"http://example.com"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("failed to create elasticsearch client: %v", err)
+	}
+
+	indexer := &ElasticsearchIndexer{
+		client:   client,
+		index:    elasticsearchDefaultIndexName,
+		pageSize: 10,
+	}
+	ownerID := 7
+	_, _, err = indexer.Search(context.Background(), &searcher.SearchRequest{
+		Query:         "report",
+		OwnerID:       &ownerID,
+		SearchBaseURI: "cloudreve://u7@my/docs",
+	})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(transport.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(transport.requests))
+	}
+
+	payload := string(transport.requests[0])
+	for _, want := range []string{
+		`"owner_id":7`,
+		`"search_paths":"cloudreve://u7@my/docs"`,
+	} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("expected search payload to contain %q, got %s", want, payload)
 		}
 	}
 }

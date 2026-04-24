@@ -149,3 +149,54 @@ func TestDecisionFromVisibilityRejectsMissingUploadGrant(t *testing.T) {
 		t.Fatalf("expected upload to be denied when grant does not allow it, got %+v", decision)
 	}
 }
+
+func TestDecisionFromVisibilityRejectsTargetExcludedByVisibilityFilter(t *testing.T) {
+	target := &ent.File{
+		ID:       40,
+		OwnerID:  7,
+		TreePath: "10.20.30.40",
+	}
+
+	decision := decisionFromVisibility(target, ActionList, &VisibilityResult{
+		Filter: &FileFilterExpr{
+			Operator: FileFilterOpAnd,
+			Children: []*FileFilterExpr{
+				{
+					Match: &FileFilterMatch{
+						Kind:         FileFilterMatchTreePathIn,
+						StringValues: []string{"10.20"},
+					},
+				},
+				{
+					Operator: FileFilterOpNot,
+					Children: []*FileFilterExpr{
+						{
+							Match: &FileFilterMatch{
+								Kind:         FileFilterMatchTreePathIn,
+								StringValues: []string{"10.20.30"},
+							},
+						},
+					},
+				},
+			},
+		},
+		RootGrants: []RootGrant{
+			{
+				RootFileID:   20,
+				RootOwnerID:  7,
+				RootTreePath: "10.20",
+				Actions: map[Action]bool{
+					ActionList:   true,
+					ActionUpload: true,
+				},
+			},
+		},
+	})
+
+	if decision == nil || decision.Allowed {
+		t.Fatalf("expected excluded target to be denied, got %+v", decision)
+	}
+	if decision.Reason != "root_not_visible" {
+		t.Fatalf("unexpected deny reason: %s", decision.Reason)
+	}
+}

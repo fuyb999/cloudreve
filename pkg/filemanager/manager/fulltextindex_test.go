@@ -929,6 +929,40 @@ func TestSearchFullTextReturnsPublicVisibleURI(t *testing.T) {
 	}
 }
 
+func TestSearchFullTextFiltersPersonalBaseURI(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+	user := &ent.User{ID: 7}
+	indexer := &testSearchIndexer{}
+	m := &manager{
+		l:      logging.NewConsoleLogger(logging.LevelError),
+		user:   user,
+		dep:    testDep{searchIndexer: indexer, registry: queue.NewTaskRegistry()},
+		hasher: hasher,
+	}
+
+	base := mustURI(t, "cloudreve://my/docs?name=report")
+	results, err := m.SearchFullText(context.Background(), "report", 0, base)
+	if err != nil {
+		t.Fatalf("failed to search full text: %v", err)
+	}
+	if results == nil {
+		t.Fatal("expected empty result object")
+	}
+	if indexer.lastSearchReq == nil {
+		t.Fatal("expected search request to be recorded")
+	}
+	want := fs.NewMyUri(hashid.EncodeUserID(hasher, user.ID)) + "/docs"
+	if got := indexer.lastSearchReq.SearchBaseURI; got != want {
+		t.Fatalf("unexpected search base uri: got %q want %q", got, want)
+	}
+	if indexer.lastSearchReq.OwnerID == nil || *indexer.lastSearchReq.OwnerID != user.ID {
+		t.Fatalf("expected personal search owner filter, got %+v", indexer.lastSearchReq.OwnerID)
+	}
+}
+
 func TestQueueFullTextReconcileMergesIntoRelatedPendingTaskWithSameCorrelation(t *testing.T) {
 	correlationID := uuid.Must(uuid.NewV4())
 	ctx := context.WithValue(context.Background(), logging.CorrelationIDCtx{}, correlationID)
@@ -2855,12 +2889,13 @@ func (c testConfigProvider) Slave() *conf.Slave {
 
 type testSearchIndexer struct {
 	searcher.SearchIndexer
-	deleted   []int
-	upserted  int
-	lastDoc   *searcher.SearchFileDocument
-	results   []searcher.SearchResult
-	total     int64
-	searchErr error
+	deleted       []int
+	upserted      int
+	lastDoc       *searcher.SearchFileDocument
+	results       []searcher.SearchResult
+	total         int64
+	searchErr     error
+	lastSearchReq *searcher.SearchRequest
 }
 
 func (s *testSearchIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
@@ -2883,6 +2918,7 @@ func (s *testSearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int) 
 }
 
 func (s *testSearchIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
+	s.lastSearchReq = req
 	if s.searchErr != nil {
 		return nil, 0, s.searchErr
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"entgo.io/ent/dialect/sql"
+	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/file"
 	"github.com/cloudreve/Cloudreve/v4/ent/predicate"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
@@ -18,6 +19,8 @@ const (
 
 	FolderRuleMetadataKey = "sys:public_rule"
 	DefaultRootName       = "公共文件"
+	RootGrantScopeSelf    = "self"
+	RootGrantScopeSubtree = "subtree"
 )
 
 type Action string
@@ -148,6 +151,7 @@ type RootGrant struct {
 	RootOwnerID  int             `json:"root_owner_id"`
 	RootName     string          `json:"root_name,omitempty"`
 	RootTreePath string          `json:"root_tree_path,omitempty"`
+	Scope        string          `json:"scope,omitempty"`
 	Actions      map[Action]bool `json:"actions,omitempty"`
 }
 
@@ -250,23 +254,57 @@ func BuildVisibilityFilter(grants []RootGrant) *FileFilterExpr {
 	}
 
 	prefixes := make([]string, 0, len(grants))
+	fileIDs := make([]int, 0, len(grants))
 	for _, grant := range grants {
-		if strings.TrimSpace(grant.RootTreePath) == "" {
+		if RootGrantAllowsDescendants(grant) && strings.TrimSpace(grant.RootTreePath) != "" {
+			prefixes = append(prefixes, grant.RootTreePath)
 			continue
 		}
-		prefixes = append(prefixes, grant.RootTreePath)
+		if grant.RootFileID <= 0 {
+			continue
+		}
+		fileIDs = append(fileIDs, grant.RootFileID)
 	}
 
 	prefixes = uniqueSortedStrings(prefixes)
-	if len(prefixes) == 0 {
+	fileIDs = uniqueSortedInts(fileIDs)
+	if len(prefixes) == 0 && len(fileIDs) == 0 {
 		return FalseFilter()
 	}
 
+	if len(fileIDs) == 0 {
+		return &FileFilterExpr{
+			Match: &FileFilterMatch{
+				Kind:         FileFilterMatchTreePathIn,
+				StringValues: prefixes,
+			},
+		}
+	}
+
+	children := make([]*FileFilterExpr, 0, 2)
+	if len(prefixes) > 0 {
+		children = append(children, &FileFilterExpr{
+			Match: &FileFilterMatch{
+				Kind:         FileFilterMatchTreePathIn,
+				StringValues: prefixes,
+			},
+		})
+	}
+	if len(fileIDs) > 0 {
+		children = append(children, &FileFilterExpr{
+			Match: &FileFilterMatch{
+				Kind:      FileFilterMatchFileIDIn,
+				IntValues: fileIDs,
+			},
+		})
+	}
+	if len(children) == 1 {
+		return children[0]
+	}
+
 	return &FileFilterExpr{
-		Match: &FileFilterMatch{
-			Kind:         FileFilterMatchTreePathIn,
-			StringValues: prefixes,
-		},
+		Operator: FileFilterOpOr,
+		Children: children,
 	}
 }
 
@@ -278,6 +316,45 @@ func RootGrantWithinTree(rootTreePath string, grant RootGrant) bool {
 	}
 
 	return grantPath == rootPath || strings.HasPrefix(grantPath, rootPath+".")
+}
+
+func RootGrantAllowsDescendants(grant RootGrant) bool {
+	scope := strings.ToLower(strings.TrimSpace(grant.Scope))
+	return scope == "" || scope == RootGrantScopeSubtree
+}
+
+func RootGrantCoversFile(grant RootGrant, targetFileID int, targetTreePath string) bool {
+	if targetFileID > 0 && grant.RootFileID == targetFileID {
+		return true
+	}
+	if !RootGrantAllowsDescendants(grant) {
+		return false
+	}
+
+	grantPath := strings.TrimSpace(grant.RootTreePath)
+	targetPath := strings.TrimSpace(targetTreePath)
+	if grantPath == "" || targetPath == "" {
+		return false
+	}
+
+	return targetPath == grantPath || strings.HasPrefix(targetPath, grantPath+".")
+}
+
+func RootGrantCoversGrant(parent RootGrant, child RootGrant) bool {
+	if parent.RootFileID == child.RootFileID {
+		return true
+	}
+	if !RootGrantAllowsDescendants(parent) {
+		return false
+	}
+
+	parentPath := strings.TrimSpace(parent.RootTreePath)
+	childPath := strings.TrimSpace(child.RootTreePath)
+	if parentPath == "" || childPath == "" {
+		return false
+	}
+
+	return childPath == parentPath || strings.HasPrefix(childPath, parentPath+".")
 }
 
 func ProjectedRootAlias(hasher hashid.Encoder, grant RootGrant) string {
@@ -294,6 +371,86 @@ func ProjectedRootAlias(hasher hashid.Encoder, grant RootGrant) string {
 	}
 
 	return fmt.Sprintf("%s__%s", name, suffix)
+}
+
+func MatchFileFilter(expr *FileFilterExpr, target *ent.File) bool {
+	if expr == nil {
+		return true
+	}
+	if target == nil {
+		return false
+	}
+
+	if expr.Match != nil {
+		switch expr.Match.Kind {
+		case FileFilterMatchTrue:
+			return true
+		case FileFilterMatchFalse:
+			return false
+		case FileFilterMatchOwnerIDIn:
+			for _, value := range expr.Match.IntValues {
+				if target.OwnerID == value {
+					return true
+				}
+			}
+			return false
+		case FileFilterMatchFileIDIn:
+			for _, value := range expr.Match.IntValues {
+				if target.ID == value {
+					return true
+				}
+			}
+			return false
+		case FileFilterMatchTreePathIn:
+			targetPath := strings.TrimSpace(target.TreePath)
+			if targetPath == "" {
+				return false
+			}
+			for _, prefix := range uniqueSortedStrings(expr.Match.StringValues) {
+				if prefix == targetPath || strings.HasPrefix(targetPath, prefix+".") {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+
+	switch expr.Operator {
+	case FileFilterOpAnd:
+		for _, child := range expr.Children {
+			if child == nil {
+				continue
+			}
+			if !MatchFileFilter(child, target) {
+				return false
+			}
+		}
+		return true
+	case FileFilterOpOr:
+		hasChild := false
+		for _, child := range expr.Children {
+			if child == nil {
+				continue
+			}
+			hasChild = true
+			if MatchFileFilter(child, target) {
+				return true
+			}
+		}
+		return !hasChild
+	case FileFilterOpNot:
+		for _, child := range expr.Children {
+			if child == nil {
+				continue
+			}
+			return !MatchFileFilter(child, target)
+		}
+		return true
+	default:
+		return true
+	}
 }
 
 func uniqueSortedStrings(values []string) []string {
@@ -315,6 +472,27 @@ func uniqueSortedStrings(values []string) []string {
 		res = append(res, value)
 	}
 	sort.Strings(res)
+	return res
+}
+
+func uniqueSortedInts(values []int) []int {
+	if len(values) == 0 {
+		return nil
+	}
+
+	uniq := make(map[int]struct{}, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		uniq[value] = struct{}{}
+	}
+
+	res := make([]int, 0, len(uniq))
+	for value := range uniq {
+		res = append(res, value)
+	}
+	sort.Ints(res)
 	return res
 }
 

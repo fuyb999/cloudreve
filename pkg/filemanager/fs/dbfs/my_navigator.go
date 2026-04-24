@@ -34,6 +34,7 @@ func NewMyNavigator(u *ent.User, fileClient inventory.FileClient, userClient inv
 		userClient:    userClient,
 		config:        config,
 		publicService: publicService,
+		targetUsers:   make(map[int]*ent.User),
 	}
 	n.baseNavigator = newBaseNavigator(fileClient, n.filter, u, hasher, config)
 	return n
@@ -49,6 +50,8 @@ type myNavigator struct {
 	publicService *publicshare.Service
 	*baseNavigator
 	root           *File
+	rootUserID     int
+	targetUsers    map[int]*ent.User
 	disableRecycle bool
 	persist        func()
 	publicRootID   int
@@ -75,7 +78,16 @@ func (n *myNavigator) PersistState(kv cache.Driver, key string) {
 func (n *myNavigator) RestoreState(s State) error {
 	n.disableRecycle = true
 	if state, ok := s.(*File); ok {
+		if n.targetUsers == nil {
+			n.targetUsers = make(map[int]*ent.User)
+		}
 		n.root = state
+		if state != nil && !state.IsNil() {
+			n.rootUserID = state.OwnerID()
+			if state.OwnerModel != nil {
+				n.targetUsers[state.OwnerModel.ID] = state.OwnerModel
+			}
+		}
 		return nil
 	}
 
@@ -83,27 +95,26 @@ func (n *myNavigator) RestoreState(s State) error {
 }
 
 func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
-	if n.root == nil {
+	fsUid, err := n.hasher.Decode(path.ID(hashid.EncodeUserID(n.hasher, n.user.ID)), hashid.UserID)
+	if err != nil {
+		return nil, fs.ErrPathNotExist.WithError(fmt.Errorf("invalid user id"))
+	}
+	if fsUid != n.user.ID && !n.isAdmin() {
+		return nil, ErrPermissionDenied
+	}
+
+	if n.root == nil || n.rootUserID != fsUid {
 		// Anonymous user does not have a root folder.
 		if inventory.IsAnonymousUser(n.user) {
 			return nil, ErrLoginRequired
 		}
 
-		fsUid, err := n.hasher.Decode(path.ID(hashid.EncodeUserID(n.hasher, n.user.ID)), hashid.UserID)
-		if err != nil {
-			return nil, fs.ErrPathNotExist.WithError(fmt.Errorf("invalid user id"))
-		}
-		if fsUid != n.user.ID && !n.isAdmin() {
-			return nil, ErrPermissionDenied
-		}
-
-		ctx = context.WithValue(ctx, inventory.LoadUserGroup{}, true)
-		targetUser, err := n.userClient.GetByID(ctx, fsUid)
+		targetUser, err := n.targetUser(ctx, fsUid)
 		if err != nil {
 			return nil, fs.ErrPathNotExist.WithError(fmt.Errorf("user not found: %w", err))
 		}
 
-		if targetUser.Status != user.StatusActive && !n.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+		if targetUser.Status != user.StatusActive && !inventory.UserIsAdmin(n.user) {
 			return nil, fs.ErrPathNotExist.WithError(fmt.Errorf("inactive user"))
 		}
 
@@ -120,11 +131,11 @@ func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 		n.root.disableView = fsUid != n.user.ID
 		n.root.IsUserRoot = true
 		n.root.CapabilitiesBs = n.rootCapabilities(fsUid)
+		n.rootUserID = fsUid
 	}
 
 	current, lastAncestor := n.root, n.root
 	elements := path.Elements()
-	var err error
 	for index, element := range elements {
 		lastAncestor = current
 		current, err = n.walkNext(ctx, current, element, index == len(elements)-1)
@@ -134,6 +145,30 @@ func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 	}
 
 	return current, nil
+}
+
+func (n *myNavigator) targetUser(ctx context.Context, userID int) (*ent.User, error) {
+	if n.targetUsers == nil {
+		n.targetUsers = make(map[int]*ent.User)
+	}
+
+	if userID == n.user.ID && n.user != nil && n.user.Edges.Group != nil {
+		n.targetUsers[userID] = n.user
+		return n.user, nil
+	}
+
+	if targetUser, ok := n.targetUsers[userID]; ok {
+		return targetUser, nil
+	}
+
+	loadCtx := context.WithValue(ctx, inventory.LoadUserGroup{}, true)
+	targetUser, err := n.userClient.GetByID(loadCtx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	n.targetUsers[userID] = targetUser
+	return targetUser, nil
 }
 
 func (n *myNavigator) Children(ctx context.Context, parent *File, args *ListArgs) (*ListResult, error) {
@@ -222,10 +257,7 @@ func (n *myNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {
 }
 
 func (n *myNavigator) isAdmin() bool {
-	return n.user != nil &&
-		n.user.Edges.Group != nil &&
-		n.user.Edges.Group.Permissions != nil &&
-		n.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin))
+	return inventory.UserIsAdmin(n.user)
 }
 
 func (n *myNavigator) rootCapabilities(targetUserID int) *boolset.BooleanSet {

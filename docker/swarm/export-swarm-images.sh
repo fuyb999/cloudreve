@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 OUTPUT_PARENT="${OUTPUT_PARENT:-$ROOT_DIR}"
 STAMP="${STAMP:-$(date +%Y%m%d-%H%M%S)}"
@@ -93,10 +94,7 @@ fi
 
 mkdir -p "$OUTPUT_PARENT"
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 BUNDLE_DIR="$OUTPUT_PARENT/swarm-images-$STAMP"
 ARCHIVE_FILE="${ARCHIVE_FILE:-$OUTPUT_PARENT/swarm-images-$STAMP.tar.xz}"

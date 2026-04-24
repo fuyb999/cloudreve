@@ -25,6 +25,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/ent/user"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
@@ -46,6 +47,8 @@ var (
 	ErrorIncorrectPassword   = errors.New("incorrect password")
 	ErrInsufficientPoints    = errors.New("insufficient points")
 )
+
+const slowGetLoginUserThreshold = 150 * time.Millisecond
 
 type (
 	UserClient interface {
@@ -137,8 +140,8 @@ type (
 		// SkipFirstUserPromotion 禁止 Create() 的“首个可见用户自动提升为管理员”逻辑。
 		// 统一认证影子用户需要由上层显式决定是否提升，避免普通用户因首次登录被误授管理员。
 		SkipFirstUserPromotion bool
-		Avatar        string // Optional
-		Language      string // Optional
+		Avatar                 string // Optional
+		Language               string // Optional
 	}
 	CreateStoragePackArgs struct {
 		UserID   int
@@ -432,6 +435,13 @@ func (c *userClient) GetActiveByDavAccount(ctx context.Context, account, pwd str
 }
 
 func (c *userClient) GetLoginUserByID(ctx context.Context, uid int) (*ent.User, error) {
+	start := time.Now()
+	defer func() {
+		if elapsed := time.Since(start); elapsed >= slowGetLoginUserThreshold {
+			logging.FromContext(ctx).Warning("GetLoginUserByID slow uid=%d duration=%s", uid, elapsed)
+		}
+	}()
+
 	ctx = context.WithValue(ctx, LoadUserGroup{}, true)
 	if uid > 0 {
 		expectedUser, err := c.GetActiveByID(ctx, uid)
@@ -754,6 +764,17 @@ func isFirstVisibleUser(ctx context.Context, client *ent.Client, u *ent.User) (b
 // IsAnonymousUser check if given user is anonymous user.
 func IsAnonymousUser(u *ent.User) bool {
 	return u.ID == 0
+}
+
+func UserHasGroupPermission(u *ent.User, permission types.GroupPermission) bool {
+	return u != nil &&
+		u.Edges.Group != nil &&
+		u.Edges.Group.Permissions != nil &&
+		u.Edges.Group.Permissions.Enabled(int(permission))
+}
+
+func UserIsAdmin(u *ent.User) bool {
+	return UserHasGroupPermission(u, types.GroupPermissionIsAdmin)
 }
 
 // CheckPassword 根据明文校验密码

@@ -88,7 +88,7 @@ func (service *DownloadWorkflowService) CreateDownloadTask(c *gin.Context) ([]*T
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
 
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionRemoteDownload)) {
+	if !inventory.UserHasGroupPermission(user, types.GroupPermissionRemoteDownload) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "Group not allowed to download files", nil)
 	}
 
@@ -132,6 +132,11 @@ func (service *DownloadWorkflowService) CreateDownloadTask(c *gin.Context) ([]*T
 		}
 	}
 
+	visibility, err := resolvePublicWorkflowVisibility(c, dep, user, service.Dst, service.SrcFile)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
+	}
+
 	// batch creating tasks
 	ae := serializer.NewAggregateError()
 	tasks := make([]queue.Task, 0, len(service.Src))
@@ -140,7 +145,7 @@ func (service *DownloadWorkflowService) CreateDownloadTask(c *gin.Context) ([]*T
 			continue
 		}
 
-		t, err := workflows.NewRemoteDownloadTask(c, src, service.SrcFile, service.Dst)
+		t, err := workflows.NewRemoteDownloadTask(c, src, service.SrcFile, service.Dst, visibility)
 		if err != nil {
 			ae.Add(src, err)
 			continue
@@ -154,7 +159,7 @@ func (service *DownloadWorkflowService) CreateDownloadTask(c *gin.Context) ([]*T
 	}
 
 	if service.SrcFile != "" {
-		t, err := workflows.NewRemoteDownloadTask(c, "", service.SrcFile, service.Dst)
+		t, err := workflows.NewRemoteDownloadTask(c, "", service.SrcFile, service.Dst, visibility)
 		if err != nil {
 			ae.Add(service.SrcFile, err)
 		}
@@ -169,6 +174,27 @@ func (service *DownloadWorkflowService) CreateDownloadTask(c *gin.Context) ([]*T
 	return lo.Map(tasks, func(item queue.Task, index int) *TaskResponse {
 		return BuildTaskResponse(item, nil, hasher)
 	}), ae.Aggregate()
+}
+
+func resolvePublicWorkflowVisibility(c *gin.Context, dep dependency.Dep, user *ent.User, rawURIs ...string) (*publicshare.VisibilityResult, error) {
+	for _, raw := range rawURIs {
+		if raw == "" {
+			continue
+		}
+
+		uri, err := fs.NewUriFromString(raw)
+		if err != nil {
+			continue
+		}
+		if uri.FileSystem() != constants.FileSystemPublic {
+			continue
+		}
+
+		visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
+		return visibilityService.ResolveVisibility(c, user)
+	}
+
+	return nil, nil
 }
 
 type (
@@ -189,7 +215,7 @@ func (service *ArchiveWorkflowService) CreateExtractTask(c *gin.Context) (*TaskR
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
 
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionArchiveTask)) {
+	if !inventory.UserHasGroupPermission(user, types.GroupPermissionArchiveTask) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "Group not allowed to compress files", nil)
 	}
 
@@ -207,14 +233,9 @@ func (service *ArchiveWorkflowService) CreateExtractTask(c *gin.Context) (*TaskR
 		return nil, serializer.NewError(serializer.CodeParamErr, "Invalid destination", err)
 	}
 
-	var visibility *publicshare.VisibilityResult
-	srcURI, _ := fs.NewUriFromString(service.Src[0])
-	if dst.FileSystem() == constants.FileSystemPublic || (srcURI != nil && srcURI.FileSystem() == constants.FileSystemPublic) {
-		visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
-		visibility, err = visibilityService.ResolveVisibility(c, user)
-		if err != nil {
-			return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
-		}
+	visibility, err := resolvePublicWorkflowVisibility(c, dep, user, service.Dst, service.Src[0])
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
 	}
 
 	// Create task
@@ -247,7 +268,7 @@ func (service *ArchiveWorkflowService) CreateCompressTask(c *gin.Context) (*Task
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
 
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionArchiveTask)) {
+	if !inventory.UserHasGroupPermission(user, types.GroupPermissionArchiveTask) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "Group not allowed to compress files", nil)
 	}
 
@@ -270,8 +291,13 @@ func (service *ArchiveWorkflowService) CreateCompressTask(c *gin.Context) (*Task
 	}
 	m.OnUploadFailed(c, session)
 
+	visibility, err := resolvePublicWorkflowVisibility(c, dep, user, append([]string{service.Dst}, service.Src...)...)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
+	}
+
 	// Create task
-	t, err := workflows.NewCreateArchiveTask(c, service.Src, service.Dst)
+	t, err := workflows.NewCreateArchiveTask(c, service.Src, service.Dst, visibility)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeCreateTaskError, "Failed to create task", err)
 	}
@@ -311,7 +337,7 @@ func (service *ImportWorkflowService) CreateImportTask(c *gin.Context) (*TaskRes
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
 
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+	if !inventory.UserIsAdmin(user) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "Only admin can import files", nil)
 	}
 
@@ -472,7 +498,7 @@ func TaskPhaseProgress(c *gin.Context, taskID int) (queue.Progresses, error) {
 	u := inventory.UserFromContext(c)
 	r := dep.TaskRegistry()
 	t, found := r.Get(taskID)
-	if !found || (t.Owner().ID != u.ID && !u.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin))) {
+	if !found || (t.Owner().ID != u.ID && !inventory.UserIsAdmin(u)) {
 		return queue.Progresses{}, nil
 	}
 
@@ -551,7 +577,7 @@ func (service *RebuildFTSIndexWorkflowService) CreateRebuildFTSIndexTask(c *gin.
 	m := manager.NewFileManager(dep, user)
 	defer m.Recycle()
 
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+	if !inventory.UserIsAdmin(user) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "Only admin can import files", nil)
 	}
 

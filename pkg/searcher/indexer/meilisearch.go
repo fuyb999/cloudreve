@@ -21,15 +21,16 @@ const (
 )
 
 type meilisearchDocument struct {
-	ID       string                   `json:"id"`
-	FileID   int                      `json:"file_id"`
-	OwnerID  int                      `json:"owner_id"`
-	EntityID int                      `json:"entity_id"`
-	TreePath string                   `json:"tree_path,omitempty"`
-	ChunkIdx int                      `json:"chunk_idx"`
-	FileName string                   `json:"file_name"`
-	Text     string                   `json:"text"`
-	Formated *meilisearchFormattedHit `json:"_formatted,omitempty"`
+	ID          string                   `json:"id"`
+	FileID      int                      `json:"file_id"`
+	OwnerID     int                      `json:"owner_id"`
+	EntityID    int                      `json:"entity_id"`
+	TreePath    string                   `json:"tree_path,omitempty"`
+	SearchPaths []string                 `json:"search_paths,omitempty"`
+	ChunkIdx    int                      `json:"chunk_idx"`
+	FileName    string                   `json:"file_name"`
+	Text        string                   `json:"text"`
+	Formated    *meilisearchFormattedHit `json:"_formatted,omitempty"`
 }
 
 type meilisearchFormattedHit struct {
@@ -58,7 +59,7 @@ func NewMeilisearchIndexer(msCfg *setting.FTSIndexMeilisearchSetting, chunkSize 
 }
 
 var (
-	requiredFilterable = []string{"owner_id", "file_id", "entity_id", "tree_path"}
+	requiredFilterable = []string{"owner_id", "file_id", "entity_id", "tree_path", "search_paths"}
 	requiredSearchable = []string{"text", "file_name"}
 	requiredDistinct   = "file_id"
 )
@@ -110,7 +111,7 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 
 	index := m.client.Index(indexName)
 
-	filterableAttrs := []any{"owner_id", "file_id", "entity_id", "tree_path"}
+	filterableAttrs := []any{"owner_id", "file_id", "entity_id", "tree_path", "search_paths"}
 	if _, err := index.UpdateFilterableAttributesWithContext(ctx, &filterableAttrs); err != nil {
 		return fmt.Errorf("failed to set filterable attributes: %w", err)
 	}
@@ -233,6 +234,9 @@ func (m *MeilisearchIndexer) Search(ctx context.Context, req *searcher.SearchReq
 			filters = append(filters, filter)
 		}
 	}
+	if req != nil && req.SearchBaseURI != "" {
+		filters = append(filters, fmt.Sprintf(`search_paths = "%s"`, escapeMeilisearchFilterString(req.SearchBaseURI)))
+	}
 
 	offset := 0
 	query := ""
@@ -301,6 +305,10 @@ func (m *MeilisearchIndexer) Close() error {
 	return nil
 }
 
+func escapeMeilisearchFilterString(value string) string {
+	return strings.ReplaceAll(value, `"`, `\"`)
+}
+
 func (m *MeilisearchIndexer) buildDocuments(doc *searcher.SearchFileDocument) []meilisearchDocument {
 	searchable := buildSearchableText(doc)
 	chunks := ChunkText(searchable, m.chunkSize)
@@ -311,14 +319,15 @@ func (m *MeilisearchIndexer) buildDocuments(doc *searcher.SearchFileDocument) []
 	docs := make([]meilisearchDocument, 0, len(chunks))
 	for i, chunk := range chunks {
 		docs = append(docs, meilisearchDocument{
-			ID:       fmt.Sprintf("%d_%d", doc.FileID, i),
-			FileID:   doc.FileID,
-			OwnerID:  doc.OwnerID,
-			EntityID: doc.EntityID,
-			TreePath: doc.TreePath,
-			ChunkIdx: i,
-			FileName: doc.FileName,
-			Text:     chunk,
+			ID:          fmt.Sprintf("%d_%d", doc.FileID, i),
+			FileID:      doc.FileID,
+			OwnerID:     doc.OwnerID,
+			EntityID:    doc.EntityID,
+			TreePath:    doc.TreePath,
+			SearchPaths: doc.SearchPaths,
+			ChunkIdx:    i,
+			FileName:    doc.FileName,
+			Text:        chunk,
 		})
 	}
 

@@ -175,7 +175,7 @@ func (service *CreateDavAccountService) Update(c *gin.Context) (*DavAccount, err
 }
 
 func (service *CreateDavAccountService) validateAndGetBs(user *ent.User) (*boolset.BooleanSet, error) {
-	if !user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionWebDAV)) {
+	if !inventory.UserHasGroupPermission(user, types.GroupPermissionWebDAV) {
 		return nil, serializer.NewError(serializer.CodeGroupNotAllowed, "WebDAV is not enabled for this user group", nil)
 	}
 
@@ -199,7 +199,7 @@ func (service *CreateDavAccountService) validateAndGetBs(user *ent.User) (*bools
 		boolset.Set(types.DavAccountDisableSysFiles, true, &bs)
 	}
 
-	if service.Proxy && user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionWebDAVProxy)) {
+	if service.Proxy && inventory.UserHasGroupPermission(user, types.GroupPermissionWebDAVProxy) {
 		boolset.Set(types.DavAccountProxy, true, &bs)
 	}
 	return &bs, nil

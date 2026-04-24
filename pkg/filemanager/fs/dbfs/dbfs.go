@@ -36,6 +36,7 @@ const (
 
 	folderSummaryCachePrefix = "folder_summary_"
 	defaultPageSize          = 100
+	slowDBFSListThreshold    = 200 * time.Millisecond
 )
 
 type (
@@ -65,6 +66,8 @@ func NewDatabaseFS(u *ent.User, fileClient inventory.FileClient, shareClient inv
 		encryptorFactory:    encryptorFactory,
 		eventHub:            eventHub,
 		publicService:       publicshare.NewService(l, fileClient, settingStore, hasher),
+		ownerCache:          make(map[int]*ent.User),
+		groupPolicyCache:    make(map[int]*ent.StoragePolicy),
 	}
 }
 
@@ -86,6 +89,9 @@ type DBFS struct {
 	encryptorFactory    encrypt.CryptorFactory
 	eventHub            eventhub.EventHub
 	publicService       *publicshare.Service
+	dbfsConfig          *setting.DBFS
+	ownerCache          map[int]*ent.User
+	groupPolicyCache    map[int]*ent.StoragePolicy
 }
 
 func (f *DBFS) Recycle() {
@@ -119,7 +125,11 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 	}
 
 	// Get navigator
+	stageStart := time.Now()
 	navigator, err := f.getNavigator(ctx, path, NavigatorCapabilityListChildren)
+	if elapsed := time.Since(stageStart); elapsed >= slowDBFSListThreshold {
+		f.l.Warning("DBFS.List slow stage=get_navigator duration=%s uri=%s", elapsed, path.String())
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -127,7 +137,11 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 	searchParams := path.SearchParameters()
 	isSearching := searchParams != nil
 
+	stageStart = time.Now()
 	parent, err := f.getFileByPath(ctx, navigator, path)
+	if elapsed := time.Since(stageStart); elapsed >= slowDBFSListThreshold {
+		f.l.Warning("DBFS.List slow stage=get_file_by_path duration=%s uri=%s", elapsed, path.String())
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("parent not exist: %w", err)
 	}
@@ -194,6 +208,7 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 		}
 	}
 
+	stageStart = time.Now()
 	children, err := navigator.Children(ctx, parent, &ListArgs{
 		Page: &inventory.PaginationArgs{
 			Page:                o.FsOption.Page,
@@ -206,13 +221,20 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 		Search:         searchParams,
 		StreamCallback: streamCallback,
 	})
+	if elapsed := time.Since(stageStart); elapsed >= slowDBFSListThreshold {
+		f.l.Warning("DBFS.List slow stage=navigator_children duration=%s uri=%s", elapsed, path.String())
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get children: %w", err)
 	}
 
 	var storagePolicy *ent.StoragePolicy
 	if parent != nil && !parent.IsNil() {
+		stageStart = time.Now()
 		storagePolicy, err = f.getPreferredPolicy(ctx, parent)
+		if elapsed := time.Since(stageStart); elapsed >= slowDBFSListThreshold {
+			f.l.Warning("DBFS.List slow stage=get_preferred_policy duration=%s uri=%s", elapsed, path.String())
+		}
 		if err != nil {
 			f.l.Warning("Failed to get preferred policy: %v", err)
 		}
@@ -478,7 +500,7 @@ func (f *DBFS) Get(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fil
 		}
 
 		target.FileExtendedInfo = extendedInfo
-		if target.OwnerID() == f.user.ID || f.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin)) {
+		if target.OwnerID() == f.user.ID || inventory.UserIsAdmin(f.user) {
 			target.FileExtendedInfo.Shares = target.Model.Edges.Shares
 			if target.Model.Props != nil {
 				target.FileExtendedInfo.View = target.Model.Props.View
@@ -791,11 +813,16 @@ func (f *DBFS) ensureOwnerWithGroup(ctx context.Context, file *File) (*ent.User,
 	}
 
 	loadCtx := context.WithValue(ctx, inventory.LoadUserGroup{}, true)
+	if owner, ok := f.ownerCache[ownerID]; ok {
+		file.OwnerModel = owner
+		return owner, nil
+	}
 	owner, err := f.userClient.GetByID(loadCtx, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load file owner %d: %w", ownerID, err)
 	}
 
+	f.ownerCache[ownerID] = owner
 	file.OwnerModel = owner
 	return owner, nil
 }
@@ -811,12 +838,16 @@ func (f *DBFS) getPreferredPolicy(ctx context.Context, file *File) (*ent.Storage
 	if ownerGroup == nil {
 		return nil, fmt.Errorf("owner group not loaded")
 	}
+	if groupPolicy, ok := f.groupPolicyCache[ownerGroup.ID]; ok {
+		return groupPolicy, nil
+	}
 
 	sc, _ := inventory.InheritTx(ctx, f.storagePolicyClient)
 	groupPolicy, err := sc.GetByGroup(ctx, ownerGroup)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeDBError, "Failed to get available storage policies", err)
 	}
+	f.groupPolicyCache[ownerGroup.ID] = groupPolicy
 
 	return groupPolicy, nil
 }
@@ -857,7 +888,7 @@ func (f *DBFS) initFs(ctx context.Context, uid int) error {
 
 func (f *DBFS) getNavigator(ctx context.Context, path *fs.URI, requiredCapabilities ...NavigatorCapability) (Navigator, error) {
 	pathFs := path.FileSystem()
-	config := f.settingClient.DBFS(ctx)
+	config := f.dbfsSetting(ctx)
 	navigatorId := f.navigatorId(path)
 	var (
 		res Navigator
@@ -919,6 +950,15 @@ func (f *DBFS) getNavigator(ctx context.Context, path *fs.URI, requiredCapabilit
 	}
 
 	return res, nil
+}
+
+func (f *DBFS) dbfsSetting(ctx context.Context) *setting.DBFS {
+	if f.dbfsConfig != nil {
+		return f.dbfsConfig
+	}
+
+	f.dbfsConfig = f.settingClient.DBFS(ctx)
+	return f.dbfsConfig
 }
 
 func shouldDeferPublicCapabilityCheck(path *fs.URI) bool {

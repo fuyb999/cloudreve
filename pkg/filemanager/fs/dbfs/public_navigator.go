@@ -77,7 +77,7 @@ type publicNavigator struct {
 }
 
 func (n *publicNavigator) isAdmin() bool {
-	return n.user != nil && n.user.Edges.Group != nil && n.user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionIsAdmin))
+	return inventory.UserIsAdmin(n.user)
 }
 
 func (n *publicNavigator) Recycle() {
@@ -282,19 +282,15 @@ func (n *publicNavigator) grantForFile(file *File) (publicshare.RootGrant, bool)
 		matchedDepth = -1
 	)
 	for _, grant := range n.visibility.RootGrants {
-		if grant.RootFileID == targetID {
-			return grant, true
+		if !publicshare.RootGrantCoversFile(grant, targetID, targetPath) {
+			continue
 		}
 
 		grantPath := strings.TrimSpace(grant.RootTreePath)
-		if grantPath == "" || targetPath == "" {
-			continue
+		depth := 0
+		if grantPath != "" {
+			depth = len(strings.Split(grantPath, "."))
 		}
-		if targetPath != grantPath && !strings.HasPrefix(targetPath, grantPath+".") {
-			continue
-		}
-
-		depth := len(strings.Split(grantPath, "."))
 		if depth > matchedDepth {
 			matched = grant
 			matchedDepth = depth
@@ -319,6 +315,9 @@ func (n *publicNavigator) filter(ctx context.Context, file *File) (*File, bool) 
 			n.l.Warning("Failed to refresh public visibility: %v", err)
 			return nil, false
 		}
+	}
+	if n.visibility != nil && !publicshare.MatchFileFilter(n.visibility.Filter, file.Model) {
+		return nil, false
 	}
 
 	grant, ok := n.grantForFile(file)
@@ -689,7 +688,7 @@ func topLevelProjectedRootGrants(grants []publicshare.RootGrant) []publicshare.R
 	for _, grant := range sorted {
 		skip := false
 		for _, existing := range filtered {
-			if publicshare.RootGrantWithinTree(existing.RootTreePath, grant) {
+			if publicshare.RootGrantCoversGrant(existing, grant) {
 				skip = true
 				break
 			}

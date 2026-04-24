@@ -24,6 +24,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/samber/lo"
@@ -47,12 +48,13 @@ type (
 		Handle             *downloader.TaskHandle `json:"handle,omitempty"`
 		Status             *downloader.TaskStatus `json:"status,omitempty"`
 		NodeState          `json:",inline"`
-		Phase              RemoteDownloadTaskPhase `json:"phase,omitempty"`
-		SlaveUploadTaskID  int                     `json:"slave__upload_task_id,omitempty"`
-		SlaveUploadState   *SlaveUploadTaskState   `json:"slave_upload_state,omitempty"`
-		GetTaskStatusTried int                     `json:"get_task_status_tried,omitempty"`
-		Transferred        map[int]interface{}     `json:"transferred,omitempty"`
-		Failed             int                     `json:"failed,omitempty"`
+		Phase              RemoteDownloadTaskPhase       `json:"phase,omitempty"`
+		SlaveUploadTaskID  int                           `json:"slave__upload_task_id,omitempty"`
+		SlaveUploadState   *SlaveUploadTaskState         `json:"slave_upload_state,omitempty"`
+		GetTaskStatusTried int                           `json:"get_task_status_tried,omitempty"`
+		Transferred        map[int]interface{}           `json:"transferred,omitempty"`
+		Failed             int                           `json:"failed,omitempty"`
+		PublicVisibility   *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 	}
 )
 
@@ -81,12 +83,13 @@ func init() {
 }
 
 // NewRemoteDownloadTask creates a new RemoteDownloadTask
-func NewRemoteDownloadTask(ctx context.Context, src string, srcFile, dst string) (queue.Task, error) {
+func NewRemoteDownloadTask(ctx context.Context, src string, srcFile, dst string, visibility *publicshare.VisibilityResult) (queue.Task, error) {
 	state := &RemoteDownloadTaskState{
-		SrcUri:     src,
-		SrcFileUri: srcFile,
-		Dst:        dst,
-		NodeState:  NodeState{},
+		SrcUri:           src,
+		SrcFileUri:       srcFile,
+		Dst:              dst,
+		PublicVisibility: visibility,
+		NodeState:        NodeState{},
 	}
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -125,6 +128,9 @@ func (m *RemoteDownloadTask) Do(ctx context.Context) (task.Status, error) {
 		return task.StatusError, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 	m.state = state
+	if m.state.PublicVisibility != nil {
+		ctx = context.WithValue(ctx, publicshare.VisibilityOverrideCtx{}, m.state.PublicVisibility)
+	}
 
 	// select node
 	node, err := allocateNode(ctx, dep, &m.state.NodeState, types.NodeCapabilityRemoteDownload)
@@ -304,9 +310,10 @@ func (m *RemoteDownloadTask) slaveTransfer(ctx context.Context, dep dependency.D
 
 		// Create slave upload task
 		payload := &SlaveUploadTaskState{
-			Files:       []SlaveUploadEntity{},
-			MaxParallel: dep.SettingProvider().MaxParallelTransfer(ctx),
-			UserID:      u.ID,
+			Files:            []SlaveUploadEntity{},
+			MaxParallel:      dep.SettingProvider().MaxParallelTransfer(ctx),
+			UserID:           u.ID,
+			PublicVisibility: m.state.PublicVisibility,
 		}
 
 		// Construct files to be transferred

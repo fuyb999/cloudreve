@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
 FORCE_CA=0
 FORCE_CERTS=0
@@ -86,10 +87,7 @@ if ! command -v docker >/dev/null 2>&1 && ! command -v keytool >/dev/null 2>&1; 
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_swarm_env "$ENV_FILE"
 
 SWARM_PKI_MOUNT_TYPE="${SWARM_PKI_MOUNT_TYPE:-bind}"
 SWARM_PKI_MOUNT_SOURCE="${SWARM_PKI_MOUNT_SOURCE:-/srv/cloudreve/pki}"
@@ -136,6 +134,57 @@ resolve_truststore_image() {
   fi
 
   printf '%s\n' "authverse/authverse-backend:2024-local"
+}
+
+validate_truststore_with_local_keytool() {
+  local truststore_file="$1"
+
+  keytool \
+    -list \
+    -alias swarm-root-ca \
+    -storetype PKCS12 \
+    -keystore "$truststore_file" \
+    -storepass "$SWARM_TRUSTSTORE_PASSWORD" >/dev/null 2>&1
+}
+
+validate_truststore_with_docker_keytool() {
+  local ca_dir="$1"
+  local truststore_image="$2"
+  local uid_gid="$3"
+
+  docker run --rm \
+    --user "$uid_gid" \
+    --entrypoint keytool \
+    -v "$ca_dir:/work" \
+    "$truststore_image" \
+    -list \
+    -alias swarm-root-ca \
+    -storetype PKCS12 \
+    -keystore /work/truststore.p12 \
+    -storepass "$SWARM_TRUSTSTORE_PASSWORD" >/dev/null 2>&1
+}
+
+truststore_matches_current_password() {
+  local ca_dir="$1"
+  local truststore_file="$ca_dir/truststore.p12"
+  local truststore_image
+  local uid_gid
+
+  [[ -f "$truststore_file" ]] || return 1
+
+  if command -v keytool >/dev/null 2>&1; then
+    validate_truststore_with_local_keytool "$truststore_file"
+    return
+  fi
+
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    truststore_image="$(resolve_truststore_image)"
+    uid_gid="$(id -u):$(id -g)"
+    validate_truststore_with_docker_keytool "$ca_dir" "$truststore_image" "$uid_gid"
+    return
+  fi
+
+  return 1
 }
 
 service_contains() {
@@ -406,8 +455,12 @@ generate_truststore() {
   uid_gid="$(id -u):$(id -g)"
 
   if [[ "$FORCE_CA" -eq 0 && -f "$truststore_file" ]]; then
-    echo "[skip] Java truststore 已存在"
-    return 0
+    if truststore_matches_current_password "$ca_dir"; then
+      echo "[skip] Java truststore 已存在且与当前密码一致"
+      return 0
+    fi
+
+    echo "[warn] 现有 Java truststore 无法被当前 SWARM_TRUSTSTORE_PASSWORD 打开，自动重建"
   fi
 
   rm -f "$truststore_file"
@@ -447,6 +500,11 @@ generate_truststore() {
       -keystore "$truststore_file" \
       -storetype PKCS12 \
       -storepass "$SWARM_TRUSTSTORE_PASSWORD" >/dev/null 2>&1
+  fi
+
+  if ! truststore_matches_current_password "$ca_dir"; then
+    echo "生成后的 Java truststore 仍无法被当前 SWARM_TRUSTSTORE_PASSWORD 打开，请检查证书生成环境。" >&2
+    exit 1
   fi
 
   chmod 0644 "$truststore_file"
