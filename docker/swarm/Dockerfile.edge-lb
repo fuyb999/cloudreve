@@ -1,0 +1,19 @@
+FROM debian:12.10-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        haproxy \
+        iproute2 \
+        keepalived \
+        procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /etc/cloudreve-lb /run/keepalived
+
+COPY docker/swarm/edge-lb-bootstrap.sh /usr/local/bin/edge-lb-bootstrap.sh
+
+RUN chmod 0555 /usr/local/bin/edge-lb-bootstrap.sh
+
+ENTRYPOINT ["/usr/local/bin/edge-lb-bootstrap.sh"]

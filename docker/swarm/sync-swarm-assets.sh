@@ -13,9 +13,12 @@ SYNC_ENV="yes"
 SYNC_PKI="auto"
 SYNC_FONTS="auto"
 USE_SUDO="${USE_SUDO:-${SWARM_SYNC_USE_SUDO:-no}}"
+SSH_OPTIONS="${SSH_OPTIONS:-${SWARM_SYNC_SSH_OPTIONS:-}}"
 HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
 ENV_BASE_FILE_PATH=""
 REMOTE_ENV_BASE_FILE=""
+declare -a SSH_CMD=(ssh)
+RSYNC_SSH_CMD="ssh"
 
 usage() {
   cat <<'EOF'
@@ -40,6 +43,7 @@ usage() {
   --env-file FILE         环境变量文件，默认 .env.swarm
   --targets LIST          目标节点列表，逗号或空格分隔
   --ssh-user USER         如果 targets 里不带 user@，就自动补这个 SSH 用户
+  --ssh-options OPTS      透传给 ssh/rsync 的额外参数，例如：'-o StrictHostKeyChecking=no'
   --remote-env-file FILE  远端 `.env.swarm` 落点；默认与本地 ENV_FILE 同路径
   --check                 只检查与展示同步计划
   --apply                 实际执行同步
@@ -67,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ssh-user)
       SSH_USER="$2"
+      shift 2
+      ;;
+    --ssh-options)
+      SSH_OPTIONS="$2"
       shift 2
       ;;
     --remote-env-file)
@@ -115,6 +123,12 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 load_swarm_env "$ENV_FILE"
+
+if [[ -n "$SSH_OPTIONS" ]]; then
+  read -r -a _ssh_options_array <<<"$SSH_OPTIONS"
+  SSH_CMD+=("${_ssh_options_array[@]}")
+  RSYNC_SSH_CMD="ssh $SSH_OPTIONS"
+fi
 
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:-$ENV_FILE}"
 if [[ -n "${ENV_BASE_FILE:-}" ]]; then
@@ -183,9 +197,9 @@ remote_mkdir_p() {
   done
 
   if use_remote_sudo; then
-    ssh "$target" "sudo $mkdir_cmd"
+    "${SSH_CMD[@]}" "$target" "sudo $mkdir_cmd"
   else
-    ssh "$target" "$mkdir_cmd"
+    "${SSH_CMD[@]}" "$target" "$mkdir_cmd"
   fi
 }
 
@@ -195,9 +209,9 @@ sync_file_to_remote() {
   local dst="$3"
 
   if use_remote_sudo; then
-    rsync -az --rsync-path="sudo rsync" "$src" "$target:$dst"
+    rsync -az -e "$RSYNC_SSH_CMD" --rsync-path="sudo rsync" "$src" "$target:$dst"
   else
-    rsync -az "$src" "$target:$dst"
+    rsync -az -e "$RSYNC_SSH_CMD" "$src" "$target:$dst"
   fi
 }
 
@@ -207,9 +221,9 @@ sync_dir_to_remote() {
   local dst="$3"
 
   if use_remote_sudo; then
-    rsync -az --delete --omit-dir-times --no-perms --rsync-path="sudo rsync" "$src/" "$target:$dst/"
+    rsync -az -e "$RSYNC_SSH_CMD" --delete --omit-dir-times --no-perms --rsync-path="sudo rsync" "$src/" "$target:$dst/"
   else
-    rsync -az "$src/" "$target:$dst/"
+    rsync -az -e "$RSYNC_SSH_CMD" "$src/" "$target:$dst/"
   fi
 }
 

@@ -13,6 +13,7 @@ SINGLE_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.single.yml"
 CLOUDREVE_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.cloudreve.yml"
 FOUNDATION_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.foundation.yml"
 INFRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.infra.yml"
+EDGE_LB_COMPOSE_FILE="$ROOT_DIR/docker-compose.swarm.edge-lb.yml"
 RENDER_ONLY=0
 STACK_SECRET_NAMES=()
 
@@ -31,11 +32,12 @@ usage() {
      - registry  -> docker-compose.swarm.registry.yml
      - foundation -> docker-compose.swarm.foundation.yml
      - infra     -> docker-compose.swarm.infra.yml
+     - edge-lb   -> docker-compose.swarm.edge-lb.yml
 
   2. 不传 compose-name 时，默认发布 docker-compose.swarm.single.yml
 
 参数：
-  compose-name        直接传模板名，例如：single / cloudreve / foundation / infra / auth / registry
+  compose-name        直接传模板名，例如：single / cloudreve / foundation / infra / auth / registry / edge-lb
   --stack-name NAME   Swarm 栈名称
   --env-file FILE     要读取的环境变量文件，默认是 .env.swarm
   --compose-name NAME 显式指定模板名，等价于第一个位置参数
@@ -51,6 +53,7 @@ usage() {
   docker/swarm/deploy-stack.sh cloudreve --stack-name cloudreve-prod-app
   docker/swarm/deploy-stack.sh auth --stack-name authverse-prod
   docker/swarm/deploy-stack.sh registry --stack-name cloudreve-registry
+  docker/swarm/deploy-stack.sh edge-lb --stack-name cloudreve-prod-edge-lb
 
 可通过环境变量覆盖：
   STACK_NAME, ENV_FILE, RESOLVED_DIR, COMPOSE_NAME, COMPOSE_FILE
@@ -92,6 +95,9 @@ resolve_named_compose_file() {
     cluster|infra)
       printf '%s\n' "$INFRA_COMPOSE_FILE"
       ;;
+    edge-lb|edge_lb|edgelb)
+      printf '%s\n' "$EDGE_LB_COMPOSE_FILE"
+      ;;
     single|foundation|auth|registry)
       printf '%s\n' "$ROOT_DIR/docker-compose.swarm.${name}.yml"
       ;;
@@ -131,6 +137,9 @@ detect_compose_kind() {
       ;;
     docker-compose.swarm.registry.yml)
       printf '%s\n' "registry"
+      ;;
+    docker-compose.swarm.edge-lb.yml)
+      printf '%s\n' "edge-lb"
       ;;
     *)
       printf '%s\n' "custom"
@@ -206,6 +215,7 @@ prepare_image_source_env() {
     KAFKA_UI
     ONLYOFFICE
     ONLYOFFICE_RABBITMQ
+    SWARM_EDGE_LB
   )
   local key target_var local_var remote_var resolved_value
 
@@ -262,6 +272,7 @@ validate_remote_image_source_env() {
     KAFKA_UI
     ONLYOFFICE
     ONLYOFFICE_RABBITMQ
+    SWARM_EDGE_LB
   )
   local key target_var image_value
 
@@ -801,6 +812,7 @@ prepare_stack_name_defaults() {
   CLOUDREVE_STACK_NAME="${CLOUDREVE_STACK_NAME:-cloudreve-app}"
   AUTHVERSE_STACK_NAME="${AUTHVERSE_STACK_NAME:-authverse}"
   PRIVATE_REGISTRY_STACK_NAME="${PRIVATE_REGISTRY_STACK_NAME:-cloudreve-registry}"
+  SWARM_EDGE_LB_STACK_NAME="${SWARM_EDGE_LB_STACK_NAME:-cloudreve-edge-lb}"
   SWARM_SHARED_NETWORK="${SWARM_SHARED_NETWORK:-cloudreve_backend}"
 
   export SINGLE_STACK_NAME
@@ -809,6 +821,7 @@ prepare_stack_name_defaults() {
   export CLOUDREVE_STACK_NAME
   export AUTHVERSE_STACK_NAME
   export PRIVATE_REGISTRY_STACK_NAME
+  export SWARM_EDGE_LB_STACK_NAME
   export SWARM_SHARED_NETWORK
 }
 
@@ -1092,6 +1105,11 @@ case "$COMPOSE_KIND" in
     export AUTHVERSE_STACK_NAME
     prepare_shared_stack_env
     prepare_external_auth_env
+    ;;
+  edge-lb)
+    STACK_NAME="${CLI_STACK_NAME:-${SWARM_EDGE_LB_STACK_NAME:-cloudreve-edge-lb}}"
+    SWARM_EDGE_LB_STACK_NAME="$STACK_NAME"
+    export SWARM_EDGE_LB_STACK_NAME
     ;;
   registry)
     STACK_NAME="${CLI_STACK_NAME:-${PRIVATE_REGISTRY_STACK_NAME:-cloudreve-registry}}"

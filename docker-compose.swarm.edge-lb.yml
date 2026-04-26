@@ -1,0 +1,143 @@
+# Cloudreve 边缘 LB/VIP 容器化栈。
+#
+# 目标：
+# - 用容器承载 HAProxy + Keepalived，不再依赖宿主机安装二进制
+# - 每个边缘节点启动 1 个 edge-lb 容器，使用 host network 监听真实对外端口
+# - HAProxy 负责四层 TCP 透传
+# - Keepalived 负责 VIP 漂移
+#
+# 说明：
+# - 这个栈要求部署节点具备 host 网络和 NET_ADMIN / NET_RAW 能力
+# - 只建议部署到边缘节点，避免与非入口节点抢占端口
+
+x-default-env: &default-env
+  TZ: ${SWARM_TIMEZONE:-Asia/Shanghai}
+
+x-localtime-volume: &localtime-volume
+  type: ${SWARM_LOCALTIME_MOUNT_TYPE:-bind}
+  source: ${SWARM_LOCALTIME_MOUNT_SOURCE:-/etc/localtime}
+  target: /etc/localtime
+  read_only: true
+
+x-default-logging: &default-logging
+  driver: ${SWARM_LOGGING_DRIVER:-json-file}
+  options:
+    max-size: "${SWARM_LOGGING_MAX_SIZE:-20m}"
+    max-file: "${SWARM_LOGGING_MAX_FILE:-5}"
+    compress: "${SWARM_LOGGING_COMPRESS:-true}"
+
+x-service-base: &service-base
+  logging: *default-logging
+
+x-default-update-config: &default-update-config
+  parallelism: 1
+  order: stop-first
+  failure_action: rollback
+
+x-default-rollback-config: &default-rollback-config
+  parallelism: 1
+  order: stop-first
+
+x-default-restart-policy: &default-restart-policy
+  condition: any
+  delay: 5s
+  window: 2m
+
+services:
+  edge-lb:
+    <<: *service-base
+    image: ${SWARM_EDGE_LB_IMAGE:?set SWARM_EDGE_LB_IMAGE}
+    hostname: "{{.Node.Hostname}}-edge-lb"
+    environment:
+      <<: *default-env
+      SWARM_NODE_HOSTNAME: "{{.Node.Hostname}}"
+      SWARM_LB_HAPROXY_CONFIG_PATH: /etc/cloudreve-lb/haproxy.cfg
+      SWARM_LB_KEEPALIVED_CONFIG_PATH: /etc/cloudreve-lb/keepalived.conf
+      SWARM_LB_KEEPALIVED_RUN_DIR: /run/keepalived
+      SWARM_LB_BIND_ADDRESS: ${SWARM_LB_BIND_ADDRESS:?set SWARM_LB_BIND_ADDRESS}
+      SWARM_LB_VIP: ${SWARM_LB_VIP:?set SWARM_LB_VIP}
+      SWARM_LB_VIP_CIDR: ${SWARM_LB_VIP_CIDR:-24}
+      SWARM_LB_INTERFACE: ${SWARM_LB_INTERFACE:-}
+      SWARM_LB_EDGE_NODES: ${SWARM_LB_EDGE_NODES:?set SWARM_LB_EDGE_NODES}
+      SWARM_LB_BALANCE: ${SWARM_LB_BALANCE:-roundrobin}
+      SWARM_LB_HAPROXY_MAXCONN: "${SWARM_LB_HAPROXY_MAXCONN:-200000}"
+      SWARM_LB_CONNECT_TIMEOUT: ${SWARM_LB_CONNECT_TIMEOUT:-5s}
+      SWARM_LB_CLIENT_TIMEOUT: ${SWARM_LB_CLIENT_TIMEOUT:-1h}
+      SWARM_LB_SERVER_TIMEOUT: ${SWARM_LB_SERVER_TIMEOUT:-1h}
+      SWARM_LB_STATS_ENABLED: ${SWARM_LB_STATS_ENABLED:-true}
+      SWARM_LB_STATS_PORT: "${SWARM_LB_STATS_PORT:-28404}"
+      SWARM_LB_STATS_USER: ${SWARM_LB_STATS_USER:-cloudreve}
+      SWARM_LB_STATS_PASSWORD: ${SWARM_LB_STATS_PASSWORD:?set SWARM_LB_STATS_PASSWORD}
+      SWARM_LB_VIRTUAL_ROUTER_ID: "${SWARM_LB_VIRTUAL_ROUTER_ID:-81}"
+      SWARM_LB_AUTH_PASS: ${SWARM_LB_AUTH_PASS:?set SWARM_LB_AUTH_PASS}
+      SWARM_LB_ADVERT_INT: "${SWARM_LB_ADVERT_INT:-1}"
+      SWARM_LB_STATE: ${SWARM_LB_STATE:-BACKUP}
+      SWARM_LB_PRIORITY: "${SWARM_LB_PRIORITY:-100}"
+      SWARM_LB_PRIORITY_MASTER: "${SWARM_LB_PRIORITY_MASTER:-120}"
+      SWARM_LB_PRIORITY_STEP: "${SWARM_LB_PRIORITY_STEP:-10}"
+      SWARM_LB_CLOUDREVE_MASTER_PORT: "${SWARM_LB_CLOUDREVE_MASTER_PORT:-28081}"
+      SWARM_LB_CLOUDREVE_MASTER_BACKEND_PORT: "${SWARM_LB_CLOUDREVE_MASTER_BACKEND_PORT:-18081}"
+      SWARM_LB_CLOUDREVE_SLAVE_PORT: "${SWARM_LB_CLOUDREVE_SLAVE_PORT:-28082}"
+      SWARM_LB_CLOUDREVE_SLAVE_BACKEND_PORT: "${SWARM_LB_CLOUDREVE_SLAVE_BACKEND_PORT:-18082}"
+      SWARM_LB_AUTHVERSE_PORT: "${SWARM_LB_AUTHVERSE_PORT:-28080}"
+      SWARM_LB_AUTHVERSE_BACKEND_PORT: "${SWARM_LB_AUTHVERSE_BACKEND_PORT:-18080}"
+      SWARM_LB_ONLYOFFICE_PORT: "${SWARM_LB_ONLYOFFICE_PORT:-28090}"
+      SWARM_LB_ONLYOFFICE_BACKEND_PORT: "${SWARM_LB_ONLYOFFICE_BACKEND_PORT:-18090}"
+      SWARM_LB_TIKA_PORT: "${SWARM_LB_TIKA_PORT:-29998}"
+      SWARM_LB_TIKA_BACKEND_PORT: "${SWARM_LB_TIKA_BACKEND_PORT:-19998}"
+      SWARM_LB_MINIO_API_PORT: "${SWARM_LB_MINIO_API_PORT:-29000}"
+      SWARM_LB_MINIO_API_BACKEND_PORT: "${SWARM_LB_MINIO_API_BACKEND_PORT:-19000}"
+      SWARM_LB_MINIO_CONSOLE_PORT: "${SWARM_LB_MINIO_CONSOLE_PORT:-29001}"
+      SWARM_LB_MINIO_CONSOLE_BACKEND_PORT: "${SWARM_LB_MINIO_CONSOLE_BACKEND_PORT:-19001}"
+      SWARM_LB_ELASTICSEARCH_HTTP_PORT: "${SWARM_LB_ELASTICSEARCH_HTTP_PORT:-29200}"
+      SWARM_LB_ELASTICSEARCH_HTTP_BACKEND_PORT: "${SWARM_LB_ELASTICSEARCH_HTTP_BACKEND_PORT:-19200}"
+      SWARM_LB_ELASTICSEARCH_TRANSPORT_PORT: "${SWARM_LB_ELASTICSEARCH_TRANSPORT_PORT:-29300}"
+      SWARM_LB_ELASTICSEARCH_TRANSPORT_BACKEND_PORT: "${SWARM_LB_ELASTICSEARCH_TRANSPORT_BACKEND_PORT:-19300}"
+      SWARM_LB_KAFKA_UI_PORT: "${SWARM_LB_KAFKA_UI_PORT:-28089}"
+      SWARM_LB_KAFKA_UI_BACKEND_PORT: "${SWARM_LB_KAFKA_UI_BACKEND_PORT:-18089}"
+      SWARM_LB_PGPOOL_PORT: "${SWARM_LB_PGPOOL_PORT:-25432}"
+      SWARM_LB_PGPOOL_BACKEND_PORT: "${SWARM_LB_PGPOOL_BACKEND_PORT:-15432}"
+      SWARM_LB_REDIS_PORT: "${SWARM_LB_REDIS_PORT:-26379}"
+      SWARM_LB_REDIS_BACKEND_PORT: "${SWARM_LB_REDIS_BACKEND_PORT:-16379}"
+      SWARM_LB_REGISTRY_PORT: "${SWARM_LB_REGISTRY_PORT:-25000}"
+      SWARM_LB_REGISTRY_BACKEND_PORT: "${SWARM_LB_REGISTRY_BACKEND_PORT:-15000}"
+      SWARM_LB_INCLUDE_TIKA: ${SWARM_LB_INCLUDE_TIKA:-true}
+      SWARM_LB_INCLUDE_MINIO_CONSOLE: ${SWARM_LB_INCLUDE_MINIO_CONSOLE:-true}
+      SWARM_LB_INCLUDE_ELASTICSEARCH_HTTP: ${SWARM_LB_INCLUDE_ELASTICSEARCH_HTTP:-true}
+      SWARM_LB_INCLUDE_ELASTICSEARCH_TRANSPORT: ${SWARM_LB_INCLUDE_ELASTICSEARCH_TRANSPORT:-false}
+      SWARM_LB_INCLUDE_KAFKA_UI: ${SWARM_LB_INCLUDE_KAFKA_UI:-true}
+      SWARM_LB_INCLUDE_REDIS: ${SWARM_LB_INCLUDE_REDIS:-true}
+      SWARM_LB_INCLUDE_REGISTRY: ${SWARM_LB_INCLUDE_REGISTRY:-false}
+    entrypoint: ["/usr/local/bin/edge-lb-bootstrap.sh"]
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BROADCAST
+    volumes:
+      - *localtime-volume
+      - type: bind
+        source: /lib/modules
+        target: /lib/modules
+        read_only: true
+    networks:
+      - hostnet
+    deploy:
+      mode: global
+      update_config: *default-update-config
+      rollback_config: *default-rollback-config
+      restart_policy: *default-restart-policy
+      placement:
+        constraints:
+          - ${SWARM_EDGE_LB_NODE_CONSTRAINT:-node.labels.cloudreve.edge-lb==true}
+      resources:
+        reservations:
+          cpus: "${SWARM_EDGE_LB_CPU_RESERVATION:-0.25}"
+          memory: "${SWARM_EDGE_LB_MEM_RESERVATION:-128M}"
+        limits:
+          cpus: "${SWARM_EDGE_LB_CPU_LIMIT:-1.0}"
+          memory: "${SWARM_EDGE_LB_MEM_LIMIT:-512M}"
+
+networks:
+  hostnet:
+    external: true
+    name: host

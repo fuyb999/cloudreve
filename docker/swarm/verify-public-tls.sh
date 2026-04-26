@@ -97,19 +97,25 @@ fi
 
 export VERIFY_TLS_CA_FILE="$CA_FILE"
 export VERIFY_TLS_HOSTS="$HOSTS"
-export VERIFY_TLS_AUTHVERSE_PORT="${AUTHVERSE_HTTP_PORT:-28080}"
-export VERIFY_TLS_CLOUDREVE_MASTER_PORT="${CLOUDREVE_MASTER_HTTP_PORT:-28081}"
-export VERIFY_TLS_CLOUDREVE_SLAVE_PORT="${CLOUDREVE_SLAVE_HTTP_PORT:-28082}"
-export VERIFY_TLS_KAFKA_UI_PORT="${KAFKA_UI_HTTP_PORT:-28089}"
-export VERIFY_TLS_ONLYOFFICE_PORT="${ONLYOFFICE_HTTP_PORT:-28090}"
-export VERIFY_TLS_MINIO_API_PORT="${MINIO_API_PORT:-29000}"
-export VERIFY_TLS_MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-29001}"
-export VERIFY_TLS_ES_HTTP_PORT="${ELASTICSEARCH_HTTP_PORT:-29200}"
-export VERIFY_TLS_ES_TRANSPORT_PORT="${ELASTICSEARCH_TRANSPORT_PORT:-29300}"
-export VERIFY_TLS_TIKA_PORT="${TIKA_HTTP_PORT:-29998}"
-export VERIFY_TLS_REDIS_PORT="${REDIS_PROXY_PUBLIC_PORT:-26380}"
-export VERIFY_TLS_PGPOOL_PORT="${PGPOOL_PUBLIC_PORT:-25432}"
+export VERIFY_TLS_AUTHVERSE_PORT="${SWARM_LB_AUTHVERSE_PORT:-${AUTHVERSE_HTTP_PORT:-28080}}"
+export VERIFY_TLS_CLOUDREVE_MASTER_PORT="${SWARM_LB_CLOUDREVE_MASTER_PORT:-${CLOUDREVE_MASTER_HTTP_PORT:-28081}}"
+export VERIFY_TLS_CLOUDREVE_SLAVE_PORT="${SWARM_LB_CLOUDREVE_SLAVE_PORT:-${CLOUDREVE_SLAVE_HTTP_PORT:-28082}}"
+export VERIFY_TLS_KAFKA_UI_PORT="${SWARM_LB_KAFKA_UI_PORT:-${KAFKA_UI_HTTP_PORT:-28089}}"
+export VERIFY_TLS_ONLYOFFICE_PORT="${SWARM_LB_ONLYOFFICE_PORT:-${ONLYOFFICE_HTTP_PORT:-28090}}"
+export VERIFY_TLS_MINIO_API_PORT="${SWARM_LB_MINIO_API_PORT:-${MINIO_API_PORT:-29000}}"
+export VERIFY_TLS_MINIO_CONSOLE_PORT="${SWARM_LB_MINIO_CONSOLE_PORT:-${MINIO_CONSOLE_PORT:-29001}}"
+export VERIFY_TLS_ES_HTTP_PORT="${SWARM_LB_ELASTICSEARCH_HTTP_PORT:-${ELASTICSEARCH_HTTP_PORT:-29200}}"
+export VERIFY_TLS_ES_TRANSPORT_PORT="${SWARM_LB_ELASTICSEARCH_TRANSPORT_PORT:-${ELASTICSEARCH_TRANSPORT_PORT:-29300}}"
+export VERIFY_TLS_TIKA_PORT="${SWARM_LB_TIKA_PORT:-${TIKA_HTTP_PORT:-29998}}"
+export VERIFY_TLS_REDIS_PORT="${SWARM_LB_REDIS_PORT:-${REDIS_PROXY_PUBLIC_PORT:-26379}}"
+export VERIFY_TLS_PGPOOL_PORT="${SWARM_LB_PGPOOL_PORT:-${PGPOOL_PUBLIC_PORT:-25432}}"
 export VERIFY_TLS_REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+export VERIFY_TLS_INCLUDE_KAFKA_UI="${SWARM_LB_INCLUDE_KAFKA_UI:-true}"
+export VERIFY_TLS_INCLUDE_MINIO_CONSOLE="${SWARM_LB_INCLUDE_MINIO_CONSOLE:-true}"
+export VERIFY_TLS_INCLUDE_ES_HTTP="${SWARM_LB_INCLUDE_ELASTICSEARCH_HTTP:-true}"
+export VERIFY_TLS_INCLUDE_ES_TRANSPORT="${SWARM_LB_INCLUDE_ELASTICSEARCH_TRANSPORT:-false}"
+export VERIFY_TLS_INCLUDE_TIKA="${SWARM_LB_INCLUDE_TIKA:-true}"
+export VERIFY_TLS_INCLUDE_REDIS="${SWARM_LB_INCLUDE_REDIS:-true}"
 
 python3 - <<'PY'
 import json
@@ -123,6 +129,10 @@ from collections import Counter
 CA = os.environ["VERIFY_TLS_CA_FILE"]
 HOSTS = [item.strip() for item in os.environ["VERIFY_TLS_HOSTS"].replace(";", ",").split(",") if item.strip()]
 REDIS_PASSWORD = os.environ.get("VERIFY_TLS_REDIS_PASSWORD", "")
+
+def env_enabled(name, default="true"):
+    value = os.environ.get(name, default).strip().lower()
+    return value not in {"0", "false", "no", "off", "disable", "disabled"}
 
 PORTS = {
     "authverse": int(os.environ["VERIFY_TLS_AUTHVERSE_PORT"]),
@@ -143,13 +153,22 @@ http_tests = [
     ("authverse", PORTS["authverse"], "/.well-known/openid-configuration", {200}, None),
     ("cloudreve-master", PORTS["cloudreve_master"], "/api/v4/site/ping", {200}, None),
     ("cloudreve-slave", PORTS["cloudreve_slave"], "/api/v4/slave/ping", {200}, "expect_slave_auth_error"),
-    ("kafka-ui", PORTS["kafka_ui"], "/", {200, 301, 302, 307, 308}, None),
     ("onlyoffice", PORTS["onlyoffice"], "/healthcheck", {200}, None),
     ("minio-api", PORTS["minio_api"], "/minio/health/live", {200}, None),
-    ("minio-console", PORTS["minio_console"], "/", {200, 301, 302, 307, 308}, None),
-    ("elasticsearch-http", PORTS["es_http"], "/_cluster/health?pretty", {200}, None),
-    ("tika", PORTS["tika"], "/version", {200}, None),
 ]
+
+optional_http_tests = [
+    ("VERIFY_TLS_INCLUDE_KAFKA_UI", "kafka-ui", PORTS["kafka_ui"], "/", {200, 301, 302, 307, 308}, None, "kafka-ui"),
+    ("VERIFY_TLS_INCLUDE_MINIO_CONSOLE", "minio-console", PORTS["minio_console"], "/", {200, 301, 302, 307, 308}, None, "minio-console"),
+    ("VERIFY_TLS_INCLUDE_ES_HTTP", "elasticsearch-http", PORTS["es_http"], "/_cluster/health?pretty", {200}, None, "elasticsearch-http"),
+    ("VERIFY_TLS_INCLUDE_TIKA", "tika", PORTS["tika"], "/version", {200}, None, "tika"),
+]
+
+for env_name, test_name, port, path, ok_codes, mode, label in optional_http_tests:
+    if env_enabled(env_name):
+        http_tests.append((test_name, port, path, ok_codes, mode))
+    else:
+        print(f"[SKIP] {label} 未启用外部 LB/TLS，跳过验证")
 
 def peer_cn(cert):
     for item in cert.get("subject", []):
@@ -245,15 +264,18 @@ for host in HOSTS:
             print(f"[FAIL] {host}:{port} {name} {type(exc).__name__}: {exc}")
 
 print("\n=== Redis TLS ===")
-for host in HOSTS:
-    try:
-        ok, auth, pong, cn, ver = redis_check(host, PORTS["redis"])
-        results.append(ok)
-        mark = "PASS" if ok else "FAIL"
-        print(f"[{mark}] {host}:{PORTS['redis']} redis AUTH={auth} PING={pong} TLS={ver} CN={cn}")
-    except Exception as exc:
-        results.append(False)
-        print(f"[FAIL] {host}:{PORTS['redis']} redis {type(exc).__name__}: {exc}")
+if env_enabled("VERIFY_TLS_INCLUDE_REDIS"):
+    for host in HOSTS:
+        try:
+            ok, auth, pong, cn, ver = redis_check(host, PORTS["redis"])
+            results.append(ok)
+            mark = "PASS" if ok else "FAIL"
+            print(f"[{mark}] {host}:{PORTS['redis']} redis AUTH={auth} PING={pong} TLS={ver} CN={cn}")
+        except Exception as exc:
+            results.append(False)
+            print(f"[FAIL] {host}:{PORTS['redis']} redis {type(exc).__name__}: {exc}")
+else:
+    print("[SKIP] redis 未启用外部 LB/TLS，跳过验证")
 
 print("\n=== Pgpool TLS ===")
 for host in HOSTS:
@@ -267,15 +289,18 @@ for host in HOSTS:
         print(f"[FAIL] {host}:{PORTS['pgpool']} pgpool {type(exc).__name__}: {exc}")
 
 print("\n=== Elasticsearch 传输层 TLS ===")
-for host in HOSTS:
-    try:
-        ok, cn, ver = tls_check(host, PORTS["es_transport"])
-        results.append(ok)
-        mark = "PASS" if ok else "FAIL"
-        print(f"[{mark}] {host}:{PORTS['es_transport']} elasticsearch-transport TLS={ver} CN={cn}")
-    except Exception as exc:
-        results.append(False)
-        print(f"[FAIL] {host}:{PORTS['es_transport']} elasticsearch-transport {type(exc).__name__}: {exc}")
+if env_enabled("VERIFY_TLS_INCLUDE_ES_TRANSPORT", "false"):
+    for host in HOSTS:
+        try:
+            ok, cn, ver = tls_check(host, PORTS["es_transport"])
+            results.append(ok)
+            mark = "PASS" if ok else "FAIL"
+            print(f"[{mark}] {host}:{PORTS['es_transport']} elasticsearch-transport TLS={ver} CN={cn}")
+        except Exception as exc:
+            results.append(False)
+            print(f"[FAIL] {host}:{PORTS['es_transport']} elasticsearch-transport {type(exc).__name__}: {exc}")
+else:
+    print("[SKIP] elasticsearch transport 未启用外部 LB/TLS，跳过验证")
 
 counter = Counter(results)
 print(f"\nSUMMARY pass={counter[True]} fail={counter[False]} total={len(results)}")
