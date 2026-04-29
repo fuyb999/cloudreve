@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jinzhu/gorm"
@@ -28,7 +29,7 @@ func Init() error {
 	if confDBType == "sqlite3" {
 		confDBType = "sqlite"
 	}
-	
+
 	// 兼容 "mariadb" 数据库
 	if confDBType == "mariadb" {
 		confDBType = "mysql"
@@ -39,12 +40,7 @@ func Init() error {
 		// 未指定数据库或者明确指定为 sqlite 时，使用 SQLite 数据库
 		db, err = gorm.Open("sqlite3", util.RelativePath(conf.DatabaseConfig.DBFile))
 	case "postgres":
-		db, err = gorm.Open(confDBType, fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
-			conf.DatabaseConfig.Host,
-			conf.DatabaseConfig.User,
-			conf.DatabaseConfig.Password,
-			conf.DatabaseConfig.Name,
-			conf.DatabaseConfig.Port))
+		db, err = gorm.Open(confDBType, buildPostgresConnString())
 	case "mysql", "mssql":
 		var host string
 		if conf.DatabaseConfig.UnixSocket {
@@ -79,18 +75,55 @@ func Init() error {
 	// Debug模式下，输出所有 SQL 日志
 	db.LogMode(true)
 
-	//设置连接池
-	db.DB().SetMaxIdleConns(50)
-	if confDBType == "sqlite" || confDBType == "UNSET" {
-		db.DB().SetMaxOpenConns(1)
-	} else {
-		db.DB().SetMaxOpenConns(100)
-	}
-
-	//超时
-	db.DB().SetConnMaxLifetime(time.Second * 30)
+	applyDBPoolConfig(db, confDBType)
 
 	DB = db
 
 	return nil
+}
+
+func buildPostgresConnString() string {
+	sslConfig := strings.TrimSpace(conf.DatabaseConfig.SSLMode)
+	if sslConfig == "" {
+		sslConfig = "disable"
+	}
+	if !strings.Contains(sslConfig, "=") {
+		sslConfig = "sslmode=" + sslConfig
+	}
+
+	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d %s",
+		conf.DatabaseConfig.Host,
+		conf.DatabaseConfig.User,
+		conf.DatabaseConfig.Password,
+		conf.DatabaseConfig.Name,
+		conf.DatabaseConfig.Port,
+		sslConfig,
+	)
+}
+
+func applyDBPoolConfig(db *gorm.DB, dbType string) {
+	if dbType == "sqlite" || dbType == "UNSET" {
+		db.DB().SetMaxOpenConns(1)
+		db.DB().SetMaxIdleConns(1)
+		db.DB().SetConnMaxLifetime(0)
+		db.DB().SetConnMaxIdleTime(0)
+		return
+	}
+
+	maxOpen := conf.DatabaseConfig.MaxOpenConns
+	maxIdle := conf.DatabaseConfig.MaxIdleConns
+	if maxOpen > 0 && maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+
+	connMaxLifetime := time.Duration(conf.DatabaseConfig.ConnMaxLifetime) * time.Second
+	connMaxIdleTime := time.Duration(conf.DatabaseConfig.ConnMaxIdleTime) * time.Second
+	if connMaxLifetime > 0 && connMaxIdleTime > connMaxLifetime {
+		connMaxIdleTime = connMaxLifetime
+	}
+
+	db.DB().SetMaxOpenConns(maxOpen)
+	db.DB().SetMaxIdleConns(maxIdle)
+	db.DB().SetConnMaxLifetime(connMaxLifetime)
+	db.DB().SetConnMaxIdleTime(connMaxIdleTime)
 }

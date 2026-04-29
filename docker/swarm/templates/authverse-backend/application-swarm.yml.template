@@ -5,6 +5,20 @@ server:
 spring:
   datasource:
     dynamic:
+      druid:
+        initial-size: ${AUTHVERSE_DB_POOL_INITIAL_SIZE}
+        min-idle: ${AUTHVERSE_DB_POOL_MIN_IDLE}
+        max-active: ${AUTHVERSE_DB_POOL_MAX_ACTIVE}
+        max-wait: ${AUTHVERSE_DB_POOL_MAX_WAIT}
+        time-between-eviction-runs-millis: ${AUTHVERSE_DB_POOL_TIME_BETWEEN_EVICTION_RUNS_MILLIS}
+        min-evictable-idle-time-millis: ${AUTHVERSE_DB_POOL_MIN_EVICTABLE_IDLE_TIME_MILLIS}
+        max-evictable-idle-time-millis: ${AUTHVERSE_DB_POOL_MAX_EVICTABLE_IDLE_TIME_MILLIS}
+        validation-query: SELECT 1
+        test-while-idle: true
+        test-on-borrow: false
+        test-on-return: false
+        pool-prepared-statements: true
+        max-pool-prepared-statement-per-connection-size: 20
       datasource:
         master:
           url: "${AUTHVERSE_DB_MASTER_URL}"

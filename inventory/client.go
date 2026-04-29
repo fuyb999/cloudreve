@@ -5,6 +5,7 @@ import (
 	rawsql "database/sql"
 	"database/sql/driver"
 	"fmt"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
@@ -167,12 +168,7 @@ func NewRawEntClient(l logging.Logger, config conf.ConfigProvider) (*ent.Client,
 			client, err = sql.Open("sqlite3", util.RelativePath(dbConfig.DBFile))
 		case conf.PostgresDB:
 			l.Info("Connect to Postgres database %q.", dbConfig.Host)
-			client, err = sql.Open("postgres", fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
-				dbConfig.Host,
-				dbConfig.User,
-				dbConfig.Password,
-				dbConfig.Name,
-				dbConfig.Port))
+			client, err = sql.Open("postgres", buildPostgresConnString(dbConfig))
 		case conf.MySqlDB, conf.MsSqlDB:
 			l.Info("Connect to MySQL/SQLServer database %q.", dbConfig.Host)
 			var host string
@@ -195,22 +191,11 @@ func NewRawEntClient(l logging.Logger, config conf.ConfigProvider) (*ent.Client,
 			return nil, fmt.Errorf("unsupported database type %q", confDBType)
 		}
 
-		if err != nil {
-			return nil, fmt.Errorf("failed to open database: %w", err)
-		}
-
 	}
-	// Set connection pool
-	db := client.DB()
-	db.SetMaxIdleConns(50)
-	if confDBType == "sqlite" || confDBType == "UNSET" {
-		db.SetMaxOpenConns(1)
-	} else {
-		db.SetMaxOpenConns(100)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-
-	// Set timeout
-	db.SetConnMaxLifetime(time.Second * 30)
+	applyDBPoolConfig(client.DB(), confDBType, dbConfig)
 
 	driverOpt := ent.Driver(client)
 
@@ -223,6 +208,53 @@ func NewRawEntClient(l logging.Logger, config conf.ConfigProvider) (*ent.Client,
 	}
 
 	return ent.NewClient(driverOpt), nil
+}
+
+func buildPostgresConnString(dbConfig *conf.Database) string {
+	sslConfig := strings.TrimSpace(dbConfig.SSLMode)
+	if sslConfig == "" {
+		sslConfig = "disable"
+	}
+	if !strings.Contains(sslConfig, "=") {
+		sslConfig = "sslmode=" + sslConfig
+	}
+
+	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d %s",
+		dbConfig.Host,
+		dbConfig.User,
+		dbConfig.Password,
+		dbConfig.Name,
+		dbConfig.Port,
+		sslConfig,
+	)
+}
+
+func normalizeDBPoolConfig(dbType conf.DBType, dbConfig *conf.Database) (int, int, time.Duration, time.Duration) {
+	if dbType == conf.SQLiteDB || dbType == conf.SQLite3DB || dbType == "" {
+		return 1, 1, 0, 0
+	}
+
+	maxOpen := dbConfig.MaxOpenConns
+	maxIdle := dbConfig.MaxIdleConns
+	if maxOpen > 0 && maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+
+	connMaxLifetime := time.Duration(dbConfig.ConnMaxLifetime) * time.Second
+	connMaxIdleTime := time.Duration(dbConfig.ConnMaxIdleTime) * time.Second
+	if connMaxLifetime > 0 && connMaxIdleTime > connMaxLifetime {
+		connMaxIdleTime = connMaxLifetime
+	}
+
+	return maxOpen, maxIdle, connMaxLifetime, connMaxIdleTime
+}
+
+func applyDBPoolConfig(db *rawsql.DB, dbType conf.DBType, dbConfig *conf.Database) {
+	maxOpen, maxIdle, connMaxLifetime, connMaxIdleTime := normalizeDBPoolConfig(dbType, dbConfig)
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(connMaxLifetime)
+	db.SetConnMaxIdleTime(connMaxIdleTime)
 }
 
 type sqlite3Driver struct {

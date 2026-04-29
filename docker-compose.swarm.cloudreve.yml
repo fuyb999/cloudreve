@@ -82,6 +82,11 @@ services:
       CR_CONF_Database.Port: "5432"
       CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
       CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
+      CR_CONF_Database.SSLMode: "${CLOUDREVE_DB_SSL_MODE:-disable}"
+      CR_CONF_Database.MaxIdleConns: "${CLOUDREVE_DB_MAX_IDLE_CONNS:-10}"
+      CR_CONF_Database.MaxOpenConns: "${CLOUDREVE_DB_MAX_OPEN_CONNS:-30}"
+      CR_CONF_Database.ConnMaxLifetime: "${CLOUDREVE_DB_CONN_MAX_LIFETIME:-600}"
+      CR_CONF_Database.ConnMaxIdleTime: "${CLOUDREVE_DB_CONN_MAX_IDLE_TIME:-300}"
       CR_CONF_Redis.Server: ${CLOUDREVE_REDIS_ENDPOINT:-redis-proxy-internal:6379}
       CR_CONF_Redis.UseTLS: ${CLOUDREVE_REDIS_USE_TLS:-false}
       CR_CONF_Redis.TLSSkipVerify: ${CLOUDREVE_REDIS_TLS_SKIP_VERIFY:-false}
@@ -231,6 +236,11 @@ services:
       CR_CONF_CORS.AllowOrigins: "*"
       CR_CONF_CORS.AllowMethods: OPTIONS,GET,POST
       CR_CONF_CORS.AllowHeaders: "*"
+      CR_CONF_Database.SSLMode: "${CLOUDREVE_DB_SSL_MODE:-disable}"
+      CR_CONF_Database.MaxIdleConns: "${CLOUDREVE_DB_MAX_IDLE_CONNS:-10}"
+      CR_CONF_Database.MaxOpenConns: "${CLOUDREVE_DB_MAX_OPEN_CONNS:-30}"
+      CR_CONF_Database.ConnMaxLifetime: "${CLOUDREVE_DB_CONN_MAX_LIFETIME:-600}"
+      CR_CONF_Database.ConnMaxIdleTime: "${CLOUDREVE_DB_CONN_MAX_IDLE_TIME:-300}"
       CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-false}
       CR_CONF_Kafka.Brokers: ${CLOUDREVE_GLOBAL_KAFKA_BROKERS:-kafka:9092}
       CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}

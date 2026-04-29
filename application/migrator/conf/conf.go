@@ -8,16 +8,21 @@ import (
 
 // database 数据库
 type database struct {
-	Type        string
-	User        string
-	Password    string
-	Host        string
-	Name        string
-	TablePrefix string
-	DBFile      string
-	Port        int
-	Charset     string
-	UnixSocket  bool
+	Type            string
+	User            string
+	Password        string
+	Host            string
+	Name            string
+	TablePrefix     string
+	DBFile          string
+	Port            int
+	Charset         string
+	UnixSocket      bool
+	SSLMode         string
+	MaxIdleConns    int `validate:"gte=0"`
+	MaxOpenConns    int `validate:"gte=0"`
+	ConnMaxLifetime int `validate:"gte=0"`
+	ConnMaxIdleTime int `validate:"gte=0"`
 }
 
 // system 系统通用配置

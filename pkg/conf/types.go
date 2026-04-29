@@ -29,6 +29,14 @@ type Database struct {
 	DatabaseURL string
 	// SSLMode 允许使用SSL连接数据库, 用户可以在sslmode string中添加证书等配置
 	SSLMode string
+	// MaxIdleConns 连接池最大空闲连接数，0 表示不保留空闲连接。
+	MaxIdleConns int `validate:"gte=0"`
+	// MaxOpenConns 连接池最大打开连接数，0 表示不限制。
+	MaxOpenConns int `validate:"gte=0"`
+	// ConnMaxLifetime 连接最大生命周期，单位秒，0 表示不限制。
+	ConnMaxLifetime int `validate:"gte=0"`
+	// ConnMaxIdleTime 空闲连接最大保留时间，单位秒，0 表示不限制。
+	ConnMaxIdleTime int `validate:"gte=0"`
 }
 
 type SysMode string
@@ -202,11 +210,16 @@ var KafkaConfig = &Kafka{
 
 // DatabaseConfig 数据库配置
 var DatabaseConfig = &Database{
-	Charset:     "utf8mb4",
-	DBFile:      util.DataPath("cloudreve.db"),
-	Port:        3306,
-	UnixSocket:  false,
-	DatabaseURL: "",
+	Charset:         "utf8mb4",
+	DBFile:          util.DataPath("cloudreve.db"),
+	Port:            3306,
+	UnixSocket:      false,
+	DatabaseURL:     "",
+	SSLMode:         "disable",
+	MaxIdleConns:    10,
+	MaxOpenConns:    30,
+	ConnMaxLifetime: 600,
+	ConnMaxIdleTime: 300,
 }
 
 // SystemConfig 系统公用配置
