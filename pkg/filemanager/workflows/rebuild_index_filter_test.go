@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
+	"github.com/cloudreve/Cloudreve/v4/ent"
+	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 )
@@ -73,6 +75,76 @@ func TestMatchesRebuildStoragePolicy(t *testing.T) {
 	}
 	if matchesRebuildStoragePolicy(doc, []int{3}) {
 		t.Fatal("expected latest version storage policy to override file storage policy filter")
+	}
+}
+
+func TestShouldIndexRebuildFile(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileModel   *ent.File
+		syncFolders bool
+		want        bool
+	}{
+		{
+			name:        "nil file",
+			fileModel:   nil,
+			syncFolders: false,
+			want:        false,
+		},
+		{
+			name:        "regular file always indexed",
+			fileModel:   &ent.File{Type: int(types.FileTypeFile)},
+			syncFolders: false,
+			want:        true,
+		},
+		{
+			name:        "folder skipped when sync disabled",
+			fileModel:   &ent.File{Type: int(types.FileTypeFolder)},
+			syncFolders: false,
+			want:        false,
+		},
+		{
+			name:        "folder indexed when sync enabled",
+			fileModel:   &ent.File{Type: int(types.FileTypeFolder)},
+			syncFolders: true,
+			want:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldIndexRebuildFile(tt.fileModel, tt.syncFolders); got != tt.want {
+				t.Fatalf("unexpected shouldIndexRebuildFile result: got %v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterRebuildFiles(t *testing.T) {
+	files := []*ent.File{
+		{ID: 1, Type: int(types.FileTypeFile)},
+		{ID: 2, Type: int(types.FileTypeFolder)},
+		{ID: 3, Type: int(types.FileTypeFile)},
+		{ID: 4, Type: int(types.FileTypeFolder)},
+	}
+
+	filtered, skipped := filterRebuildFiles(files, false)
+	if skipped != 2 {
+		t.Fatalf("unexpected skipped count: got %d want %d", skipped, 2)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("unexpected filtered length: got %d want %d", len(filtered), 2)
+	}
+	if filtered[0].ID != 1 || filtered[1].ID != 3 {
+		t.Fatalf("unexpected filtered files: got ids %d,%d", filtered[0].ID, filtered[1].ID)
+	}
+
+	filteredAll, skippedAll := filterRebuildFiles(files, true)
+	if skippedAll != 0 {
+		t.Fatalf("unexpected skipped count when folder sync enabled: got %d want 0", skippedAll)
+	}
+	if len(filteredAll) != len(files) {
+		t.Fatalf("unexpected filtered length when folder sync enabled: got %d want %d", len(filteredAll), len(files))
 	}
 }
 

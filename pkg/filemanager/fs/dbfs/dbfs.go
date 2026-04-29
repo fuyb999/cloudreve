@@ -722,9 +722,9 @@ func (f *DBFS) createFile(ctx context.Context, parent *File, name string, fileTy
 		createFileArgs.StoragePolicyID = o.preferredStoragePolicy.ID
 	} else {
 		// New children should follow the effective owner of the newly created resource.
-		policy, err := f.storagePolicyClient.GetByGroup(ctx, owner.Edges.Group)
+		policy, err := f.storagePolicyForOwner(ctx, owner)
 		if err != nil {
-			return nil, serializer.NewError(serializer.CodeDBError, "Failed to get available storage policies", err)
+			return nil, err
 		}
 
 		createFileArgs.StoragePolicyID = policy.ID
@@ -827,11 +827,9 @@ func (f *DBFS) ensureOwnerWithGroup(ctx context.Context, file *File) (*ent.User,
 	return owner, nil
 }
 
-// getPreferredPolicy tries to get the preferred storage policy for the given file.
-func (f *DBFS) getPreferredPolicy(ctx context.Context, file *File) (*ent.StoragePolicy, error) {
-	owner, err := f.ensureOwnerWithGroup(ctx, file)
-	if err != nil {
-		return nil, err
+func (f *DBFS) storagePolicyForOwner(ctx context.Context, owner *ent.User) (*ent.StoragePolicy, error) {
+	if owner == nil {
+		return nil, fmt.Errorf("owner is nil")
 	}
 
 	ownerGroup := owner.Edges.Group
@@ -850,6 +848,16 @@ func (f *DBFS) getPreferredPolicy(ctx context.Context, file *File) (*ent.Storage
 	f.groupPolicyCache[ownerGroup.ID] = groupPolicy
 
 	return groupPolicy, nil
+}
+
+// getPreferredPolicy tries to get the preferred storage policy for the given file.
+func (f *DBFS) getPreferredPolicy(ctx context.Context, file *File) (*ent.StoragePolicy, error) {
+	owner, err := f.ensureOwnerWithGroup(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+
+	return f.storagePolicyForOwner(ctx, owner)
 }
 
 func (f *DBFS) getFileByPath(ctx context.Context, navigator Navigator, path *fs.URI) (*File, error) {

@@ -1443,9 +1443,9 @@ func shouldIgnoreFTSSyncError(err error) bool {
 }
 
 // ShouldExtractText checks if a file is eligible for text extraction.
-// Non-Tika extractors still use extension-based gating, while Tika only uses
-// size-based prefiltering and relies on its detector/parser chain to decide
-// whether the content is parseable.
+// Tika only applies size-based prefiltering and defers parseability detection
+// to its detector/parser chain, while non-Tika extractors still honor the
+// configured extension allow-list.
 func ShouldExtractText(extractor searcher.TextExtractor, fileName string, size int64) bool {
 	if extractor == nil || size <= 0 {
 		return false

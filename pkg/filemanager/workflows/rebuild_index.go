@@ -193,9 +193,18 @@ func (m *RebuildIndexTask) index(ctx context.Context, dep dependency.Dep) (task.
 		return task.StatusCompleted, nil
 	}
 
-	batchFailed := m.processBatch(ctx, dep, files)
+	indexableFiles, skipped := filterRebuildFiles(files, dep.SettingProvider().FTSSyncFolders(ctx))
+	if skipped > 0 {
+		m.state.Total -= skipped
+		if m.state.Total < 0 {
+			m.state.Total = 0
+		}
+		atomic.StoreInt64(&m.progress[ProgressTypeRebuildIndex].Total, int64(m.state.Total))
+	}
+
+	batchFailed := m.processBatch(ctx, dep, indexableFiles)
 	m.state.Failed += batchFailed
-	m.state.Indexed += len(files)
+	m.state.Indexed += len(indexableFiles)
 	m.state.LastFileID = files[len(files)-1].ID
 
 	atomic.StoreInt64(&m.progress[ProgressTypeRebuildIndex].Current, int64(m.state.Indexed))
@@ -211,6 +220,33 @@ func shouldIndexRebuildURI(uri *fs.URI) bool {
 	}
 
 	return uri.FileSystem() != constants.FileSystemTrash
+}
+
+func shouldIndexRebuildFile(fileModel *ent.File, syncFolders bool) bool {
+	if fileModel == nil {
+		return false
+	}
+
+	return fileModel.Type != int(types.FileTypeFolder) || syncFolders
+}
+
+func filterRebuildFiles(files []*ent.File, syncFolders bool) ([]*ent.File, int) {
+	if len(files) == 0 {
+		return nil, 0
+	}
+
+	filtered := make([]*ent.File, 0, len(files))
+	skipped := 0
+	for _, fileModel := range files {
+		if !shouldIndexRebuildFile(fileModel, syncFolders) {
+			skipped++
+			continue
+		}
+
+		filtered = append(filtered, fileModel)
+	}
+
+	return filtered, skipped
 }
 
 func matchesRebuildStoragePolicy(doc *searcher.SearchFileDocument, filteredStoragePolicy []int) bool {
@@ -229,6 +265,7 @@ func matchesRebuildStoragePolicy(doc *searcher.SearchFileDocument, filteredStora
 // processBatch indexes a batch of files concurrently.
 func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep, files []*ent.File) int {
 	user := inventory.UserFromContext(ctx)
+	syncFolders := dep.SettingProvider().FTSSyncFolders(ctx)
 
 	var (
 		wg       sync.WaitGroup
@@ -241,6 +278,9 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 	sem := make(chan struct{}, RebuildIndexConcurrent)
 	for _, f := range files {
 		fileByID[f.ID] = f
+		if !shouldIndexRebuildFile(f, syncFolders) {
+			continue
+		}
 
 		select {
 		case <-ctx.Done():

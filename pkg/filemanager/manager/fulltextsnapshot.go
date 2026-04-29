@@ -86,14 +86,15 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 	}
 	defer ownerManager.Recycle()
 
-	traversed, err := ownerManager.TraverseFile(ctx, fileID)
+	ownerURI, err := m.resolveOwnerFTSURI(ctx, fileModel, ownerManager)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve file uri: %w", err)
+		return nil, nil, fmt.Errorf("failed to resolve owner file uri: %w", err)
 	}
 
-	ownerURI := traversed.Uri(true)
-	if ownerURI == nil {
-		return nil, nil, fmt.Errorf("failed to resolve file uri")
+	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
+	sidecarURI := ownerURI
+	if publicURI != nil {
+		sidecarURI = publicURI
 	}
 
 	var primaryEntity *ent.Entity
@@ -114,7 +115,7 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 		ownerManager,
 		fileModel,
 		primaryFTSEntity,
-		ownerURI,
+		sidecarURI,
 		opts,
 	)
 	if extractErr != nil {
@@ -126,9 +127,10 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 
 	filePolicy, _ := m.storagePolicyFromID(ctx, fileModel.StoragePolicyFiles)
 	latestVersion := buildSearchVersion(primaryEntity, fileModel.Name, filePolicy)
+	if latestVersion == nil && fileModel.Type == int(types.FileTypeFile) {
+		latestVersion = buildFallbackSearchVersion(fileModel, filePolicy)
+	}
 	attachments := buildSearchAttachments(fileModel, ownerURI, filePolicy)
-
-	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
 	pathText := buildFTSSearchPathText(ownerURI, publicURI)
 	searchURIs := buildFTSSearchURIs(ownerURI, publicURI)
 	searchPaths := buildFTSSearchPaths(ownerURI, publicURI)
@@ -179,6 +181,53 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 	}
 
 	return doc, ownerURI, nil
+}
+
+func (m *manager) resolveOwnerFTSURI(ctx context.Context, fileModel *ent.File, ownerManager FileManager) (*fs.URI, error) {
+	if fileModel == nil {
+		return nil, fmt.Errorf("file model is nil")
+	}
+
+	if ownerManager == nil {
+		var err error
+		ownerManager, err = m.fileManagerForOwner(ctx, fileModel.OwnerID)
+		if err != nil {
+			return nil, err
+		}
+		defer ownerManager.Recycle()
+	}
+
+	traversed, err := ownerManager.TraverseFile(ctx, fileModel.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if traversed == nil || traversed.IsNil() {
+		return nil, fmt.Errorf("failed to resolve file uri")
+	}
+
+	ownerURI := traversed.Uri(true)
+	if ownerURI == nil {
+		return nil, fmt.Errorf("failed to resolve file uri")
+	}
+
+	if publicURI := m.resolvePublicSearchURI(ctx, fileModel); publicURI != nil && len(publicURI.Elements()) > 0 {
+		ownerElems := ownerURI.Elements()
+		publicElems := publicURI.Elements()
+		if len(publicElems) <= len(ownerElems) {
+			tail := ownerElems[len(ownerElems)-len(publicElems):]
+			if strings.EqualFold(strings.Join(tail, "/"), strings.Join(publicElems, "/")) {
+				relative := ownerElems[:len(ownerElems)-len(publicElems)]
+				root := ownerURI.Root()
+				for _, elem := range relative {
+					root = root.Join(elem)
+				}
+				ownerURI = root.Join(publicElems...)
+			}
+		}
+	}
+
+	return ownerURI, nil
 }
 
 func (m *manager) resolvePublicSearchURI(ctx context.Context, fileModel *ent.File) *fs.URI {
@@ -389,7 +438,7 @@ func extractFTSContent(
 	ownerManager FileManager,
 	fileModel *ent.File,
 	primaryEntity fs.Entity,
-	uri *fs.URI,
+	sidecarURI *fs.URI,
 	opts FTSBuildOptions,
 ) (string, []searcher.SearchAttachmentDocument, error) {
 	if primaryEntity == nil {
@@ -412,7 +461,7 @@ func extractFTSContent(
 	if loaded, ok := ownerManager.(*manager); ok {
 		internal = loaded
 		cfg := internal.settings.FTSTikaExtractor(ctx)
-		sidecarContent, sidecarAttachments, sidecarManifest, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri)
+		sidecarContent, sidecarAttachments, sidecarManifest, hasCurrentSidecar = internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, sidecarURI)
 		sidecarCfg.reuseTextEnabled = cfg.SidecarTextEnabled
 		sidecarCfg.reuseAssetsEnabled = cfg.SidecarAssetsEnabled
 		sidecarCfg.persistTextEnabled = cfg.SidecarTextEnabled
@@ -472,12 +521,12 @@ func extractFTSContent(
 	}
 
 	if plan.NeedAttachmentExtraction {
-		attachments = extractFTSEmbeddedAttachments(ctx, extractor, ownerManager, fileModel, primaryEntity, uri, source)
+		attachments = extractFTSEmbeddedAttachments(ctx, extractor, ownerManager, fileModel, primaryEntity, sidecarURI, source)
 	}
 	if plan.ShouldPersistSidecar {
-		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, uri, primaryEntity, source, text)
-		if internal != nil && sidecarCfg.persistAssetsEnabled && len(attachments) > 0 {
-			if refreshedText, refreshedAttachments, _, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, uri); ok {
+		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, sidecarURI, primaryEntity, source, text)
+		if internal != nil && (sidecarCfg.persistTextEnabled || sidecarCfg.persistAssetsEnabled) {
+			if refreshedText, refreshedAttachments, _, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, sidecarURI); ok {
 				if sidecarCfg.persistTextEnabled && text == "" {
 					text = refreshedText
 				}
@@ -585,6 +634,9 @@ func (m *manager) loadFTSContentFromSidecar(
 	}
 	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "rmeta.json"); ok {
 		rmetaRaw = raw
+	}
+	if content == "" && len(rmetaRaw) > 0 {
+		content = parseTikaRMetaRootContent(rmetaRaw)
 	}
 
 	return content, m.hydrateFTSSidecarAttachmentContents(ctx, handler, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw)), manifest, true
@@ -968,6 +1020,48 @@ type tikaRMetaAttachment struct {
 	Metadata map[string]string
 }
 
+func parseTikaRMetaRootContent(raw []byte) string {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return ""
+	}
+
+	var payload []map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || len(payload) == 0 {
+		return ""
+	}
+
+	for index, item := range payload {
+		if item == nil {
+			continue
+		}
+
+		embeddedPath := firstNonEmpty(
+			stringValue(item["X-TIKA:embedded_resource_path"]),
+			stringValue(item["embedded_resource_path"]),
+			stringValue(item["embeddedResourcePath"]),
+		)
+		if index > 0 && strings.TrimSpace(embeddedPath) != "" {
+			continue
+		}
+
+		content := strings.TrimSpace(firstNonEmpty(
+			stringValue(item["X-TIKA:content"]),
+			stringValue(item["content"]),
+		))
+		if content == "" {
+			continue
+		}
+
+		mimeType := firstNonEmpty(
+			stringValue(item["Content-Type"]),
+			stringValue(item["dc:format"]),
+		)
+		return sanitizeTikaAttachmentContent(content, mimeType)
+	}
+
+	return ""
+}
+
 func parseTikaRMetaAttachments(raw []byte) []tikaRMetaAttachment {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
@@ -1153,6 +1247,33 @@ func buildSearchVersion(entity *ent.Entity, fileName string, policy *ent.Storage
 		Encrypted:       entity.Props != nil && entity.Props.EncryptMetadata != nil,
 		Props:           mapFromEntityProps(entity.Props),
 		MimeType:        mime.TypeByExtension(filepath.Ext(fileName)),
+	}
+
+	if policy != nil {
+		doc.StorageType = policy.Type
+		doc.Bucket = policy.BucketName
+		if doc.StoragePolicyID == 0 {
+			doc.StoragePolicyID = policy.ID
+		}
+	}
+
+	return doc
+}
+
+func buildFallbackSearchVersion(fileModel *ent.File, policy *ent.StoragePolicy) *searcher.SearchFileVersionDocument {
+	if fileModel == nil {
+		return nil
+	}
+
+	doc := &searcher.SearchFileVersionDocument{
+		ID:              fmt.Sprintf("file:%d", fileModel.ID),
+		EntityType:      entityTypeString(types.EntityTypeVersion),
+		EntityTypeValue: int(types.EntityTypeVersion),
+		Size:            fileModel.Size,
+		CreatedAt:       util.NewDateTimeSecond(fileModel.CreatedAt),
+		UpdatedAt:       util.NewDateTimeSecond(fileModel.UpdatedAt),
+		StoragePolicyID: fileModel.StoragePolicyFiles,
+		MimeType:        mime.TypeByExtension(filepath.Ext(fileModel.Name)),
 	}
 
 	if policy != nil {

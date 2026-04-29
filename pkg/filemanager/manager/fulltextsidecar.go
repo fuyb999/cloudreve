@@ -479,9 +479,9 @@ func (m *manager) persistFTSSidecarsToHandler(
 		SourcePath:  sourcePath,
 		ExtractedAt: time.Now(),
 	}
+	var rmetaRaw []byte
 
 	if cfg.SidecarTextEnabled {
-		manifest.TextReady = true
 		if text == "" && rewindSidecarSource(m, source) {
 			extracted, err := tika.ExtractFile(ctx, source, fileModel.Name)
 			if err != nil {
@@ -490,12 +490,22 @@ func (m *manager) persistFTSSidecarsToHandler(
 			text = strings.TrimSpace(extracted)
 		}
 
+		if text == "" && rewindSidecarSource(m, source) {
+			raw, err := tika.RMetaFile(ctx, source, fileModel.Name, artifactOpts)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to extract sidecar rmeta for text fallback: %w", err)
+			}
+			rmetaRaw = append([]byte(nil), raw...)
+			text = parseTikaRMetaRootContent(rmetaRaw)
+		}
+
 		if text != "" {
 			savePath := path.Join(prefix, "content.txt")
 			if err := putSidecarBytes(ctx, handler, savePath, "content.txt", "text/plain; charset=utf-8", []byte(text)); err != nil {
 				return nil, "", fmt.Errorf("failed to save sidecar text: %w", err)
 			}
 
+			manifest.TextReady = true
 			manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
 				ID:       "content.txt",
 				Depth:    0,
@@ -510,29 +520,28 @@ func (m *manager) persistFTSSidecarsToHandler(
 
 	if cfg.SidecarAssetsEnabled {
 		manifest.AssetsReady = true
-		var rmetaRaw []byte
-
-		if rewindSidecarSource(m, source) {
+		if len(rmetaRaw) == 0 && rewindSidecarSource(m, source) {
 			raw, err := tika.RMetaFile(ctx, source, fileModel.Name, artifactOpts)
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to extract tika rmeta: %w", err)
 			}
-			if len(bytes.TrimSpace(raw)) > 0 {
-				rmetaRaw = append([]byte(nil), raw...)
-				savePath := path.Join(prefix, "rmeta.json")
-				if err := putSidecarBytes(ctx, handler, savePath, "rmeta.json", "application/json", raw); err != nil {
-					return nil, "", fmt.Errorf("failed to save tika rmeta sidecar: %w", err)
-				}
-				manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
-					ID:       "rmeta.json",
-					Depth:    0,
-					Kind:     "metadata",
-					Name:     "rmeta.json",
-					Path:     savePath,
-					MimeType: "application/json",
-					Size:     int64(len(raw)),
-				})
+			rmetaRaw = append([]byte(nil), raw...)
+		}
+
+		if len(bytes.TrimSpace(rmetaRaw)) > 0 {
+			savePath := path.Join(prefix, "rmeta.json")
+			if err := putSidecarBytes(ctx, handler, savePath, "rmeta.json", "application/json", rmetaRaw); err != nil {
+				return nil, "", fmt.Errorf("failed to save tika rmeta sidecar: %w", err)
 			}
+			manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
+				ID:       "rmeta.json",
+				Depth:    0,
+				Kind:     "metadata",
+				Name:     "rmeta.json",
+				Path:     savePath,
+				MimeType: "application/json",
+				Size:     int64(len(rmetaRaw)),
+			})
 		}
 
 		if len(rmetaRaw) > 0 {

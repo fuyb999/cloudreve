@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,7 +18,11 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
+	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/gofrs/uuid"
 )
 
@@ -110,6 +115,28 @@ func (m *memorySidecarHandler) MediaMeta(ctx context.Context, path, ext, languag
 func (m *openOnlyMemorySidecarHandler) Capabilities() *driver.Capabilities {
 	return &driver.Capabilities{
 		StaticFeatures: &boolset.BooleanSet{},
+	}
+}
+
+type readerAtReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (r readerAtReadSeekCloser) Close() error { return nil }
+
+type fakeTikaClient struct {
+	responses map[string][]byte
+}
+
+func (c *fakeTikaClient) Apply(opts ...request.Option) {}
+
+func (c *fakeTikaClient) Request(method, target string, body io.Reader, opts ...request.Option) *request.Response {
+	data := c.responses[target]
+	return &request.Response{
+		Response: &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+		},
 	}
 }
 
@@ -355,6 +382,66 @@ func TestFTSSidecarCleanupDirectoriesFallsBackToBaseDirs(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected cleanup directories without manifest: got %#v want %#v", got, want)
+	}
+}
+
+func TestPersistFTSSidecarsToHandlerUsesRMetaRootContentFallback(t *testing.T) {
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	ctx := context.Background()
+
+	m := &manager{
+		l: logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{
+			tikaCfg: &setting.FTSTikaExtractorSetting{
+				Endpoint:             "http://tika:9998",
+				SidecarEnabled:       true,
+				SidecarTextEnabled:   true,
+				SidecarAssetsEnabled: true,
+			},
+		},
+	}
+
+	rmetaRaw := []byte(`[
+		{"Content-Type":"application/pdf","X-TIKA:content":"根文档内容"},
+		{"X-TIKA:embedded_resource_path":"embedded/note.txt","resourceName":"note.txt","Content-Type":"text/plain","X-TIKA:content":"附件内容"}
+	]`)
+	client := &fakeTikaClient{
+		responses: map[string][]byte{
+			"http://tika:9998/tika":   []byte(""),
+			"http://tika:9998/rmeta":  rmetaRaw,
+			"http://tika:9998/unpack": []byte(""),
+		},
+	}
+	extractor := tikaextractor.NewTikaExtractor(client, m.settings, m.l, m.settings.FTSTikaExtractor(ctx))
+	fileModel := &ent.File{ID: 42, OwnerID: 1, Name: "blank.pdf"}
+	entity := &testEntity{id: 7, source: "bucket/blank.pdf"}
+	policy := &ent.StoragePolicy{ID: 9, BucketName: "bucket"}
+	source := bytes.NewReader([]byte("pdf payload"))
+
+	manifest, manifestPath, err := m.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, fileModel.Name, entity, policy, handler, readerAtReadSeekCloser{Reader: source}, "")
+	if err != nil {
+		t.Fatalf("persistFTSSidecarsToHandler returned error: %v", err)
+	}
+	if manifest == nil || manifestPath == "" {
+		t.Fatalf("expected manifest and path, got manifest=%+v path=%q", manifest, manifestPath)
+	}
+	if !manifest.TextReady {
+		t.Fatal("expected text sidecar to be marked ready")
+	}
+	contentArtifact, ok := manifest.ObjectByName("content.txt")
+	if !ok {
+		t.Fatal("expected content.txt artifact in manifest")
+	}
+	if contentArtifact.Size == 0 {
+		t.Fatal("expected non-empty content artifact from rmeta root fallback")
+	}
+	contentRaw, err := os.ReadFile(handler.LocalPath(ctx, contentArtifact.Path))
+	if err != nil {
+		t.Fatalf("failed to read persisted content artifact: %v", err)
+	}
+	if got, want := string(contentRaw), "根文档内容"; got != want {
+		t.Fatalf("unexpected persisted content artifact: got %q want %q", got, want)
 	}
 }
 

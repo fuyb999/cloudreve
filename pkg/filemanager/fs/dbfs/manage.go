@@ -176,7 +176,12 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 			f.emitFileCreated(ctx, ancestor)
 		} else {
 			// valide file name
-			policy, err := f.getPreferredPolicy(ctx, ancestor)
+			owner, err := f.ownerForNewChild(ctx, ancestor)
+			if err != nil {
+				return nil, err
+			}
+
+			policy, err := f.storagePolicyForOwner(ctx, owner)
 			if err != nil {
 				return nil, err
 			}
@@ -234,20 +239,25 @@ func (f *DBFS) Rename(ctx context.Context, path *fs.URI, newName string) (fs.Fil
 		return nil, nil, fs.ErrIllegalObjectName.WithError(err)
 	}
 
-	if target.Type() == types.FileTypeFile {
-		// 仅普通文件需要按存储策略校验扩展名；文件夹改名不应因为 owner group 懒加载缺失而失败。
-		policy, err := f.getPreferredPolicy(ctx, target)
-		if err != nil {
-			return nil, nil, err
-		}
+	owner, err := f.ownerForNewChild(ctx, target)
+	if err != nil {
+		return nil, nil, err
+	}
 
+	policy, err := f.storagePolicyForOwner(ctx, owner)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if target.Type() == types.FileTypeFile {
+		// 仅普通文件需要按存储策略校验扩展名；文件夹改名则只保留名称正则校验。
 		if err := validateExtension(newName, policy); err != nil {
 			return nil, nil, fs.ErrIllegalObjectName.WithError(err)
 		}
+	}
 
-		if err := validateFileNameRegexp(newName, policy); err != nil {
-			return nil, nil, fs.ErrIllegalObjectName.WithError(err)
-		}
+	if err := validateFileNameRegexp(newName, policy); err != nil {
+		return nil, nil, fs.ErrIllegalObjectName.WithError(err)
 	}
 
 	// Lock target
