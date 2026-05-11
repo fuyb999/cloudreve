@@ -35,6 +35,7 @@ type (
 		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 		Phase            DocumentInspectTaskPhase      `json:"phase,omitempty"`
 		NodeID           int                           `json:"node_id,omitempty"`
+		LastNodeID       int                           `json:"last_node_id,omitempty"`
 		SlaveID          int                           `json:"slave_id,omitempty"`
 	}
 
@@ -106,7 +107,7 @@ func (t *DocumentInspectTask) Summarize(hasher hashid.Encoder) *queue.Summary {
 	}
 
 	return &queue.Summary{
-		NodeID: state.NodeID,
+		NodeID: effectiveTaskSummaryNodeID(t.Model().Status, state.NodeID, state.LastNodeID),
 		Phase:  string(state.Phase),
 		Props:  props,
 	}
@@ -152,6 +153,9 @@ func (t *DocumentInspectTask) dispatchOrInspect(ctx context.Context, fm *manager
 	}
 
 	state.NodeID = node.ID()
+	if state.NodeID > 0 {
+		state.LastNodeID = state.NodeID
+	}
 	if node.IsMaster() {
 		if _, err := fm.InspectAndSaveDocument(ctx, state.Uri, state.EntityID); err != nil {
 			return task.StatusError, err
@@ -214,6 +218,9 @@ func (t *DocumentInspectTask) awaitSlaveInspection(ctx context.Context, fm *mana
 		}
 
 		state.Phase = DocumentInspectTaskPhasePending
+		if state.NodeID > 0 {
+			state.LastNodeID = state.NodeID
+		}
 		state.NodeID = 0
 		state.SlaveID = 0
 		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)

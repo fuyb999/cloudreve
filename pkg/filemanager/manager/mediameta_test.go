@@ -162,6 +162,9 @@ func TestMediaMetaTaskAwaitSlaveExtractionAppliesMetadata(t *testing.T) {
 	if state.Phase != MediaMetaTaskPhasePending || state.NodeID != 0 || state.SlaveID != 0 {
 		t.Fatalf("expected state to be reset after apply, got %+v", state)
 	}
+	if state.LastNodeID != 22 {
+		t.Fatalf("expected last node id to be preserved, got %+v", state)
+	}
 	if node.getTaskID != 315 || !node.clearCalled {
 		t.Fatalf("unexpected node getTask call: id=%d clear=%v", node.getTaskID, node.clearCalled)
 	}
@@ -248,5 +251,34 @@ func TestMediaMetaTaskSummarize(t *testing.T) {
 	}
 	if summary.Props["entity_id"] != 901 {
 		t.Fatalf("unexpected entity id: %+v", summary.Props["entity_id"])
+	}
+}
+
+func TestMediaMetaTaskSummarizeCompletedUsesLastNode(t *testing.T) {
+	stateRaw, err := json.Marshal(&MediaMetaTaskState{
+		FileID:     801,
+		OwnerID:    701,
+		EntityID:   901,
+		LastNodeID: 22,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal state: %v", err)
+	}
+
+	taskModel := &ent.Task{
+		Type:         queue.MediaMetaTaskType,
+		Status:       task.StatusCompleted,
+		PrivateState: string(stateRaw),
+	}
+	task := &MediaMetaTask{
+		DBTask: &queue.DBTask{Task: taskModel},
+	}
+
+	summary := task.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if summary.NodeID != 22 {
+		t.Fatalf("unexpected node id: got %d want %d", summary.NodeID, 22)
 	}
 }

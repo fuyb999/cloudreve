@@ -170,6 +170,9 @@ func TestDocumentInspectTaskAwaitSlaveInspectionAppliesMetadata(t *testing.T) {
 	if state.Phase != DocumentInspectTaskPhasePending || state.NodeID != 0 || state.SlaveID != 0 {
 		t.Fatalf("expected state reset after apply, got %+v", state)
 	}
+	if state.LastNodeID != 22 {
+		t.Fatalf("expected last node id to be preserved, got %+v", state)
+	}
 	if len(node.getTaskCalls) != 2 || node.getTaskCalls[0] || !node.getTaskCalls[1] {
 		t.Fatalf("expected slave task to be fetched before clear, got %+v", node.getTaskCalls)
 	}
@@ -334,5 +337,34 @@ func TestDocumentInspectTaskSummarize(t *testing.T) {
 	}
 	if summary.Props["entity_id"] != 901 {
 		t.Fatalf("unexpected entity id: %+v", summary.Props["entity_id"])
+	}
+}
+
+func TestDocumentInspectTaskSummarizeCompletedUsesLastNode(t *testing.T) {
+	stateRaw, err := json.Marshal(&DocumentInspectTaskState{
+		FileID:     801,
+		OwnerID:    701,
+		EntityID:   901,
+		LastNodeID: 22,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal state: %v", err)
+	}
+
+	taskModel := &ent.Task{
+		Type:         queue.DocumentInspectTaskType,
+		Status:       task.StatusCompleted,
+		PrivateState: string(stateRaw),
+	}
+	task := &DocumentInspectTask{
+		DBTask: &queue.DBTask{Task: taskModel},
+	}
+
+	summary := task.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if summary.NodeID != 22 {
+		t.Fatalf("unexpected node id: got %d want %d", summary.NodeID, 22)
 	}
 }

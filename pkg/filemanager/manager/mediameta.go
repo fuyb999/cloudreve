@@ -36,6 +36,7 @@ type (
 		PublicVisibility *publicshare.VisibilityResult `json:"public_visibility,omitempty"`
 		Phase            MediaMetaTaskPhase            `json:"phase,omitempty"`
 		NodeID           int                           `json:"node_id,omitempty"`
+		LastNodeID       int                           `json:"last_node_id,omitempty"`
 		SlaveID          int                           `json:"slave_id,omitempty"`
 	}
 )
@@ -100,7 +101,7 @@ func (m *MediaMetaTask) Summarize(hasher hashid.Encoder) *queue.Summary {
 	}
 
 	return &queue.Summary{
-		NodeID: state.NodeID,
+		NodeID: effectiveTaskSummaryNodeID(m.Model().Status, state.NodeID, state.LastNodeID),
 		Phase:  string(state.Phase),
 		Props:  props,
 	}
@@ -147,6 +148,9 @@ func (m *MediaMetaTask) dispatchOrExtract(ctx context.Context, fm *manager, stat
 	}
 
 	state.NodeID = node.ID()
+	if state.NodeID > 0 {
+		state.LastNodeID = state.NodeID
+	}
 	if node.IsMaster() {
 		if err := fm.ExtractAndSaveMediaMeta(ctx, state.Uri, state.EntityID); err != nil {
 			return task.StatusError, err
@@ -209,6 +213,9 @@ func (m *MediaMetaTask) awaitSlaveExtraction(ctx context.Context, fm *manager, s
 		}
 
 		state.Phase = MediaMetaTaskPhasePending
+		if state.NodeID > 0 {
+			state.LastNodeID = state.NodeID
+		}
 		state.NodeID = 0
 		state.SlaveID = 0
 		clearSlaveTaskBestEffort(ctx, fm.l, node, slaveTaskID)

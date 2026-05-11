@@ -201,6 +201,7 @@ func TestFullTextIndexTaskStateActiveLifecycle(t *testing.T) {
 
 	state.Phase = fullTextIndexPhaseAwaitSlave
 	state.NodeID = 7
+	state.LastNodeID = 7
 	state.SlaveID = 8
 	state.CompleteActive()
 
@@ -209,6 +210,9 @@ func TestFullTextIndexTaskStateActiveLifecycle(t *testing.T) {
 	}
 	if state.Phase != fullTextIndexPhasePending || state.NodeID != 0 || state.SlaveID != 0 {
 		t.Fatalf("expected node/phase state to be reset, got %+v", state)
+	}
+	if state.LastNodeID != 7 {
+		t.Fatalf("expected last node id to be preserved, got %+v", state)
 	}
 	items := state.Items()
 	if len(items) != 1 || items[0].FileID != 2 {
@@ -2009,6 +2013,29 @@ func TestFullTextIndexTaskSummarizeReportsPhaseNodeAndCurrentFile(t *testing.T) 
 	}
 	if summary.Props["src"] != uri {
 		t.Fatalf("unexpected summary src: %+v", summary.Props["src"])
+	}
+}
+
+
+func TestFullTextIndexTaskSummarizeReportsLastNodeForCompletedTask(t *testing.T) {
+	taskModel := &ent.Task{
+		Type:        queue.FullTextIndexTaskType,
+		Status:      task.StatusCompleted,
+		PublicState: &inventorytypes.TaskPublicState{},
+	}
+	ftTask := &FullTextIndexTask{
+		DBTask: &queue.DBTask{Task: taskModel},
+		state: &FullTextIndexTaskState{
+			LastNodeID: 61,
+		},
+	}
+
+	summary := ftTask.Summarize(nil)
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if summary.NodeID != 61 {
+		t.Fatalf("unexpected summary node id: %+v", summary)
 	}
 }
 

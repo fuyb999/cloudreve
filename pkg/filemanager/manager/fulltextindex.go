@@ -58,6 +58,7 @@ type (
 		Files             []FullTextIndexTaskItem `json:"files,omitempty"`
 		Phase             FullTextIndexTaskPhase  `json:"phase,omitempty"`
 		NodeID            int                     `json:"node_id,omitempty"`
+		LastNodeID        int                     `json:"last_node_id,omitempty"`
 		SlaveID           int                     `json:"slave_id,omitempty"`
 		ExternalRequestID string                  `json:"external_request_id,omitempty"`
 		Active            *FullTextIndexTaskItem  `json:"active,omitempty"`
@@ -460,6 +461,9 @@ func (s *FullTextIndexTaskState) CompleteActive() {
 			filtered = append(filtered, item)
 		}
 		s.Files = filtered
+	}
+	if s.NodeID > 0 {
+		s.LastNodeID = s.NodeID
 	}
 
 	// Clear legacy head fields before normalize() so a completed active item
@@ -1021,6 +1025,9 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 	}
 
 	state.NodeID = node.ID()
+	if state.NodeID > 0 {
+		state.LastNodeID = state.NodeID
+	}
 	t.Lock()
 	t.progress = nil
 	t.Unlock()
@@ -1380,7 +1387,7 @@ func (t *FullTextIndexTask) Summarize(hasher hashid.Encoder) *queue.Summary {
 	}
 
 	return &queue.Summary{
-		NodeID: t.state.NodeID,
+		NodeID: effectiveTaskSummaryNodeID(t.Model().Status, t.state.NodeID, t.state.LastNodeID),
 		Phase:  string(t.state.Phase),
 		Props:  props,
 	}
