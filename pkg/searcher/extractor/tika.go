@@ -219,6 +219,10 @@ func (t *TikaExtractor) MaxFileSize() int64 {
 	return t.maxFileSize
 }
 
+func (t *TikaExtractor) DetectFileContentType(fileName string) string {
+	return tikaContentTypeByNameWithMimeMapping(fileName, t.mimeMapping)
+}
+
 // Extract sends the document to Tika and returns the extracted plain text.
 func (t *TikaExtractor) Extract(ctx context.Context, reader io.Reader) (string, error) {
 	return t.ExtractFile(ctx, reader, "")

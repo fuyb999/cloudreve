@@ -88,6 +88,26 @@ func BuildFullTextIndexMetadataValue(hasher hashid.Encoder, fileID, entityID int
 	return fmt.Sprintf("file:%d", fileID)
 }
 
+func NormalizePublicTopLevelDisplayName(name string, fileID int, hasher hashid.Encoder) string {
+	name = strings.TrimSpace(name)
+	if name == "" || fileID <= 0 || hasher == nil {
+		return name
+	}
+
+	suffix := "__" + hashid.EncodeFileID(hasher, fileID)
+	if suffix == "__" || !strings.HasSuffix(name, suffix) {
+		return name
+	}
+
+	trimmed := strings.TrimSuffix(name, suffix)
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		return name
+	}
+
+	return trimmed
+}
+
 func (f *File) Name() string {
 	if f == nil || f.Model == nil {
 		return ""
@@ -106,7 +126,17 @@ func (f *File) DisplayName() string {
 			return f.Name()
 		}
 
-		return path.Base(restoreUri.Path())
+		name := path.Base(restoreUri.Path())
+		if restoreUri.FileSystem() == "public" {
+			elements := restoreUri.Elements()
+			if len(elements) == 1 {
+				if separatorIndex := strings.LastIndex(name, "__"); separatorIndex > 0 {
+					return name[:separatorIndex]
+				}
+			}
+		}
+
+		return name
 	}
 
 	return f.Name()

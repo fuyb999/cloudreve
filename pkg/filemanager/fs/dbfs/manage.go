@@ -43,6 +43,15 @@ func (f *DBFS) canManageSharedTrash(target *File) bool {
 	return strings.TrimSpace(target.Metadata()[MetadataTrashVisibility]) == f.currentUserHash()
 }
 
+func isPublicFileMutationTarget(target *File) bool {
+	if target == nil || target.IsNil() {
+		return false
+	}
+
+	uri := target.Uri(false)
+	return uri != nil && uri.FileSystem() == constants.FileSystemPublic
+}
+
 func shouldQueueFullTextCopy(
 	metadata map[string]string,
 	size int64,
@@ -106,7 +115,9 @@ func (f *DBFS) Create(ctx context.Context, path *fs.URI, fileType types.FileType
 		return nil, err
 	}
 
-	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && ancestor.Owner().ID != f.user.ID {
+	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok &&
+		ancestor.Owner().ID != f.user.ID &&
+		!isPublicFileMutationTarget(ancestor) {
 		return nil, fs.ErrOwnerOnly
 	}
 
@@ -695,7 +706,9 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 		return nil, err
 	}
 
-	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && destination.Owner().ID != f.user.ID {
+	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok &&
+		destination.Owner().ID != f.user.ID &&
+		!isPublicFileMutationTarget(destination) {
 		return nil, fs.ErrOwnerOnly
 	}
 
@@ -740,7 +753,10 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 			continue
 		}
 
-		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && target.Owner().ID != f.user.ID && !isShareCopy {
+		if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok &&
+			target.Owner().ID != f.user.ID &&
+			!isShareCopy &&
+			!isPublicFileMutationTarget(target) {
 			ae.Add(p.String(), fs.ErrOwnerOnly)
 			continue
 		}
@@ -757,7 +773,7 @@ func (f *DBFS) MoveOrCopy(ctx context.Context, path []*fs.URI, dst *fs.URI, isCo
 			ae.Add(p.String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot move or copy folder to itself or its descendant")))
 			continue
 		}
-		if !isCopy && target.OwnerID() != destination.OwnerID() {
+		if !isCopy && target.OwnerID() != destination.OwnerID() && !isPublicFileMutationTarget(destination) {
 			// move 只允许在同 owner 树内调整位置，避免 public/my 混合场景下 parent 与 owner 语义错乱。
 			ae.Add(p.String(), fs.ErrNotSupportedAction.WithError(fmt.Errorf("cannot move file across different owners")))
 			continue

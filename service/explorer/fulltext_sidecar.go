@@ -24,10 +24,10 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 )
 
 type (
@@ -55,25 +55,28 @@ type (
 		EntityID    int                             `json:"entity_id"`
 		SourcePath  string                          `json:"source_path"`
 		ExtractedAt time.Time                       `json:"extracted_at"`
-		Objects     []FullTextSidecarObjectResponse `json:"objects,omitempty"`
+		Objects     []FullTextSidecarObjectResponse `json:"objects"`
 	}
 
 	FullTextSidecarObjectResponse struct {
-		ID       string `json:"id"`
-		ParentID string `json:"parent_id,omitempty"`
-		Depth    int    `json:"depth,omitempty"`
-		Kind     string `json:"kind,omitempty"`
-		Name     string `json:"name"`
-		URI      string `json:"uri"`
-		Path     string `json:"path"`
-		MimeType string `json:"mime_type"`
-		Size     int64  `json:"size"`
-		URL      string `json:"url"`
+		ID         string `json:"id"`
+		ParentID   string `json:"parent_id,omitempty"`
+		Depth      int    `json:"depth,omitempty"`
+		Kind       string `json:"kind,omitempty"`
+		Name       string `json:"name"`
+		URI        string `json:"uri"`
+		PreviewURI string `json:"preview_uri,omitempty"`
+		Path       string `json:"path"`
+		MimeType   string `json:"mime_type"`
+		Size       int64  `json:"size"`
+		URL        string `json:"url"`
+		PreviewURL string `json:"preview_url,omitempty"`
 	}
 
 	fullTextSidecarObjectAccess struct {
-		FileID   int    `json:"file_id"`
-		ObjectID string `json:"object_id"`
+		FileID    int    `json:"file_id"`
+		ObjectID  string `json:"object_id"`
+		ParentURI string `json:"parent_uri,omitempty"`
 	}
 )
 
@@ -112,7 +115,7 @@ func (s *FullTextSidecarObjectContentService) Serve(c *gin.Context) error {
 		return err
 	}
 
-	owner, parentURI, objectID, err := resolveFullTextSidecarFileURI(c, access.FileID, access.ObjectID)
+	owner, parentURI, objectID, err := resolveFullTextSidecarFileURI(c, access)
 	if err != nil {
 		return err
 	}
@@ -201,8 +204,9 @@ func BuildFullTextSidecarResponse(dep dependency.Dep, c *gin.Context, uri string
 			dep,
 			c,
 			fullTextSidecarObjectAccess{
-				FileID:   manifest.FileID,
-				ObjectID: objectID,
+				FileID:    manifest.FileID,
+				ObjectID:  objectID,
+				ParentURI: parentURI.String(),
 			},
 			false,
 			false,
@@ -215,27 +219,110 @@ func buildFullTextSidecarResponse(
 	manifest *manager.FTSSidecarManifest,
 	urlBuilder func(objectURI string) string,
 ) *FullTextSidecarResponse {
+	if manifest == nil {
+		return nil
+	}
+
+	textArtifacts := map[string]manager.FTSSidecarArtifact{}
+	for _, item := range manifest.Objects {
+		if item.Kind != "attachment_text" {
+			continue
+		}
+		logicalID := managerSidecarAttachmentLogicalID(item.ID)
+		if logicalID == "" {
+			continue
+		}
+		textArtifacts[logicalID] = item
+	}
+
+	objects := make([]FullTextSidecarObjectResponse, 0, len(manifest.Objects))
+	for _, item := range manifest.Objects {
+		if !shouldExposeFullTextSidecarObject(manifest, item) {
+			continue
+		}
+
+		objectURI := buildFullTextSidecarObjectURI(uri, item.ID)
+		object := FullTextSidecarObjectResponse{
+			ID:       item.ID,
+			ParentID: item.ParentID,
+			Depth:    item.Depth,
+			Kind:     item.Kind,
+			Name:     item.Name,
+			URI:      objectURI,
+			Path:     item.Path,
+			MimeType: item.MimeType,
+			Size:     item.Size,
+			URL:      urlBuilder(objectURI),
+		}
+
+		previewArtifact := item
+		if textArtifact, ok := textArtifacts[item.ID]; ok {
+			previewArtifact = textArtifact
+		}
+		if previewArtifact.ID != item.ID {
+			object.PreviewURI = buildFullTextSidecarObjectURI(uri, previewArtifact.ID)
+			object.PreviewURL = urlBuilder(buildFullTextSidecarObjectURI(uri, previewArtifact.ID))
+		}
+
+		objects = append(objects, object)
+	}
+
 	return &FullTextSidecarResponse{
 		Version:     manifest.Version,
 		FileID:      manifest.FileID,
 		EntityID:    manifest.EntityID,
 		SourcePath:  manifest.SourcePath,
 		ExtractedAt: manifest.ExtractedAt,
-		Objects: lo.Map(manifest.Objects, func(item manager.FTSSidecarArtifact, _ int) FullTextSidecarObjectResponse {
-			return FullTextSidecarObjectResponse{
-				ID:       item.ID,
-				ParentID: item.ParentID,
-				Depth:    item.Depth,
-				Kind:     item.Kind,
-				Name:     item.Name,
-				URI:      buildFullTextSidecarObjectURI(uri, item.ID),
-				Path:     item.Path,
-				MimeType: item.MimeType,
-				Size:     item.Size,
-				URL:      urlBuilder(buildFullTextSidecarObjectURI(uri, item.ID)),
-			}
-		}),
+		Objects:     objects,
 	}
+}
+
+func shouldExposeFullTextSidecarObject(manifest *manager.FTSSidecarManifest, item manager.FTSSidecarArtifact) bool {
+	if shouldHideLegacyArchiveRootContent(manifest, item) {
+		return false
+	}
+
+	switch strings.TrimSpace(item.Kind) {
+	case "attachment_text", "metadata", "diagnostics", "external_attachments", "ocr_candidates":
+		return false
+	}
+
+	switch strings.TrimSpace(item.ID) {
+	case "", "manifest.json", "rmeta.json":
+		return false
+	}
+
+	return true
+}
+
+func shouldHideLegacyArchiveRootContent(manifest *manager.FTSSidecarManifest, item manager.FTSSidecarArtifact) bool {
+	if strings.TrimSpace(item.ID) != "content.txt" {
+		return false
+	}
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Provider), "tika") {
+		return false
+	}
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(strings.TrimSpace(manifest.SourcePath)), "."))
+	switch ext {
+	case "zip", "tar", "tgz", "tbz", "tbz2", "txz", "tlz", "7z", "rar", "ar",
+		"gz", "z", "bz", "bz2", "xz", "lzma", "lz4", "br", "snappy", "sz",
+		"pack200", "cpio", "arj", "dump", "jar", "war", "ear":
+		return true
+	default:
+		return false
+	}
+}
+
+func managerSidecarAttachmentLogicalID(objectID string) string {
+	objectID = normalizeFullTextSidecarObjectID(objectID)
+	if !strings.HasPrefix(objectID, "attachment-text/") || !strings.HasSuffix(objectID, ".txt") {
+		return ""
+	}
+
+	logicalID := strings.TrimPrefix(objectID, "attachment-text/")
+	logicalID = strings.TrimSuffix(logicalID, ".txt")
+	logicalID = normalizeFullTextSidecarObjectID(logicalID)
+	return logicalID
 }
 
 func buildFullTextSidecarObjectURI(parentURI, objectID string) string {
@@ -316,10 +403,13 @@ func getFullTextSidecarObject(
 	return parentURI, manifest, artifact, true, nil
 }
 
-func resolveFullTextSidecarFileURI(c *gin.Context, fileID int, objectID string) (*ent.User, *fs.URI, string, error) {
+func resolveFullTextSidecarFileURI(c *gin.Context, access *fullTextSidecarObjectAccess) (*ent.User, *fs.URI, string, error) {
 	dep := dependency.FromContext(c)
+	if access == nil || access.FileID <= 0 {
+		return nil, nil, "", serializer.NewError(serializer.CodeParamErr, "invalid full text sidecar token", nil)
+	}
 
-	fileModel, err := dep.FileClient().GetByID(c, fileID)
+	fileModel, err := dep.FileClient().GetByID(c, access.FileID)
 	if err != nil {
 		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar file not found", err)
 	}
@@ -333,18 +423,76 @@ func resolveFullTextSidecarFileURI(c *gin.Context, fileID int, objectID string) 
 	fm := manager.NewFileManager(dep, owner)
 	defer fm.Recycle()
 
-	file, err := fm.TraverseFile(c, fileID)
+	ownerFile, err := fm.TraverseFile(c, access.FileID)
 	if err != nil {
 		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar file not found", err)
 	}
+	if ownerFile == nil || ownerFile.IsNil() {
+		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar file not found", nil)
+	}
 
-	return owner, file.Uri(true), normalizeFullTextSidecarObjectID(objectID), nil
+	ownerURI := ownerFile.Uri(true)
+	if ownerURI == nil {
+		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar file not found", nil)
+	}
+
+	parentURI, err := resolveFullTextSidecarParentURI(access.ParentURI)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if parentURI != nil && parentURI.FileSystem() == constants.FileSystemPublic {
+		if _, err := fm.Get(dbfs.WithBypassOwnerCheck(c), parentURI, dbfs.WithNotRoot()); err != nil {
+			parentURI = nil
+		}
+	}
+	if parentURI == nil {
+		parentURI = ownerURI
+	}
+	if parentURI == nil {
+		return nil, nil, "", serializer.NewError(serializer.CodeNotFound, "full text sidecar file not found", nil)
+	}
+
+	return owner, parentURI, normalizeFullTextSidecarObjectID(access.ObjectID), nil
+}
+
+func resolveFullTextSidecarParentURI(raw string) (*fs.URI, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	uri, err := fs.NewUriFromString(raw)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "invalid full text sidecar parent uri", err)
+	}
+
+	return uri, nil
+}
+
+func resolvePublicFTSSidecarURI(c *gin.Context, dep dependency.Dep, fileModel *ent.File) *fs.URI {
+	if dep == nil || fileModel == nil || dep.FileClient() == nil || dep.SettingClient() == nil {
+		return nil
+	}
+
+	publicService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
+	visibility, err := publicService.ResolveVisibility(c, inventory.UserFromContext(c))
+	if err != nil {
+		return nil
+	}
+
+	resolved, err := publicService.ResolveVisibleURI(c, fileModel, visibility)
+	if err != nil {
+		return nil
+	}
+
+	return resolved
 }
 
 func buildFullTextSidecarObjectAccessToken(access fullTextSidecarObjectAccess) string {
 	normalized := fullTextSidecarObjectAccess{
-		FileID:   access.FileID,
-		ObjectID: normalizeFullTextSidecarObjectID(access.ObjectID),
+		FileID:    access.FileID,
+		ObjectID:  normalizeFullTextSidecarObjectID(access.ObjectID),
+		ParentURI: strings.TrimSpace(access.ParentURI),
 	}
 	raw, _ := json.Marshal(normalized)
 	return base64.RawURLEncoding.EncodeToString(raw)
@@ -361,6 +509,7 @@ func parseFullTextSidecarObjectAccessToken(token string) (*fullTextSidecarObject
 		return nil, serializer.NewError(serializer.CodeParamErr, "invalid full text sidecar token", err)
 	}
 	access.ObjectID = normalizeFullTextSidecarObjectID(access.ObjectID)
+	access.ParentURI = strings.TrimSpace(access.ParentURI)
 	if access.FileID <= 0 || access.ObjectID == "" {
 		return nil, serializer.NewError(serializer.CodeParamErr, "invalid full text sidecar token", nil)
 	}
@@ -397,7 +546,7 @@ func resolveFullTextSidecarObjectURL(
 	download bool,
 	usePrimarySiteURL bool,
 ) (*manager.EntityUrl, *time.Time, bool, error) {
-	_, manifest, artifact, isSidecarURI, err := getFullTextSidecarObject(c, raw)
+	parentURI, manifest, artifact, isSidecarURI, err := getFullTextSidecarObject(c, raw)
 	if err != nil || !isSidecarURI {
 		return nil, nil, isSidecarURI, err
 	}
@@ -406,8 +555,9 @@ func resolveFullTextSidecarObjectURL(
 	expire := time.Now().Add(dep.SettingProvider().EntityUrlValidDuration(c))
 	return &manager.EntityUrl{
 		Url: buildSignedFullTextSidecarObjectURL(dep, c, fullTextSidecarObjectAccess{
-			FileID:   manifest.FileID,
-			ObjectID: artifact.ID,
+			FileID:    manifest.FileID,
+			ObjectID:  artifact.ID,
+			ParentURI: parentURI.String(),
 		}, download, usePrimarySiteURL),
 	}, &expire, true, nil
 }

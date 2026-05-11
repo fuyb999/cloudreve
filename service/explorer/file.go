@@ -18,6 +18,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager/entitysource"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
@@ -248,6 +249,14 @@ func (service *CreateFileService) Create(c *gin.Context) (*FileResponse, error) 
 	uri, err := fs.NewUriFromString(service.Uri)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+	if uri.FileSystem() == "public" {
+		visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
+		visibility, err := visibilityService.ResolveVisibility(c, user)
+		if err != nil {
+			return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
+		}
+		util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
 	}
 
 	fileType := types.FileTypeFromString(service.Type)

@@ -3,20 +3,59 @@ package request
 import (
 	"context"
 	"errors"
-	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
-	"github.com/cloudreve/Cloudreve/v4/pkg/cache"
-	"github.com/stretchr/testify/assert"
-	testMock "github.com/stretchr/testify/mock"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
+	"github.com/stretchr/testify/assert"
+	testMock "github.com/stretchr/testify/mock"
 )
 
 type ClientMock struct {
 	testMock.Mock
+}
+
+type requestTestConfig struct{}
+
+func (requestTestConfig) Database() *conf.Database {
+	return &conf.Database{}
+}
+
+func (requestTestConfig) System() *conf.System {
+	return &conf.System{Mode: conf.MasterMode}
+}
+
+func (requestTestConfig) SSL() *conf.SSL {
+	return &conf.SSL{}
+}
+
+func (requestTestConfig) Unix() *conf.Unix {
+	return &conf.Unix{}
+}
+
+func (requestTestConfig) Slave() *conf.Slave {
+	return &conf.Slave{}
+}
+
+func (requestTestConfig) Redis() *conf.Redis {
+	return &conf.Redis{}
+}
+
+func (requestTestConfig) Kafka() *conf.Kafka {
+	return &conf.Kafka{}
+}
+
+func (requestTestConfig) Cors() *conf.Cors {
+	return &conf.Cors{}
+}
+
+func (requestTestConfig) OptionOverwrite() map[string]any {
+	return nil
 }
 
 func (m ClientMock) Request(method, target string, body io.Reader, opts ...Option) *Response {
@@ -54,7 +93,7 @@ func TestWithContext(t *testing.T) {
 
 func TestHTTPClient_Request(t *testing.T) {
 	asserts := assert.New(t)
-	client := NewClientDeprecated(WithSlaveMeta("test"))
+	client := NewClient(requestTestConfig{}, WithSlaveMeta(1))
 
 	// 正常
 	{
@@ -230,7 +269,6 @@ func TestNopRSCloser_SetFirstFakeChunk(t *testing.T) {
 
 func TestBlackHole(t *testing.T) {
 	a := assert.New(t)
-	cache.Set("setting_reset_after_upload_failed", "true", 0)
 	a.NotPanics(func() {
 		BlackHole(strings.NewReader("TestBlackHole"))
 	})
@@ -238,7 +276,7 @@ func TestBlackHole(t *testing.T) {
 
 func TestHTTPClient_TPSLimit(t *testing.T) {
 	a := assert.New(t)
-	client := NewClientDeprecated()
+	client := NewClient(requestTestConfig{})
 
 	finished := make(chan struct{})
 	go func() {

@@ -10,13 +10,29 @@ import (
 )
 
 func withPublicBypass(ctx context.Context, uris ...*fs.URI) context.Context {
+	resolved := ctx
+	needsHiddenPublicAccess := false
 	for _, uri := range uris {
-		if uri != nil && uri.FileSystem() == constants.FileSystemPublic {
-			return dbfs.WithBypassOwnerCheck(ctx)
+		if uri == nil {
+			continue
+		}
+		switch uri.FileSystem() {
+		case constants.FileSystemPublic:
+			resolved = dbfs.WithBypassOwnerCheck(resolved)
+			needsHiddenPublicAccess = true
+		case constants.FileSystemMy:
+			elements := uri.Elements()
+			if len(elements) > 0 && elements[0] == publicshare.DefaultRootName {
+				needsHiddenPublicAccess = true
+			}
 		}
 	}
 
-	return ctx
+	if needsHiddenPublicAccess {
+		resolved = dbfs.WithHiddenPublicRootAccess(resolved)
+	}
+
+	return resolved
 }
 
 func publicVisibilityPayload(ctx context.Context) string {

@@ -51,9 +51,15 @@ func TestWithPublicBypassMarksPublicURI(t *testing.T) {
 	if _, ok := ctx.Value(dbfs.ByPassOwnerCheckCtxKey{}).(bool); !ok {
 		t.Fatalf("expected public bypass flag in context")
 	}
+	if !dbfs.HiddenPublicRootAccessEnabled(ctx) {
+		t.Fatalf("expected hidden public root access")
+	}
 
 	ctx = withPublicBypass(context.Background(), myURI)
 	if _, ok := ctx.Value(dbfs.ByPassOwnerCheckCtxKey{}).(bool); ok {
 		t.Fatalf("did not expect bypass flag for non-public uri")
+	}
+	if dbfs.HiddenPublicRootAccessEnabled(ctx) {
+		t.Fatalf("did not expect hidden public root access for non-public uri")
 	}
 }

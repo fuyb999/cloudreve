@@ -61,7 +61,7 @@ func New(p *ent.StoragePolicy, l logging.Logger, config conf.ConfigProvider) *Dr
 
 func (handler *Driver) List(ctx context.Context, path string, onProgress driver.ListProgressFunc, recursive bool) ([]fs.PhysicalObject, error) {
 	var res []fs.PhysicalObject
-	root := handler.LocalPath(ctx, path)
+	root := resolveExistingLocalStoragePath(path)
 
 	err := filepath.Walk(root,
 		func(path string, info os.FileInfo, err error) error {
@@ -110,7 +110,7 @@ func (handler *Driver) List(ctx context.Context, path string, onProgress driver.
 // Get 获取文件内容
 func (handler *Driver) Open(ctx context.Context, path string) (*os.File, error) {
 	// 打开文件
-	file, err := os.Open(handler.LocalPath(ctx, path))
+	file, err := os.Open(resolveExistingLocalStoragePath(path))
 	if err != nil {
 		handler.l.Debug("Failed to open file: %s", err)
 		return nil, err
@@ -120,7 +120,7 @@ func (handler *Driver) Open(ctx context.Context, path string) (*os.File, error) 
 }
 
 func (handler *Driver) LocalPath(ctx context.Context, path string) string {
-	return resolveLocalStoragePath(path)
+	return resolveExistingLocalStoragePath(path)
 }
 
 // Put 将文件流保存到指定目录
@@ -178,8 +178,10 @@ func (handler *Driver) Delete(ctx context.Context, files ...string) ([]string, e
 	var retErr error
 
 	for _, value := range files {
-		filePath := resolveLocalStoragePath(value)
-		if util.Exists(filePath) {
+		for _, filePath := range resolveLocalStoragePathCandidates(value) {
+			if !util.Exists(filePath) {
+				continue
+			}
 			err := os.Remove(filePath)
 			if err != nil {
 				handler.l.Warning("Failed to delete file: %s", err)
@@ -249,6 +251,10 @@ func (h *Driver) prepareFileDirectory(dst string) error {
 }
 
 func resolveLocalStoragePath(name string) string {
+	return resolveLocalStoragePathCanonical(name)
+}
+
+func resolveLocalStoragePathCanonical(name string) string {
 	relative := filepath.FromSlash(name)
 	cleaned := filepath.Clean(relative)
 	if cleaned == "." {
@@ -263,6 +269,57 @@ func resolveLocalStoragePath(name string) string {
 	}
 
 	return util.RelativePath(cleaned)
+}
+
+func resolveLocalStoragePathCandidates(name string) []string {
+	primary := resolveLocalStoragePathCanonical(name)
+	candidates := []string{primary}
+	addCandidate := func(candidate string) {
+		candidate = filepath.Clean(candidate)
+		for _, existing := range candidates {
+			if existing == candidate {
+				return
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	if !filepath.IsAbs(primary) {
+		legacy := filepath.Clean(filepath.Join("cloudreve", primary))
+		if legacy != primary {
+			addCandidate(legacy)
+		}
+	}
+
+	if cleaned := filepath.Clean(filepath.FromSlash(name)); cleaned != "." && !filepath.IsAbs(cleaned) {
+		if cwd, err := os.Getwd(); err == nil {
+			rootCandidates := []string{cwd, filepath.Dir(cwd)}
+			if cleaned == "cloudreve" || strings.HasPrefix(cleaned, "cloudreve"+string(filepath.Separator)) {
+				rootCandidates = append(rootCandidates,
+					filepath.Join(cwd, "data"),
+					filepath.Join(filepath.Dir(cwd), "data"),
+				)
+			}
+			for _, root := range rootCandidates {
+				if root == "" {
+					continue
+				}
+				addCandidate(filepath.Join(root, cleaned))
+			}
+		}
+	}
+
+	return candidates
+}
+
+func resolveExistingLocalStoragePath(name string) string {
+	for _, candidate := range resolveLocalStoragePathCandidates(name) {
+		if util.Exists(candidate) {
+			return candidate
+		}
+	}
+
+	return resolveLocalStoragePathCanonical(name)
 }
 
 // 取消上传凭证

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
@@ -86,9 +87,13 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 	}
 	defer ownerManager.Recycle()
 
-	ownerURI, err := m.resolveOwnerFTSURI(ctx, fileModel, ownerManager)
+	actualOwnerURI, err := m.resolveOwnerFTSActualURI(ctx, fileModel, ownerManager)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to resolve owner file uri: %w", err)
+	}
+	ownerURI := actualOwnerURI
+	if displayOwnerURI, displayErr := m.resolveOwnerFTSURI(ctx, fileModel, ownerManager); displayErr == nil && displayOwnerURI != nil {
+		ownerURI = displayOwnerURI
 	}
 
 	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
@@ -184,6 +189,31 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 }
 
 func (m *manager) resolveOwnerFTSURI(ctx context.Context, fileModel *ent.File, ownerManager FileManager) (*fs.URI, error) {
+	ownerURI, err := m.resolveOwnerFTSActualURI(ctx, fileModel, ownerManager)
+	if err != nil {
+		return nil, err
+	}
+
+	if publicURI := m.resolvePublicSearchURI(ctx, fileModel); publicURI != nil && len(publicURI.Elements()) > 0 {
+		ownerElems := ownerURI.Elements()
+		publicElems := publicURI.Elements()
+		if len(publicElems) <= len(ownerElems) {
+			tail := ownerElems[len(ownerElems)-len(publicElems):]
+			if strings.EqualFold(strings.Join(tail, "/"), strings.Join(publicElems, "/")) {
+				relative := ownerElems[:len(ownerElems)-len(publicElems)]
+				root := ownerURI.Root()
+				for _, elem := range relative {
+					root = root.Join(elem)
+				}
+				ownerURI = root.Join(publicElems...)
+			}
+		}
+	}
+
+	return ownerURI, nil
+}
+
+func (m *manager) resolveOwnerFTSActualURI(ctx context.Context, fileModel *ent.File, ownerManager FileManager) (*fs.URI, error) {
 	if fileModel == nil {
 		return nil, fmt.Errorf("file model is nil")
 	}
@@ -211,27 +241,60 @@ func (m *manager) resolveOwnerFTSURI(ctx context.Context, fileModel *ent.File, o
 		return nil, fmt.Errorf("failed to resolve file uri")
 	}
 
-	if publicURI := m.resolvePublicSearchURI(ctx, fileModel); publicURI != nil && len(publicURI.Elements()) > 0 {
-		ownerElems := ownerURI.Elements()
-		publicElems := publicURI.Elements()
-		if len(publicElems) <= len(ownerElems) {
-			tail := ownerElems[len(ownerElems)-len(publicElems):]
-			if strings.EqualFold(strings.Join(tail, "/"), strings.Join(publicElems, "/")) {
-				relative := ownerElems[:len(ownerElems)-len(publicElems)]
-				root := ownerURI.Root()
-				for _, elem := range relative {
-					root = root.Join(elem)
-				}
-				ownerURI = root.Join(publicElems...)
+	ownerURI = m.rebaseHiddenPublicOwnerURI(ctx, fileModel, ownerURI)
+	return ownerURI, nil
+}
+
+func (m *manager) rebaseHiddenPublicOwnerURI(ctx context.Context, fileModel *ent.File, ownerURI *fs.URI) *fs.URI {
+	if m == nil || fileModel == nil || ownerURI == nil || m.dep == nil || m.dep.FileClient() == nil || m.dep.SettingClient() == nil {
+		return ownerURI
+	}
+
+	publicService := publicshare.NewService(m.l, m.dep.FileClient(), m.dep.SettingClient(), m.hasher)
+	rootID, err := publicService.RootID(ctx)
+	if err != nil || rootID == 0 {
+		return ownerURI
+	}
+
+	var hiddenRoot *ent.File
+	if fileModel.ID == rootID && fileModel.Name == inventory.RootFolderName {
+		hiddenRoot = fileModel
+	} else {
+		ancestors, err := m.dep.FileClient().GetAncestorFiles(ctx, fileModel)
+		if err != nil {
+			return ownerURI
+		}
+
+		for _, ancestor := range ancestors {
+			if ancestor != nil && ancestor.ID == rootID && ancestor.Name == inventory.RootFolderName {
+				hiddenRoot = ancestor
+				break
 			}
 		}
 	}
 
-	return ownerURI, nil
+	if hiddenRoot == nil {
+		return ownerURI
+	}
+
+	elements := ownerURI.Elements()
+	if len(elements) > 0 && elements[0] == publicshare.DefaultRootName {
+		return ownerURI
+	}
+
+	rebased := ownerURI.Root().Join(publicshare.DefaultRootName)
+	if len(elements) > 0 {
+		rebased = rebased.Join(elements...)
+	}
+
+	return rebased
 }
 
 func (m *manager) resolvePublicSearchURI(ctx context.Context, fileModel *ent.File) *fs.URI {
-	if m == nil || fileModel == nil {
+	if m == nil || fileModel == nil || m.dep == nil {
+		return nil
+	}
+	if m.dep.FileClient() == nil || m.dep.SettingClient() == nil || m.hasher == nil {
 		return nil
 	}
 
@@ -527,6 +590,18 @@ func extractFTSContent(
 		persistFTSSidecars(ctx, extractor, ownerManager, fileModel, sidecarURI, primaryEntity, source, text)
 		if internal != nil && (sidecarCfg.persistTextEnabled || sidecarCfg.persistAssetsEnabled) {
 			if refreshedText, refreshedAttachments, _, ok := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, sidecarURI); ok {
+				if shouldRetryFTSSidecarReloadForPublicURI(sidecarURI, refreshedAttachments) {
+					if ownerURI, err := internal.resolveOwnerFTSURI(ctx, fileModel, ownerManager); err == nil && ownerURI != nil {
+						if fallbackText, fallbackAttachments, _, fallbackOK := internal.loadFTSContentFromSidecar(ctx, fileModel, primaryEntity, ownerURI); fallbackOK {
+							if sidecarCfg.persistTextEnabled && strings.TrimSpace(fallbackText) != "" {
+								refreshedText = fallbackText
+							}
+							if len(fallbackAttachments) > 0 {
+								refreshedAttachments = fallbackAttachments
+							}
+						}
+					}
+				}
 				if sidecarCfg.persistTextEnabled && text == "" {
 					text = refreshedText
 				}
@@ -598,6 +673,26 @@ func buildFTSExtractionPlan(
 	return plan
 }
 
+func shouldRetryFTSSidecarReloadForPublicURI(
+	sidecarURI *fs.URI,
+	attachments []searcher.SearchAttachmentDocument,
+) bool {
+	if sidecarURI == nil || sidecarURI.FileSystem() != constants.FileSystemPublic {
+		return false
+	}
+	if len(attachments) == 0 {
+		return true
+	}
+
+	for _, attachment := range attachments {
+		if !isFTSSidecarAttachmentTextPath(attachment.Source) && strings.TrimSpace(attachment.Content) == "" {
+			return true
+		}
+	}
+
+	return false
+}
+
 func supportsFTSAttachmentExtraction(extractor searcher.TextExtractor, fileModel *ent.File) bool {
 	if extractor == nil || fileModel == nil {
 		return false
@@ -625,21 +720,14 @@ func (m *manager) loadFTSContentFromSidecar(
 	}
 
 	var (
-		content  string
-		rmetaRaw []byte
+		content string
 	)
 
 	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "content.txt"); ok {
 		content = strings.TrimSpace(string(raw))
 	}
-	if raw, ok := m.readFTSSidecarObject(ctx, handler, manifest, "rmeta.json"); ok {
-		rmetaRaw = raw
-	}
-	if content == "" && len(rmetaRaw) > 0 {
-		content = parseTikaRMetaRootContent(rmetaRaw)
-	}
 
-	return content, m.hydrateFTSSidecarAttachmentContents(ctx, handler, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, rmetaRaw)), manifest, true
+	return content, m.hydrateFTSSidecarAttachmentContents(ctx, handler, buildEmbeddedSearchAttachmentsFromManifest(fileModel, primaryEntity, manifest, nil)), manifest, true
 }
 
 func (m *manager) readFTSSidecarObject(
@@ -834,7 +922,7 @@ func buildEmbeddedSearchAttachments(
 
 	if len(rmetaRaw) > 0 {
 		for index, item := range parseTikaRMetaAttachments(rmetaRaw) {
-			relativeName := firstNonEmpty(item.Path, item.Name)
+			relativeName := preferredTikaAttachmentRelativeName(item.Name, item.Path)
 			if normalized, ok := normalizeFTSSidecarRelativePath(relativeName); ok {
 				relativeName = normalized
 			} else {
@@ -903,7 +991,7 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 
 	rmetaByName := map[string]tikaRMetaAttachment{}
 	for _, item := range parseTikaRMetaAttachments(rmetaRaw) {
-		relativeName := firstNonEmpty(item.Path, item.Name)
+		relativeName := preferredTikaAttachmentRelativeName(item.Name, item.Path)
 		relativeName, ok := normalizeFTSSidecarRelativePath(relativeName)
 		if !ok {
 			continue
@@ -919,11 +1007,15 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 	}
 
 	textArtifacts := map[string]FTSSidecarArtifact{}
+	legacyTextArtifacts := map[string][]FTSSidecarArtifact{}
 	for _, item := range manifest.Objects {
 		if item.Kind != "attachment_text" {
 			continue
 		}
 		textArtifacts[item.ID] = item
+		if logicalID := sidecarAttachmentLogicalIDFromTextObjectID(item.ID); logicalID != "" {
+			legacyTextArtifacts[path.Base(logicalID)] = append(legacyTextArtifacts[path.Base(logicalID)], item)
+		}
 	}
 
 	attachments := make([]searcher.SearchAttachmentDocument, 0, len(manifest.Objects))
@@ -973,6 +1065,8 @@ func buildEmbeddedSearchAttachmentsFromManifest(
 		}
 		if textArtifact, ok := textArtifacts[sidecarAttachmentTextObjectID(objectName)]; ok {
 			doc.Source = textArtifact.Path
+		} else if candidates := legacyTextArtifacts[path.Base(objectName)]; len(candidates) == 1 {
+			doc.Source = candidates[0].Path
 		}
 
 		if doc.MimeType == "" {
@@ -1130,6 +1224,54 @@ func parseTikaRMetaAttachments(raw []byte) []tikaRMetaAttachment {
 	}
 
 	return res
+}
+
+func preferredTikaAttachmentRelativeName(name string, pathValue string) string {
+	type candidate struct {
+		raw        string
+		normalized string
+		depth      int
+	}
+
+	normalize := func(input string) candidate {
+		raw := strings.TrimSpace(strings.ReplaceAll(input, "\\", "/"))
+		normalized := strings.TrimPrefix(raw, "./")
+		normalized = strings.TrimPrefix(normalized, "/")
+		normalized = path.Clean(normalized)
+		if normalized == "." {
+			normalized = ""
+		}
+
+		depth := 0
+		if normalized != "" {
+			depth = len(strings.Split(normalized, "/"))
+		}
+
+		return candidate{
+			raw:        raw,
+			normalized: normalized,
+			depth:      depth,
+		}
+	}
+
+	nameCandidate := normalize(name)
+	pathCandidate := normalize(pathValue)
+	if nameCandidate.normalized == "" {
+		return pathCandidate.raw
+	}
+	if pathCandidate.normalized == "" {
+		return nameCandidate.raw
+	}
+	if nameCandidate.depth > pathCandidate.depth {
+		return nameCandidate.raw
+	}
+	if pathCandidate.depth > nameCandidate.depth {
+		return pathCandidate.raw
+	}
+	if len(nameCandidate.normalized) >= len(pathCandidate.normalized) {
+		return nameCandidate.raw
+	}
+	return pathCandidate.raw
 }
 
 func sanitizeTikaAttachmentContent(content string, mimeType string) string {

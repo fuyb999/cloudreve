@@ -12,7 +12,7 @@ import (
 
 // NewLocalFileEntity creates a new local file entity.
 func NewLocalFileEntity(t types.EntityType, src string) (fs.Entity, error) {
-	info, err := os.Stat(resolveLocalStoragePath(src))
+	info, err := os.Stat(resolveExistingLocalStoragePath(src))
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package explorer
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"testing"
 	"time"
@@ -26,6 +27,15 @@ func TestBuildFullTextSidecarResponseIncludesHierarchyAndIDBasedURLs(t *testing.
 		SourcePath:  "cloudreve:///my/report.docx",
 		ExtractedAt: extractedAt,
 		Objects: []manager.FTSSidecarArtifact{
+			{
+				ID:       "attachment-text/attachments/archive.zip/nested.txt.txt",
+				ParentID: "attachments/archive.zip/nested.txt",
+				Kind:     "attachment_text",
+				Name:     "nested.txt.txt",
+				Path:     "cloudreve/fts-sidecar/1/42/7/attachment-text/attachments/archive.zip/nested.txt.txt",
+				MimeType: "text/plain; charset=utf-8",
+				Size:     6,
+			},
 			{
 				ID:       "attachments/archive.zip",
 				Kind:     "archive",
@@ -107,6 +117,13 @@ func TestBuildFullTextSidecarResponseIncludesHierarchyAndIDBasedURLs(t *testing.
 	if child.Kind != "embedded" {
 		t.Fatalf("unexpected child kind: %q", child.Kind)
 	}
+	if child.PreviewURL == "" {
+		t.Fatal("expected child preview_url to point at attachment text sidecar")
+	}
+	childPreviewAccess := mustObjectAccessFromURL(t, child.PreviewURL)
+	if childPreviewAccess.ObjectID != "attachment-text/attachments/archive.zip/nested.txt.txt" {
+		t.Fatalf("unexpected child preview access object id: got %q", childPreviewAccess.ObjectID)
+	}
 	childAccess := mustObjectAccessFromURL(t, child.URL)
 	if childAccess.FileID != manifest.FileID {
 		t.Fatalf("unexpected child access file id: got %d want %d", childAccess.FileID, manifest.FileID)
@@ -114,6 +131,115 @@ func TestBuildFullTextSidecarResponseIncludesHierarchyAndIDBasedURLs(t *testing.
 	if childAccess.ObjectID != child.ID {
 		t.Fatalf("unexpected child access object id: got %q want %q", childAccess.ObjectID, child.ID)
 	}
+}
+
+func TestBuildFullTextSidecarResponseFiltersHelperArtifacts(t *testing.T) {
+	manifest := &manager.FTSSidecarManifest{
+		Version:     1,
+		FileID:      42,
+		EntityID:    7,
+		SourcePath:  "cloudreve:///my/report.docx",
+		ExtractedAt: time.Unix(1700000000, 0).UTC(),
+		Objects: []manager.FTSSidecarArtifact{
+			{ID: "manifest.json", Kind: "", Name: "manifest.json"},
+			{ID: "rmeta.json", Kind: "metadata", Name: "rmeta.json"},
+			{ID: "attachment-text/attachments/nested.txt.txt", Kind: "attachment_text", Name: "nested.txt.txt"},
+			{ID: "legacy-diagnostics-artifact.bin", Kind: "diagnostics", Name: "legacy-diagnostics-artifact.bin"},
+			{ID: "attachments/nested.txt", Kind: "embedded", Name: "nested.txt", Path: "cloudreve/fts-sidecar/1/42/7/attachments/nested.txt"},
+		},
+	}
+
+	resp := buildFullTextSidecarResponse("cloudreve:///my/report.docx", manifest, func(objectURI string) string {
+		return objectURI
+	})
+	if resp == nil {
+		t.Fatal("expected response")
+	}
+	if len(resp.Objects) != 1 {
+		t.Fatalf("unexpected visible object count: got %d want 1", len(resp.Objects))
+	}
+	if got, want := resp.Objects[0].ID, "attachments/nested.txt"; got != want {
+		t.Fatalf("unexpected visible object id: got %q want %q", got, want)
+	}
+}
+
+func TestBuildFullTextSidecarResponseKeepsEmptyObjectsArray(t *testing.T) {
+	manifest := &manager.FTSSidecarManifest{
+		Version:     1,
+		FileID:      42,
+		EntityID:    7,
+		SourcePath:  "cloudreve:///public/install.sh",
+		ExtractedAt: time.Unix(1700000000, 0).UTC(),
+		Objects: []manager.FTSSidecarArtifact{
+			{ID: "manifest.json", Kind: "", Name: "manifest.json"},
+			{ID: "rmeta.json", Kind: "metadata", Name: "rmeta.json"},
+			{ID: "legacy-diagnostics-artifact.bin", Kind: "diagnostics", Name: "legacy-diagnostics-artifact.bin"},
+		},
+	}
+
+	resp := buildFullTextSidecarResponse("cloudreve://public/install.sh", manifest, func(objectURI string) string {
+		return objectURI
+	})
+	if resp == nil {
+		t.Fatal("expected response")
+	}
+	if resp.Objects == nil {
+		t.Fatal("expected non-nil objects slice")
+	}
+	if len(resp.Objects) != 0 {
+		t.Fatalf("unexpected visible object count: got %d want 0", len(resp.Objects))
+	}
+
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("failed to marshal response: %v", err)
+	}
+	if string(raw) == "" || !containsJSONObjectsArray(raw) {
+		t.Fatalf("expected marshaled response to include empty objects array, got %s", string(raw))
+	}
+}
+
+func TestBuildFullTextSidecarResponseFiltersLegacyArchiveRootContent(t *testing.T) {
+	manifest := &manager.FTSSidecarManifest{
+		Version:     1,
+		Provider:    "tika",
+		FileID:      25,
+		EntityID:    16,
+		SourcePath:  "cloudreve://public/omx-tika-pubzip-20260501-142102.zip",
+		ExtractedAt: time.Unix(1700000000, 0).UTC(),
+		Objects: []manager.FTSSidecarArtifact{
+			{ID: "content.txt", Kind: "text", Name: "content.txt", Path: "cloudreve/fts-sidecar/1/25/16/content.txt"},
+			{ID: "attachments/nested/note.txt", Kind: "embedded", Name: "note.txt", Path: "cloudreve/fts-sidecar/1/25/16/attachments/nested/note.txt"},
+		},
+	}
+
+	resp := buildFullTextSidecarResponse("cloudreve://public/omx-tika-pubzip-20260501-142102.zip", manifest, func(objectURI string) string {
+		return objectURI
+	})
+	if resp == nil {
+		t.Fatal("expected response")
+	}
+	if len(resp.Objects) != 1 {
+		t.Fatalf("unexpected visible object count: got %d want 1", len(resp.Objects))
+	}
+	if got, want := resp.Objects[0].ID, "attachments/nested/note.txt"; got != want {
+		t.Fatalf("unexpected visible object id: got %q want %q", got, want)
+	}
+}
+
+func containsJSONObjectsArray(raw []byte) bool {
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return false
+	}
+
+	value, ok := parsed["objects"]
+	if !ok {
+		return false
+	}
+
+	items, ok := value.([]any)
+	return ok && len(items) == 0
 }
 
 func TestBuildAndParseFullTextSidecarObjectURI(t *testing.T) {
@@ -250,8 +376,9 @@ func TestParseFullTextSidecarObjectURIReturnsParentAsFsURI(t *testing.T) {
 
 func TestBuildAndParseFullTextSidecarObjectAccessToken(t *testing.T) {
 	token := buildFullTextSidecarObjectAccessToken(fullTextSidecarObjectAccess{
-		FileID:   42,
-		ObjectID: "attachments/nested.txt",
+		FileID:    42,
+		ObjectID:  "attachments/nested.txt",
+		ParentURI: "cloudreve://public/install.sh__daxfb",
 	})
 
 	decoded, err := parseFullTextSidecarObjectAccessToken(token)
@@ -264,11 +391,41 @@ func TestBuildAndParseFullTextSidecarObjectAccessToken(t *testing.T) {
 	if decoded.ObjectID != "attachments/nested.txt" {
 		t.Fatalf("unexpected decoded object id: got %q want %q", decoded.ObjectID, "attachments/nested.txt")
 	}
+	if decoded.ParentURI != "cloudreve://public/install.sh__daxfb" {
+		t.Fatalf("unexpected decoded parent uri: got %q", decoded.ParentURI)
+	}
 }
 
 func TestParseFullTextSidecarObjectAccessTokenRejectsInvalidInput(t *testing.T) {
 	if _, err := parseFullTextSidecarObjectAccessToken("%%%"); err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestResolveFullTextSidecarParentURI(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty", raw: "", want: ""},
+		{name: "public", raw: "cloudreve://public/install.sh__daxfb", want: "cloudreve://public/install.sh__daxfb"},
+	}
+
+	for _, test := range tests {
+		got, err := resolveFullTextSidecarParentURI(test.raw)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", test.name, err)
+		}
+		if test.want == "" {
+			if got != nil {
+				t.Fatalf("%s: expected nil uri, got %v", test.name, got)
+			}
+			continue
+		}
+		if got == nil || got.String() != test.want {
+			t.Fatalf("%s: unexpected parent uri: got %v want %q", test.name, got, test.want)
+		}
 	}
 }
 

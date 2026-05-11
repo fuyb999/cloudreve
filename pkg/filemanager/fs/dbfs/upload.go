@@ -38,7 +38,7 @@ func (f *DBFS) PreValidateUpload(ctx context.Context, dst *fs.URI, files ...fs.P
 	}
 
 	// check ownership
-	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && f.user.ID != dstFile.OwnerID() {
+	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && f.user.ID != dstFile.OwnerID() && !isPublicFileMutationTarget(dstFile) {
 		return fs.ErrOwnerOnly
 	}
 
@@ -119,7 +119,7 @@ func (f *DBFS) PrepareUpload(ctx context.Context, req *fs.UploadRequest, opts ..
 		return nil, err
 	}
 
-	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && ancestor.OwnerID() != f.user.ID {
+	if _, ok := ctx.Value(ByPassOwnerCheckCtxKey{}).(bool); !ok && ancestor.OwnerID() != f.user.ID && !isPublicFileMutationTarget(ancestor) {
 		return nil, fs.ErrOwnerOnly
 	}
 

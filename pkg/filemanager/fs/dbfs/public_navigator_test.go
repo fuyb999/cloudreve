@@ -2,6 +2,7 @@ package dbfs
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +13,9 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
+	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 )
 
 func TestPublicNavigatorGrantForFileRejectsNilModel(t *testing.T) {
@@ -27,6 +30,142 @@ func TestPublicNavigatorGrantForFileRejectsNilModel(t *testing.T) {
 	file := &File{}
 	if _, ok := n.grantForFile(file); ok {
 		t.Fatalf("expected nil model file to be rejected")
+	}
+}
+
+func TestProjectedRootFromCacheIgnoresRealRootChildren(t *testing.T) {
+	n := &publicNavigator{
+		root: &File{
+			Model:    &ent.File{ID: 1, Name: publicshare.DefaultRootName, Type: int(types.FileTypeFolder)},
+			Children: map[string]*File{},
+		},
+	}
+	n.root.mu = &sync.Mutex{}
+
+	realChild := &File{
+		Model:  &ent.File{ID: 2, Name: "draft.txt", Type: int(types.FileTypeFile)},
+		Parent: n.root,
+	}
+	n.root.Children["draft.txt"] = realChild
+
+	if got, ok := n.projectedRootFromCache("draft.txt"); ok || got != nil {
+		t.Fatalf("expected plain root child cache entry to be ignored, got %+v", got)
+	}
+}
+
+func TestProjectedRootFromCacheUsesPrefixedAliasOnly(t *testing.T) {
+	n := &publicNavigator{
+		root: &File{
+			Model:    &ent.File{ID: 1, Name: publicshare.DefaultRootName, Type: int(types.FileTypeFolder)},
+			Children: map[string]*File{},
+		},
+	}
+	n.root.mu = &sync.Mutex{}
+
+	projected := &File{
+		Model:  &ent.File{ID: 2, Name: "team-alpha", Type: int(types.FileTypeFolder)},
+		Parent: n.root,
+	}
+	n.root.Children[projectedRootCacheKey("team-alpha__abc")] = projected
+
+	got, ok := n.projectedRootFromCache("team-alpha__abc")
+	if !ok || got != projected {
+		t.Fatalf("expected projected root alias lookup to hit prefixed cache entry, got %+v, ok=%v", got, ok)
+	}
+}
+
+func TestResolveRootChildByDisplayNameMatchesTopLevelPublicFileWithoutSuffix(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	rootModel := &ent.File{ID: 1, Name: publicshare.DefaultRootName, Type: int(types.FileTypeFolder)}
+	n := &publicNavigator{
+		user: &ent.User{ID: 1},
+		baseNavigator: &baseNavigator{
+			hasher: hasher,
+			config: &setting.DBFS{MaxPageSize: 100},
+		},
+		root: &File{
+			Model:    rootModel,
+			Children: map[string]*File{},
+			mu:       &sync.Mutex{},
+		},
+		config: &setting.DBFS{MaxPageSize: 100},
+		visibility: &publicshare.VisibilityResult{
+			Filter:     publicshare.TrueFilter(),
+			RootGrants: []publicshare.RootGrant{{RootFileID: 1, RootTreePath: "1", Actions: map[publicshare.Action]bool{}}},
+		},
+		fileClient: &testPublicNavigatorFileClient{
+			childrenByParent: map[int][]*ent.File{
+				1: {
+					{ID: 56, Name: "install.sh", FileChildren: 1, Type: int(types.FileTypeFile), TreePath: "1.56"},
+				},
+			},
+			ancestorsByID: map[int][]*ent.File{
+				56: {rootModel},
+			},
+		},
+	}
+
+	got, ok, err := n.resolveRootChildByDisplayName(context.Background(), "install.sh")
+	if err != nil {
+		t.Fatalf("resolveRootChildByDisplayName returned error: %v", err)
+	}
+	if !ok || got == nil {
+		t.Fatalf("expected to resolve top-level public file by display name")
+	}
+	if got.Name() != "install.sh" || got.ID() != 56 {
+		t.Fatalf("unexpected file resolved: id=%d name=%q", got.ID(), got.Name())
+	}
+}
+
+func TestResolveRootChildByDisplayNameMatchesHistoricalTopLevelPublicFileWithSuffix(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	dirtyName := "omx-tika-pubtxt-20260501-142102.txt__" + hashid.EncodeFileID(hasher, 24)
+	rootModel := &ent.File{ID: 1, Name: publicshare.DefaultRootName, Type: int(types.FileTypeFolder)}
+	n := &publicNavigator{
+		user: &ent.User{ID: 1},
+		baseNavigator: &baseNavigator{
+			hasher: hasher,
+			config: &setting.DBFS{MaxPageSize: 100},
+		},
+		root: &File{
+			Model:    rootModel,
+			Children: map[string]*File{},
+			mu:       &sync.Mutex{},
+		},
+		config: &setting.DBFS{MaxPageSize: 100},
+		visibility: &publicshare.VisibilityResult{
+			Filter:     publicshare.TrueFilter(),
+			RootGrants: []publicshare.RootGrant{{RootFileID: 1, RootTreePath: "1", Actions: map[publicshare.Action]bool{}}},
+		},
+		fileClient: &testPublicNavigatorFileClient{
+			childrenByParent: map[int][]*ent.File{
+				1: {
+					{ID: 24, Name: dirtyName, FileChildren: 1, Type: int(types.FileTypeFile), TreePath: "1.24"},
+				},
+			},
+			ancestorsByID: map[int][]*ent.File{
+				24: {rootModel},
+			},
+		},
+	}
+
+	got, ok, err := n.resolveRootChildByDisplayName(context.Background(), "omx-tika-pubtxt-20260501-142102.txt")
+	if err != nil {
+		t.Fatalf("resolveRootChildByDisplayName returned error: %v", err)
+	}
+	if !ok || got == nil {
+		t.Fatalf("expected to resolve historical top-level public file by trimmed display name")
+	}
+	if got.ID() != 24 {
+		t.Fatalf("unexpected file id: got %d want 24", got.ID())
 	}
 }
 
@@ -223,6 +362,41 @@ func TestPublicNavigatorGrantForFileMatchesTreePathAcrossDifferentOwners(t *test
 	if grant.RootFileID != 20 {
 		t.Fatalf("unexpected matched grant: %+v", grant)
 	}
+}
+
+type testPublicNavigatorFileClient struct {
+	inventory.FileClient
+	childrenByParent map[int][]*ent.File
+	ancestorsByID    map[int][]*ent.File
+}
+
+func (t *testPublicNavigatorFileClient) GetChildFiles(
+	_ context.Context,
+	_ *inventory.ListFileParameters,
+	_ int,
+	parent ...*ent.File,
+) (*inventory.ListFileResult, error) {
+	var files []*ent.File
+	for _, item := range parent {
+		if item == nil {
+			continue
+		}
+		files = append(files, t.childrenByParent[item.ID]...)
+	}
+
+	return &inventory.ListFileResult{
+		Files: files,
+		PaginationResults: &inventory.PaginationResults{
+			PageSize: len(files),
+		},
+	}, nil
+}
+
+func (t *testPublicNavigatorFileClient) GetAncestorFiles(_ context.Context, child *ent.File) ([]*ent.File, error) {
+	if child == nil {
+		return nil, nil
+	}
+	return t.ancestorsByID[child.ID], nil
 }
 
 func TestPublicNavigatorGrantForFileDoesNotMatchSelfScopeDescendant(t *testing.T) {

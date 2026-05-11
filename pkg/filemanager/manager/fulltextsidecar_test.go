@@ -398,6 +398,7 @@ func TestPersistFTSSidecarsToHandlerUsesRMetaRootContentFallback(t *testing.T) {
 				SidecarEnabled:       true,
 				SidecarTextEnabled:   true,
 				SidecarAssetsEnabled: true,
+				DocumentExts:         []string{"pdf"},
 			},
 		},
 	}
@@ -442,6 +443,155 @@ func TestPersistFTSSidecarsToHandlerUsesRMetaRootContentFallback(t *testing.T) {
 	}
 	if got, want := string(contentRaw), "根文档内容"; got != want {
 		t.Fatalf("unexpected persisted content artifact: got %q want %q", got, want)
+	}
+	if _, ok := manifest.ObjectByID("rmeta.json"); ok {
+		t.Fatal("did not expect rmeta.json to be persisted in manifest")
+	}
+}
+
+func TestPersistFTSSidecarsToHandlerAlignsRMetaTextWithUnpackedArchivePath(t *testing.T) {
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	ctx := context.Background()
+
+	m := &manager{
+		l: logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{
+			tikaCfg: &setting.FTSTikaExtractorSetting{
+				Endpoint:             "http://tika:9998",
+				SidecarEnabled:       true,
+				SidecarTextEnabled:   true,
+				SidecarAssetsEnabled: true,
+				DocumentExts:         []string{"pdf"},
+				ArchiveExts:          []string{"zip"},
+			},
+		},
+	}
+
+	rmetaRaw := []byte(`[
+		{"Content-Type":"application/zip","X-TIKA:content":"root zip text"},
+		{"X-TIKA:embedded_resource_path":"note.txt","resourceName":"note.txt","Content-Type":"text/plain","X-TIKA:content":"nested note text"}
+	]`)
+	unpackRaw := buildZipForTest(t, map[string][]byte{
+		"nested/note.txt": []byte("nested note text"),
+	})
+	client := &fakeTikaClient{
+		responses: map[string][]byte{
+			"http://tika:9998/tika":       []byte("root zip text"),
+			"http://tika:9998/rmeta":      rmetaRaw,
+			"http://tika:9998/unpack/all": unpackRaw,
+		},
+	}
+	extractor := tikaextractor.NewTikaExtractor(client, m.settings, m.l, m.settings.FTSTikaExtractor(ctx))
+	fileModel := &ent.File{ID: 42, OwnerID: 1, Name: "archive.zip"}
+	entity := &testEntity{id: 7, source: "bucket/archive.zip"}
+	policy := &ent.StoragePolicy{ID: 9, BucketName: "bucket"}
+	source := bytes.NewReader([]byte("zip payload"))
+
+	manifest, manifestPath, err := m.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, fileModel.Name, entity, policy, handler, readerAtReadSeekCloser{Reader: source}, "")
+	if err != nil {
+		t.Fatalf("persistFTSSidecarsToHandler returned error: %v", err)
+	}
+	if manifest == nil || manifestPath == "" {
+		t.Fatalf("expected manifest and path, got manifest=%+v path=%q", manifest, manifestPath)
+	}
+	if _, ok := manifest.ObjectByID("content.txt"); ok {
+		t.Fatal("did not expect archive root content.txt sidecar to be persisted")
+	}
+	if _, ok := manifest.ObjectByID("rmeta.json"); ok {
+		t.Fatal("did not expect rmeta.json sidecar to be persisted")
+	}
+
+	textArtifactID := sidecarAttachmentTextObjectID("attachments/nested/note.txt")
+	if _, ok := manifest.ObjectByID(textArtifactID); !ok {
+		t.Fatalf("expected manifest to include aligned attachment text artifact %q", textArtifactID)
+	}
+
+	attachments := buildEmbeddedSearchAttachmentsFromManifest(fileModel, entity, manifest, rmetaRaw)
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected manifest attachment count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].Path, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "attachments/nested/note.txt")); got != want {
+		t.Fatalf("unexpected attachment path: got %q want %q", got, want)
+	}
+	if got, want := attachments[0].Source, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "attachment-text/attachments/nested/note.txt.txt")); got != want {
+		t.Fatalf("unexpected attachment source: got %q want %q", got, want)
+	}
+
+	hydrated := m.hydrateFTSSidecarAttachmentContents(ctx, handler, attachments)
+	if got, want := hydrated[0].Content, "nested note text"; got != want {
+		t.Fatalf("unexpected hydrated attachment content: got %q want %q", got, want)
+	}
+}
+
+func TestIsFTSDocumentLikeFile(t *testing.T) {
+	cfg := &setting.FTSTikaExtractorSetting{
+		DocumentExts: []string{"pdf", "docx", "txt"},
+		ArchiveExts:  []string{"zip", "rar"},
+	}
+
+	extractor := tikaextractor.NewTikaExtractor(nil, nil, logging.NewConsoleLogger(logging.LevelError), cfg)
+
+	if !shouldSaveFTSSidecarRootContent("report.pdf", cfg, extractor) {
+		t.Fatal("expected pdf to save root sidecar content")
+	}
+	if !shouldSaveFTSSidecarRootContent("script.sh", cfg, extractor) {
+		t.Fatal("expected shell script to save root sidecar content")
+	}
+	if shouldSaveFTSSidecarRootContent("archive.zip", cfg, extractor) {
+		t.Fatal("did not expect zip to save root sidecar content")
+	}
+}
+
+func TestPersistFTSSidecarsToHandlerWritesRootContentForShellScript(t *testing.T) {
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	ctx := context.Background()
+
+	m := &manager{
+		l: logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{
+			tikaCfg: &setting.FTSTikaExtractorSetting{
+				Endpoint:             "http://tika:9998",
+				SidecarEnabled:       true,
+				SidecarTextEnabled:   true,
+				SidecarAssetsEnabled: true,
+				DocumentExts:         []string{"pdf", "txt"},
+				ArchiveExts:          []string{"zip"},
+			},
+		},
+	}
+
+	client := &fakeTikaClient{
+		responses: map[string][]byte{
+			"http://tika:9998/tika":   []byte("#!/usr/bin/env bash\necho hello\n"),
+			"http://tika:9998/rmeta":  []byte(`[]`),
+			"http://tika:9998/unpack": []byte(""),
+		},
+	}
+	extractor := tikaextractor.NewTikaExtractor(client, m.settings, m.l, m.settings.FTSTikaExtractor(ctx))
+	fileModel := &ent.File{ID: 52, OwnerID: 1, Name: "install.sh"}
+	entity := &testEntity{id: 9, source: "bucket/install.sh"}
+	policy := &ent.StoragePolicy{ID: 9, BucketName: "bucket"}
+	source := bytes.NewReader([]byte("#!/usr/bin/env bash\necho hello\n"))
+
+	manifest, _, err := m.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, fileModel.Name, entity, policy, handler, readerAtReadSeekCloser{Reader: source}, "")
+	if err != nil {
+		t.Fatalf("persistFTSSidecarsToHandler returned error: %v", err)
+	}
+	if manifest == nil || !manifest.TextReady {
+		t.Fatalf("expected text-ready manifest, got %+v", manifest)
+	}
+	contentArtifact, ok := manifest.ObjectByID("content.txt")
+	if !ok {
+		t.Fatal("expected shell script content.txt artifact in manifest")
+	}
+	contentRaw, err := os.ReadFile(handler.LocalPath(ctx, contentArtifact.Path))
+	if err != nil {
+		t.Fatalf("failed to read persisted shell content artifact: %v", err)
+	}
+	if got, want := string(contentRaw), "#!/usr/bin/env bash\necho hello"; got != want {
+		t.Fatalf("unexpected persisted shell content artifact: got %q want %q", got, want)
 	}
 }
 

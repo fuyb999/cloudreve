@@ -101,8 +101,7 @@ func TestResolvePublicSearchURIBuildsPublicPathFromRootAncestors(t *testing.T) {
 	fileClient := &testFileClient{
 		ancestorByID: map[int][]*ent.File{
 			12: {
-				{ID: 1, Name: inventory.RootFolderName},
-				{ID: 9, Name: publicshare.DefaultRootName},
+				{ID: 9, Name: inventory.RootFolderName},
 				{ID: 10, Name: "研发部"},
 				{ID: 12, Name: "说明.txt"},
 			},
@@ -333,6 +332,97 @@ func TestBuildEmbeddedSearchAttachmentsFromManifestPrefersAttachmentTextSidecar(
 	}
 }
 
+func TestBuildEmbeddedSearchAttachmentsFromManifestUsesLegacyBasenameTextSidecar(t *testing.T) {
+	textSidecarPath := "cloudreve/fts-sidecar/1/12/4/attachment-text/attachments/note.txt.txt"
+	attachments := buildEmbeddedSearchAttachmentsFromManifest(
+		&ent.File{ID: 12},
+		&testEntity{id: 4},
+		&FTSSidecarManifest{
+			Objects: []FTSSidecarArtifact{
+				{
+					ID:       "attachments/nested/note.txt",
+					Kind:     "embedded",
+					Name:     "note.txt",
+					Path:     "cloudreve/fts-sidecar/1/12/4/attachments/nested/note.txt",
+					MimeType: "text/plain",
+				},
+				{
+					ID:       sidecarAttachmentTextObjectID("attachments/note.txt"),
+					ParentID: "attachments/note.txt",
+					Kind:     "attachment_text",
+					Name:     "note.txt.txt",
+					Path:     textSidecarPath,
+					MimeType: "text/plain; charset=utf-8",
+				},
+			},
+		},
+		nil,
+	)
+
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachment count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].Source, textSidecarPath; got != want {
+		t.Fatalf("unexpected attachment source: got %q want %q", got, want)
+	}
+}
+
+func TestBuildEmbeddedSearchAttachmentsFromManifestWithoutRMetaStillUsesAttachmentTextSidecar(t *testing.T) {
+	textSidecarPath := "cloudreve/fts-sidecar/1/12/4/attachment-text/attachments/nested/note.txt.txt"
+	attachments := buildEmbeddedSearchAttachmentsFromManifest(
+		&ent.File{ID: 12},
+		&testEntity{id: 4},
+		&FTSSidecarManifest{
+			Objects: []FTSSidecarArtifact{
+				{
+					ID:       "attachments/nested/note.txt",
+					Kind:     "embedded",
+					Name:     "note.txt",
+					Path:     "cloudreve/fts-sidecar/1/12/4/attachments/nested/note.txt",
+					MimeType: "text/plain",
+				},
+				{
+					ID:       sidecarAttachmentTextObjectID("attachments/nested/note.txt"),
+					ParentID: "attachments/nested/note.txt",
+					Kind:     "attachment_text",
+					Name:     "note.txt.txt",
+					Path:     textSidecarPath,
+					MimeType: "text/plain; charset=utf-8",
+				},
+			},
+		},
+		nil,
+	)
+
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachment count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].Source, textSidecarPath; got != want {
+		t.Fatalf("unexpected attachment source: got %q want %q", got, want)
+	}
+	if got := attachments[0].Content; got != "" {
+		t.Fatalf("expected no inline content when rmeta is absent, got %q", got)
+	}
+}
+
+func TestShouldRetryFTSSidecarReloadForPublicURIRetriesPartialAttachmentText(t *testing.T) {
+	publicURI := publicshare.BuildPublicURI().Join("docs", "archive.zip")
+
+	if !shouldRetryFTSSidecarReloadForPublicURI(publicURI, []searcher.SearchAttachmentDocument{
+		{Source: "cloudreve/fts-sidecar/1/12/4/attachment-text/attachments/note.txt.txt"},
+		{Source: "cloudreve/fts-sidecar/1/12/4/attachments/nested/meta/info.txt"},
+	}) {
+		t.Fatal("expected retry when any public attachment still points at binary sidecar without content")
+	}
+
+	if shouldRetryFTSSidecarReloadForPublicURI(publicURI, []searcher.SearchAttachmentDocument{
+		{Source: "cloudreve/fts-sidecar/1/12/4/attachment-text/attachments/note.txt.txt"},
+		{Content: "inline content"},
+	}) {
+		t.Fatal("expected no retry when all public attachments have text sidecar or inline content")
+	}
+}
+
 func TestBuildEmbeddedSearchAttachmentsFromManifestSkipsOCRCandidateArtifact(t *testing.T) {
 	attachments := buildEmbeddedSearchAttachmentsFromManifest(
 		&ent.File{ID: 12},
@@ -542,8 +632,7 @@ func TestResolveOwnerFTSURIPreservesOwnerPathForPublicSubtree(t *testing.T) {
 	fileClient := &testFileClient{
 		ancestorByID: map[int][]*ent.File{
 			12: {
-				{ID: 1, Name: inventory.RootFolderName},
-				{ID: 9, Name: publicshare.DefaultRootName},
+				{ID: 9, Name: inventory.RootFolderName},
 				{ID: 10, Name: "研发部"},
 				{ID: 12, Name: "说明.txt"},
 			},
@@ -620,5 +709,63 @@ func TestBuildFTSExtractionPlanSkipsEmptyFileExtractionAndSidecarPersistence(t *
 	}
 	if plan.ShouldPersistSidecar {
 		t.Fatal("expected empty file to skip sidecar persistence")
+	}
+}
+
+func TestResolveOwnerFTSActualURIReturnsDisplayOwnerPathForPublicRootFile(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	fileModel := &ent.File{
+		ID:      12,
+		OwnerID: 7,
+		Name:    "说明.txt",
+	}
+	ownerRoot := &ent.File{ID: 1, Name: inventory.RootFolderName, OwnerID: 7, Type: int(inventorytypes.FileTypeFolder)}
+	dept := &ent.File{ID: 10, Name: "研发部", OwnerID: 7, Type: int(inventorytypes.FileTypeFolder)}
+	target := &ent.File{ID: 12, Name: "说明.txt", OwnerID: 7, Type: int(inventorytypes.FileTypeFile)}
+	fileClient := &testFileClient{
+		ancestorByID: map[int][]*ent.File{
+			12: {
+				{ID: 9, Name: inventory.RootFolderName},
+				{ID: 10, Name: "研发部"},
+				{ID: 12, Name: "说明.txt"},
+			},
+		},
+		fileByID: map[int]*ent.File{
+			12: target,
+		},
+		rootByOwner: map[int]*ent.File{
+			7: ownerRoot,
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			ownerRoot.ID: {dept.Name: dept},
+			dept.ID:      {target.Name: target},
+		},
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     &ent.User{ID: 7},
+		hasher:   hasher,
+		settings: testSettingProvider{},
+		config:   testConfigProvider{},
+		dep: testDep{
+			settings:      testSettingProvider{},
+			config:        testConfigProvider{},
+			fileClient:    fileClient,
+			settingClient: testSettingClient{values: map[string]string{publicshare.PublicRootFileIDSetting: "9"}},
+			registry:      queue.NewTaskRegistry(),
+		},
+	}
+
+	got, err := m.resolveOwnerFTSActualURI(context.Background(), fileModel, nil)
+	if err != nil {
+		t.Fatalf("resolveOwnerFTSActualURI returned error: %v", err)
+	}
+	want := mustURI(t, "cloudreve://my/公共文件/研发部/说明.txt")
+	if got == nil || got.String() != want.String() {
+		t.Fatalf("unexpected display owner uri: got %v want %s", got, want.String())
 	}
 }

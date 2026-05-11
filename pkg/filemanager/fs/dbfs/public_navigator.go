@@ -25,6 +25,8 @@ import (
 
 var publicNavigatorCapability = &boolset.BooleanSet{}
 
+const projectedRootCachePrefix = "__projected_root__:"
+
 func init() {
 	boolset.Sets(map[NavigatorCapability]bool{
 		NavigatorCapabilityCreateFile:     true,
@@ -122,10 +124,14 @@ func (n *publicNavigator) projectedCacheKey(projected *File) string {
 	}
 	if projected.Parent == n.root && projected.Path[pathIndexUser] != nil {
 		if alias := strings.TrimSpace(projected.Path[pathIndexUser].Name()); alias != "" {
-			return alias
+			return projectedRootCacheKey(alias)
 		}
 	}
 	return projected.Name()
+}
+
+func projectedRootCacheKey(alias string) string {
+	return projectedRootCachePrefix + strings.TrimSpace(alias)
 }
 
 func (n *publicNavigator) PersistState(kv cache.Driver, key string) {
@@ -416,6 +422,20 @@ func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 
 		next, err := n.baseNavigator.walkNext(ctx, current, element, index == len(elements)-1)
 		if err != nil {
+			if current == n.root {
+				fallback, fallbackOK, fallbackErr := n.resolveRootChildByDisplayName(ctx, element)
+				if fallbackErr != nil {
+					return lastAncestor, fallbackErr
+				}
+				if fallbackOK {
+					filtered, visible := n.filter(ctx, fallback)
+					if !visible {
+						return lastAncestor, fs.ErrPathNotExist.WithError(fmt.Errorf("public file is not visible"))
+					}
+					current = filtered
+					continue
+				}
+			}
 			return lastAncestor, fmt.Errorf("failed to walk into %q: %w", element, err)
 		}
 
@@ -431,6 +451,65 @@ func (n *publicNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 	return current, nil
 }
 
+func (n *publicNavigator) resolveRootChildByDisplayName(ctx context.Context, raw string) (*File, bool, error) {
+	if n.root == nil || n.root.Model == nil {
+		return nil, false, nil
+	}
+
+	displayName := strings.TrimSpace(raw)
+	if displayName == "" {
+		return nil, false, nil
+	}
+
+	visibility := n.visibility
+	if visibility == nil {
+		var err error
+		visibility, err = n.refreshVisibility(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to resolve public visibility: %w", err)
+		}
+	}
+
+	filter := publicshare.ToEntPredicate(visibility.Filter)
+	children, err := n.fileClient.GetChildFiles(
+		context.WithValue(ctx, inventory.LoadFileMetadata{}, true),
+		&inventory.ListFileParameters{
+			PaginationArgs: &inventory.PaginationArgs{
+				PageSize:            n.config.MaxPageSize,
+				UseCursorPagination: true,
+			},
+			MixedType:      true,
+			ExtraPredicate: filter,
+		},
+		n.user.ID,
+		n.root.Model,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to load public root children: %w", err)
+	}
+
+	for _, model := range children.Files {
+		if model == nil {
+			continue
+		}
+		normalizedName := NormalizePublicTopLevelDisplayName(model.Name, model.ID, n.hasher)
+		if normalizedName != displayName && strings.TrimSpace(model.Name) != displayName {
+			continue
+		}
+
+		file := newFile(n.root, model)
+		if file.IsNil() {
+			continue
+		}
+		if ownerURI, ownerErr := n.ownerURIForTarget(ctx, model); ownerErr == nil {
+			file.Path[pathIndexRoot] = ownerURI
+		}
+		return file, true, nil
+	}
+
+	return nil, false, nil
+}
+
 func (n *publicNavigator) projectedRootFromCache(alias string) (*File, bool) {
 	if n.root == nil || n.root.mu == nil {
 		return nil, false
@@ -438,7 +517,7 @@ func (n *publicNavigator) projectedRootFromCache(alias string) (*File, bool) {
 
 	n.root.mu.Lock()
 	defer n.root.mu.Unlock()
-	child, ok := n.root.Children[alias]
+	child, ok := n.root.Children[projectedRootCacheKey(alias)]
 	return child, ok
 }
 
@@ -660,7 +739,7 @@ func (n *publicNavigator) projectRootGrant(ctx context.Context, grant publicshar
 	projected.Path[pathIndexUser] = newPublicUri().Join(alias)
 	if n.root != nil && n.root.mu != nil {
 		n.root.mu.Lock()
-		n.root.Children[alias] = projected
+		n.root.Children[projectedRootCacheKey(alias)] = projected
 		n.root.mu.Unlock()
 	}
 	return projected, nil

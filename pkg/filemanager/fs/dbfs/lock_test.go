@@ -63,3 +63,30 @@ func TestDisplayOnlyPublicRootNameAliasRejectsRegularFolders(t *testing.T) {
 		t.Fatalf("regular public folders should not bypass consistency check")
 	}
 }
+
+func TestDisplayOnlyPublicRootNameAliasAllowsHiddenPublicRootOnMyView(t *testing.T) {
+	ownerURI, err := fs.NewUriFromString("cloudreve://my/公共文件")
+	if err != nil {
+		t.Fatalf("failed to parse my public root uri: %v", err)
+	}
+
+	cached := &File{
+		Model: &ent.File{
+			ID:   1,
+			Name: publicshare.DefaultRootName,
+			Type: int(types.FileTypeFolder),
+		},
+		Path: [2]*fs.URI{ownerURI, ownerURI},
+	}
+
+	latest := &ent.File{
+		ID:           1,
+		Name:         inventory.RootFolderName,
+		Type:         int(types.FileTypeFolder),
+		FileChildren: 0,
+	}
+
+	if !isDisplayOnlyPublicRootNameAlias(cached, latest) {
+		t.Fatalf("expected hidden public root alias on my view to be treated as consistent")
+	}
+}

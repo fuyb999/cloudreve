@@ -30,6 +30,7 @@ import (
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gofrs/uuid"
 )
 
@@ -42,7 +43,6 @@ const (
 
 var ftsSidecarBaseFiles = []string{
 	"content.txt",
-	"rmeta.json",
 	"manifest.json",
 }
 
@@ -180,6 +180,25 @@ func sidecarAttachmentLogicalIDFromDocID(docID string) string {
 
 func sidecarAttachmentTextObjectIDFromDocID(docID string) string {
 	return sidecarAttachmentTextObjectID(sidecarAttachmentLogicalIDFromDocID(docID))
+}
+
+func sidecarAttachmentLogicalIDFromTextObjectID(objectID string) string {
+	objectID, ok := normalizeFTSSidecarRelativePath(objectID)
+	if !ok {
+		return ""
+	}
+
+	prefix := ftsSidecarTextDir + "/"
+	if !strings.HasPrefix(objectID, prefix) || !strings.HasSuffix(objectID, ".txt") {
+		return ""
+	}
+
+	logicalID := strings.TrimSuffix(strings.TrimPrefix(objectID, prefix), ".txt")
+	logicalID, ok = normalizeFTSSidecarRelativePath(logicalID)
+	if !ok {
+		return ""
+	}
+	return logicalID
 }
 
 func isFTSSidecarAttachmentTextPath(source string) bool {
@@ -480,6 +499,7 @@ func (m *manager) persistFTSSidecarsToHandler(
 		ExtractedAt: time.Now(),
 	}
 	var rmetaRaw []byte
+	documentLike := shouldSaveFTSSidecarRootContent(fileModel.Name, cfg, tika)
 
 	if cfg.SidecarTextEnabled {
 		if text == "" && rewindSidecarSource(m, source) {
@@ -499,7 +519,7 @@ func (m *manager) persistFTSSidecarsToHandler(
 			text = parseTikaRMetaRootContent(rmetaRaw)
 		}
 
-		if text != "" {
+		if text != "" && documentLike {
 			savePath := path.Join(prefix, "content.txt")
 			if err := putSidecarBytes(ctx, handler, savePath, "content.txt", "text/plain; charset=utf-8", []byte(text)); err != nil {
 				return nil, "", fmt.Errorf("failed to save sidecar text: %w", err)
@@ -528,30 +548,43 @@ func (m *manager) persistFTSSidecarsToHandler(
 			rmetaRaw = append([]byte(nil), raw...)
 		}
 
-		if len(bytes.TrimSpace(rmetaRaw)) > 0 {
-			savePath := path.Join(prefix, "rmeta.json")
-			if err := putSidecarBytes(ctx, handler, savePath, "rmeta.json", "application/json", rmetaRaw); err != nil {
-				return nil, "", fmt.Errorf("failed to save tika rmeta sidecar: %w", err)
+		var unpackRaw []byte
+		if rewindSidecarSource(m, source) {
+			raw, err := unpackTikaAssets(ctx, tika, fileModel.Name, source, artifactOpts)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to unpack tika embedded resources: %w", err)
 			}
-			manifest.Objects = append(manifest.Objects, FTSSidecarArtifact{
-				ID:       "rmeta.json",
-				Depth:    0,
-				Kind:     "metadata",
-				Name:     "rmeta.json",
-				Path:     savePath,
-				MimeType: "application/json",
-				Size:     int64(len(rmetaRaw)),
-			})
+			unpackRaw = raw
+		}
+
+		var embeddedArtifacts []FTSSidecarArtifact
+		if len(unpackRaw) > 0 {
+			artifacts, err := saveSidecarArchive(ctx, handler, prefix, ftsSidecarEmbeddedDir, unpackRaw)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to save tika embedded resources: %w", err)
+			}
+			embeddedArtifacts = artifacts
+			manifest.Objects = append(manifest.Objects, artifacts...)
 		}
 
 		if len(rmetaRaw) > 0 {
+			usedLogicalIDs := map[string]struct{}{}
 			for _, item := range parseTikaRMetaAttachments(rmetaRaw) {
-				relativeName, ok := normalizeFTSSidecarRelativePath(firstNonEmpty(item.Path, item.Name))
+				relativeName, ok := normalizeFTSSidecarRelativePath(preferredTikaAttachmentRelativeName(item.Name, item.Path))
 				if !ok || item.Content == "" {
 					continue
 				}
 
 				logicalID := path.Join(ftsSidecarEmbeddedDir, relativeName)
+				logicalID = resolveTikaAttachmentTextLogicalID(logicalID, item, embeddedArtifacts, usedLogicalIDs)
+				if logicalID == "" {
+					continue
+				}
+				if _, exists := usedLogicalIDs[logicalID]; exists {
+					continue
+				}
+				usedLogicalIDs[logicalID] = struct{}{}
+
 				artifact, _, err := putSidecarTextArtifact(ctx, handler, prefix, logicalID, item.Name, item.Content)
 				if err != nil {
 					return nil, "", fmt.Errorf("failed to save tika attachment text sidecar %q: %w", logicalID, err)
@@ -559,20 +592,6 @@ func (m *manager) persistFTSSidecarsToHandler(
 				if artifact.ID != "" {
 					manifest.Objects = append(manifest.Objects, artifact)
 				}
-			}
-		}
-
-		if rewindSidecarSource(m, source) {
-			raw, err := unpackTikaAssets(ctx, tika, fileModel.Name, source, artifactOpts)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to unpack tika embedded resources: %w", err)
-			}
-			if len(raw) > 0 {
-				artifacts, err := saveSidecarArchive(ctx, handler, prefix, ftsSidecarEmbeddedDir, raw)
-				if err != nil {
-					return nil, "", fmt.Errorf("failed to save tika embedded resources: %w", err)
-				}
-				manifest.Objects = append(manifest.Objects, artifacts...)
 			}
 		}
 
@@ -602,6 +621,64 @@ func (m *manager) persistFTSSidecarsToHandler(
 	}
 
 	return manifest, savePath, nil
+}
+
+func shouldSaveFTSSidecarRootContent(fileName string, cfg *setting.FTSTikaExtractorSetting, extractor *tikaextractor.TikaExtractor) bool {
+	if cfg == nil || extractor == nil {
+		return false
+	}
+
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return false
+	}
+
+	ext := util.Ext(fileName)
+	if ext != "" && util.ContainsString(cfg.ArchiveExts, ext) {
+		return false
+	}
+
+	if ext != "" && util.ContainsString(cfg.DocumentExts, ext) {
+		return true
+	}
+
+	return isFTSSidecarRootTextMimeType(extractor.DetectFileContentType(fileName))
+}
+
+func isFTSSidecarRootTextMimeType(contentType string) bool {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return false
+	}
+
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = contentType
+	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType == "" {
+		return false
+	}
+
+	if strings.HasPrefix(mediaType, "text/") {
+		return true
+	}
+
+	switch mediaType {
+	case "application/javascript",
+		"application/x-javascript",
+		"application/typescript",
+		"application/json",
+		"application/xml",
+		"application/x-sh",
+		"application/x-perl",
+		"application/x-sql",
+		"application/mbox",
+		"message/rfc822":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *manager) persistExternalFTSSidecars(
@@ -800,6 +877,9 @@ func (m *manager) GetFTSSidecarContent(ctx context.Context, uri *fs.URI, name st
 	if !found {
 		artifact, found = manifest.ObjectByName(name)
 	}
+	if found && shouldHideLegacyRootContentArtifact(manifest, artifact) {
+		found = false
+	}
 	if !found {
 		return nil, serializer.NewError(serializer.CodeNotFound, "Full text sidecar object not found", nil)
 	}
@@ -888,6 +968,7 @@ func (m *manager) loadFTSSidecarManifest(ctx context.Context, uri *fs.URI) (fs.F
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return file, nil, nil, nil, serializer.NewError(serializer.CodeIOFailed, "Failed to parse full text sidecar manifest", err)
 	}
+	manifest.Objects = filterLegacyFTSSidecarArtifacts(&manifest, manifest.Objects)
 
 	return file, &manifest, handler, entity, nil
 }
@@ -1007,7 +1088,7 @@ func (m *manager) cloneFTSSidecarsForCopiedFile(ctx context.Context, originalFil
 	}
 	writtenPaths = append(writtenPaths, targetManifestPath)
 
-	targetURI, err := m.resolveFTSFileURIByModel(ctx, targetFileModel)
+	targetURI, err := m.resolveOwnerFTSActualURI(ctx, targetFileModel, nil)
 	if err != nil {
 		cleanupTarget()
 		return false, fmt.Errorf("failed to resolve copied file uri: %w", err)
@@ -1199,6 +1280,99 @@ func putSidecarTextArtifact(ctx context.Context, handler driver.Handler, prefix,
 		MimeType: "text/plain; charset=utf-8",
 		Size:     int64(len(raw)),
 	}, savePath, nil
+}
+
+func resolveTikaAttachmentTextLogicalID(
+	defaultLogicalID string,
+	item tikaRMetaAttachment,
+	artifacts []FTSSidecarArtifact,
+	used map[string]struct{},
+) string {
+	defaultLogicalID, ok := normalizeFTSSidecarRelativePath(defaultLogicalID)
+	if !ok {
+		return ""
+	}
+
+	if len(artifacts) == 0 {
+		return defaultLogicalID
+	}
+
+	isAvailable := func(id string) bool {
+		id, ok := normalizeFTSSidecarRelativePath(id)
+		if !ok {
+			return false
+		}
+		if _, exists := used[id]; exists {
+			return false
+		}
+		return true
+	}
+	artifactByID := map[string]FTSSidecarArtifact{}
+	for _, artifact := range artifacts {
+		id, ok := normalizeFTSSidecarRelativePath(artifact.ID)
+		if !ok {
+			continue
+		}
+		artifactByID[id] = artifact
+	}
+
+	if _, exists := artifactByID[defaultLogicalID]; exists && isAvailable(defaultLogicalID) {
+		return defaultLogicalID
+	}
+
+	candidates := []string{
+		item.Path,
+		item.Name,
+		path.Base(item.Path),
+		path.Base(item.Name),
+		path.Base(defaultLogicalID),
+	}
+	for _, candidate := range candidates {
+		candidate, ok := normalizeFTSSidecarRelativePath(candidate)
+		if !ok {
+			continue
+		}
+		fullCandidate := path.Join(ftsSidecarEmbeddedDir, candidate)
+		if _, exists := artifactByID[fullCandidate]; exists && isAvailable(fullCandidate) {
+			return fullCandidate
+		}
+	}
+
+	var suffixMatches []string
+	for id := range artifactByID {
+		if !isAvailable(id) {
+			continue
+		}
+		for _, candidate := range candidates {
+			candidate, ok := normalizeFTSSidecarRelativePath(candidate)
+			if !ok {
+				continue
+			}
+			if id == path.Join(ftsSidecarEmbeddedDir, candidate) || strings.HasSuffix(id, "/"+candidate) {
+				suffixMatches = append(suffixMatches, id)
+				break
+			}
+		}
+	}
+	if len(suffixMatches) == 1 {
+		return suffixMatches[0]
+	}
+
+	baseName := path.Base(defaultLogicalID)
+	var baseMatches []string
+	for id, artifact := range artifactByID {
+		if !isAvailable(id) {
+			continue
+		}
+		if path.Base(id) == baseName || path.Base(artifact.Name) == baseName {
+			baseMatches = append(baseMatches, id)
+		}
+	}
+	if len(baseMatches) == 1 {
+		return baseMatches[0]
+	}
+
+	return defaultLogicalID
 }
 
 func requestClientForSidecar(m *manager) request.Client {
@@ -1488,8 +1662,54 @@ func loadFTSSidecarManifestByPath(ctx context.Context, handler driver.Handler, m
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return nil
 	}
+	manifest.Objects = filterLegacyFTSSidecarArtifacts(&manifest, manifest.Objects)
 
 	return &manifest
+}
+
+func filterLegacyFTSSidecarArtifacts(manifest *FTSSidecarManifest, objects []FTSSidecarArtifact) []FTSSidecarArtifact {
+	if len(objects) == 0 {
+		return objects
+	}
+
+	filtered := make([]FTSSidecarArtifact, 0, len(objects))
+	for _, object := range objects {
+		if shouldHideLegacyRootContentArtifact(manifest, object) {
+			continue
+		}
+		filtered = append(filtered, object)
+	}
+
+	return filtered
+}
+
+func shouldHideLegacyRootContentArtifact(manifest *FTSSidecarManifest, artifact FTSSidecarArtifact) bool {
+	if strings.TrimSpace(artifact.ID) != "content.txt" {
+		return false
+	}
+
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Provider), ftsSidecarProviderTika) {
+		return false
+	}
+
+	sourcePath := strings.TrimSpace(manifest.SourcePath)
+	if sourcePath == "" {
+		return false
+	}
+
+	ext := util.Ext(path.Base(sourcePath))
+	if ext == "" {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "zip", "tar", "tgz", "tbz", "tbz2", "txz", "tlz", "7z", "rar", "ar",
+		"gz", "z", "bz", "bz2", "xz", "lzma", "lz4", "br", "snappy", "sz",
+		"pack200", "cpio", "arj", "dump", "jar", "war", "ear":
+		return true
+	default:
+		return false
+	}
 }
 
 func ftsSidecarRelativePath(baseDir, itemPath string) (string, bool) {

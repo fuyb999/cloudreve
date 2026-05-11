@@ -884,7 +884,23 @@ func (f *fileClient) UpgradePlaceholder(ctx context.Context, file *ent.File, mod
 		return e.ID == entityId
 	})
 	if !found {
-		return fmt.Errorf("no identity with id %d entity for file %d", entityId, file.ID)
+		reloaded, reloadErr := f.GetByID(context.WithValue(ctx, LoadFileEntity{}, true), file.ID)
+		if reloadErr != nil {
+			return fmt.Errorf("failed to reload file %d entities while upgrading placeholder: %w", file.ID, reloadErr)
+		}
+
+		file = reloaded
+		entities, err = file.Edges.EntitiesOrErr()
+		if err != nil {
+			return err
+		}
+
+		placeholder, found = lo.Find(entities, func(e *ent.Entity) bool {
+			return e.ID == entityId
+		})
+		if !found {
+			return fmt.Errorf("no identity with id %d entity for file %d", entityId, file.ID)
+		}
 	}
 
 	stm := f.client.Entity.

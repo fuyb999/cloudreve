@@ -283,17 +283,29 @@ func isDisplayOnlyPublicRootNameAlias(cached *File, latest *ent.File) bool {
 	}
 
 	uri := cached.Uri(false)
-	if uri == nil || uri.FileSystem() != constants.FileSystemPublic {
+	if uri == nil {
 		return false
 	}
 
-	if !cached.IsRootFolder() || cached.Name() != publicshare.DefaultRootName {
+	if cached.Parent != nil || cached.Name() != publicshare.DefaultRootName {
 		return false
 	}
 
-	return latest.Name == inventory.RootFolderName &&
-		latest.FileChildren == 0 &&
-		latest.Type == int(types.FileTypeFolder)
+	if latest.Name != inventory.RootFolderName ||
+		latest.FileChildren != 0 ||
+		latest.Type != int(types.FileTypeFolder) {
+		return false
+	}
+
+	switch uri.FileSystem() {
+	case constants.FileSystemPublic:
+		return len(uri.Elements()) == 0
+	case constants.FileSystemMy:
+		elements := uri.Elements()
+		return len(elements) == 1 && elements[0] == publicshare.DefaultRootName
+	default:
+		return false
+	}
 }
 
 // LockSessionFromCtx retrieves lock session from context. If no lock session

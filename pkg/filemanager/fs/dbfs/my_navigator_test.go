@@ -258,6 +258,7 @@ type testMyNavigatorFileClient struct {
 	inventory.FileClient
 	children map[int][]*ent.File
 	roots    map[int]*ent.File
+	files    map[int]*ent.File
 }
 
 func (c *testMyNavigatorFileClient) GetChildFiles(ctx context.Context, args *inventory.ListFileParameters, ownerID int, roots ...*ent.File) (*inventory.ListFileResult, error) {
@@ -288,6 +289,29 @@ func (c *testMyNavigatorFileClient) Root(ctx context.Context, user *ent.User) (*
 		return nil, fmt.Errorf("root not found")
 	}
 	return root, nil
+}
+
+func (c *testMyNavigatorFileClient) GetByID(ctx context.Context, id int) (*ent.File, error) {
+	if c.files != nil {
+		if file, ok := c.files[id]; ok {
+			return file, nil
+		}
+	}
+	return nil, fmt.Errorf("file %d not found", id)
+}
+
+func (c *testMyNavigatorFileClient) GetChildFile(ctx context.Context, root *ent.File, ownerID int, child string, eagerLoading bool) (*ent.File, error) {
+	if root == nil {
+		return nil, fmt.Errorf("root not found")
+	}
+
+	for _, item := range c.children[root.ID] {
+		if item != nil && item.Name == child {
+			return item, nil
+		}
+	}
+
+	return nil, fmt.Errorf("child %q not found", child)
 }
 
 type testMyNavigatorUserClient struct {

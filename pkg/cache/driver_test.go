@@ -1,61 +1,52 @@
 package cache
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestSet(t *testing.T) {
-	asserts := assert.New(t)
-
-	asserts.NoError(Set("123", "321", -1))
+func newTestDriver() Driver {
+	return NewMemoStore("", logging.NewConsoleLogger(logging.LevelError))
 }
 
-func TestGet(t *testing.T) {
-	asserts := assert.New(t)
-	asserts.NoError(Set("123", "321", -1))
+func TestDriverSetGetDelete(t *testing.T) {
+	a := assert.New(t)
+	driver := newTestDriver()
 
-	value, ok := Get("123")
-	asserts.True(ok)
-	asserts.Equal("321", value)
+	a.NoError(driver.Set("123", "321", -1))
 
-	value, ok = Get("not_exist")
-	asserts.False(ok)
+	value, ok := driver.Get("123")
+	a.True(ok)
+	a.Equal("321", value)
+
+	a.NoError(driver.Delete("", "123"))
+	_, ok = driver.Get("123")
+	a.False(ok)
 }
 
-func TestDeletes(t *testing.T) {
-	asserts := assert.New(t)
-	asserts.NoError(Set("123", "321", -1))
-	err := Deletes([]string{"123"}, "")
-	asserts.NoError(err)
-	_, exist := Get("123")
-	asserts.False(exist)
+func TestDriverGets(t *testing.T) {
+	a := assert.New(t)
+	driver := newTestDriver()
+
+	a.NoError(driver.Set("test_1", "1", -1))
+
+	values, missed := driver.Gets([]string{"1", "2"}, "test_")
+	a.Equal(map[string]any{"1": "1"}, values)
+	a.Equal([]string{"2"}, missed)
 }
 
-func TestGetSettings(t *testing.T) {
-	asserts := assert.New(t)
-	asserts.NoError(Set("test_1", "1", -1))
+func TestDriverSets(t *testing.T) {
+	a := assert.New(t)
+	driver := newTestDriver()
 
-	values, missed := GetSettings([]string{"1", "2"}, "test_")
-	asserts.Equal(map[string]string{"1": "1"}, values)
-	asserts.Equal([]string{"2"}, missed)
-}
+	a.NoError(driver.Sets(map[string]any{"3": "3", "4": "4"}, "test_"))
 
-func TestSetSettings(t *testing.T) {
-	asserts := assert.New(t)
-
-	err := SetSettings(map[string]string{"3": "3", "4": "4"}, "test_")
-	asserts.NoError(err)
-	value1, _ := Get("test_3")
-	value2, _ := Get("test_4")
-	asserts.Equal("3", value1)
-	asserts.Equal("4", value2)
-}
-
-func TestInit(t *testing.T) {
-	asserts := assert.New(t)
-
-	asserts.NotPanics(func() {
-		Init()
-	})
+	value1, ok1 := driver.Get("test_3")
+	value2, ok2 := driver.Get("test_4")
+	a.True(ok1)
+	a.True(ok2)
+	a.Equal("3", value1)
+	a.Equal("4", value2)
 }

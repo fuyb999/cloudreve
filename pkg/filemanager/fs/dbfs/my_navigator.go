@@ -103,6 +103,10 @@ func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 		return nil, ErrPermissionDenied
 	}
 
+	if file, ok, err := n.tryResolveHiddenPublicPath(ctx, path, fsUid); ok {
+		return file, err
+	}
+
 	if n.root == nil || n.rootUserID != fsUid {
 		// Anonymous user does not have a root folder.
 		if inventory.IsAnonymousUser(n.user) {
@@ -145,6 +149,56 @@ func (n *myNavigator) To(ctx context.Context, path *fs.URI) (*File, error) {
 	}
 
 	return current, nil
+}
+
+func (n *myNavigator) tryResolveHiddenPublicPath(ctx context.Context, path *fs.URI, fsUid int) (*File, bool, error) {
+	if !HiddenPublicRootAccessEnabled(ctx) || path == nil {
+		return nil, false, nil
+	}
+
+	elements := path.Elements()
+	if len(elements) == 0 || elements[0] != publicshare.DefaultRootName {
+		return nil, false, nil
+	}
+
+	rootModel, err := n.publicService.Root(ctx)
+	if err != nil && n.user != nil {
+		rootModel, err = n.publicService.EnsureRoot(ctx, n.user)
+	}
+	if err != nil || rootModel == nil {
+		return nil, true, fs.ErrPathNotExist.WithError(fmt.Errorf("public root not found"))
+	}
+
+	displayRoot := rootModel
+	if rootModel.Name == inventory.RootFolderName {
+		cloned := *rootModel
+		cloned.Name = publicshare.DefaultRootName
+		displayRoot = &cloned
+	}
+
+	root := newFile(nil, displayRoot)
+	rootPath := path.Root().Join(publicshare.DefaultRootName)
+	root.Path[pathIndexRoot], root.Path[pathIndexUser] = rootPath, rootPath
+	root.IsUserRoot = true
+	root.CapabilitiesBs = n.rootCapabilities(fsUid)
+	if n.user != nil && fsUid == n.user.ID {
+		root.OwnerModel = n.user
+	} else {
+		root.OwnerModel = &ent.User{ID: fsUid}
+	}
+	root.disableView = n.user != nil && fsUid != n.user.ID
+
+	current, lastAncestor := root, root
+	remaining := elements[1:]
+	for index, element := range remaining {
+		lastAncestor = current
+		current, err = n.walkNext(ctx, current, element, index == len(remaining)-1)
+		if err != nil {
+			return lastAncestor, true, fmt.Errorf("failed to walk into %q: %w", element, err)
+		}
+	}
+
+	return current, true, nil
 }
 
 func (n *myNavigator) targetUser(ctx context.Context, userID int) (*ent.User, error) {
@@ -239,6 +293,23 @@ func withHiddenPublicRootAccess(ctx context.Context, target *File) context.Conte
 	}
 
 	return context.WithValue(ctx, hiddenPublicRootAccessCtxKey{}, true)
+}
+
+// WithHiddenPublicRootAccess grants the current request temporary access to
+// hidden public-root projections during path resolution.
+func WithHiddenPublicRootAccess(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, hiddenPublicRootAccessCtxKey{}, true)
+}
+
+func HiddenPublicRootAccessEnabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	allowed, _ := ctx.Value(hiddenPublicRootAccessCtxKey{}).(bool)
+	return allowed
 }
 
 func (n *myNavigator) Capabilities(isSearching bool) *fs.NavigatorProps {

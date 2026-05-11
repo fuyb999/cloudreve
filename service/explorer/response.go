@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
@@ -16,6 +18,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
+	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/queue"
@@ -440,12 +443,12 @@ func BuildFileResponse(ctx context.Context, u *ent.User, f fs.File, hasher hashi
 	res := &FileResponse{
 		Type:          int(f.Type()),
 		ID:            hashid.EncodeFileID(hasher, f.ID()),
-		Name:          f.DisplayName(),
+		Name:          normalizePublicTopLevelName(f, hasher),
 		CreatedAt:     f.CreatedAt(),
 		UpdatedAt:     f.UpdatedAt(),
 		Size:          f.Size(),
 		Metadata:      f.Metadata(),
-		Path:          f.Uri(false).String(),
+		Path:          normalizePublicResponsePath(f, hasher),
 		Shared:        f.Shared(),
 		Capability:    cap,
 		Owned:         owner == nil || owner.ID == u.ID,
@@ -454,6 +457,54 @@ func BuildFileResponse(ctx context.Context, u *ent.User, f fs.File, hasher hashi
 		PrimaryEntity: hashid.EncodeEntityID(hasher, f.PrimaryEntityID()),
 	}
 	return res
+}
+
+func normalizePublicTopLevelName(f fs.File, hasher hashid.Encoder) string {
+	if f == nil || f.IsNil() {
+		return ""
+	}
+
+	name := strings.TrimSpace(f.DisplayName())
+	if name == "" {
+		return ""
+	}
+
+	uri := f.Uri(false)
+	if uri == nil || uri.FileSystem() != constants.FileSystemPublic {
+		return name
+	}
+
+	if len(uri.Elements()) != 1 {
+		return name
+	}
+
+	return dbfs.NormalizePublicTopLevelDisplayName(name, f.ID(), hasher)
+}
+
+func normalizePublicResponsePath(f fs.File, hasher hashid.Encoder) string {
+	if f == nil || f.IsNil() {
+		return ""
+	}
+
+	uri := f.Uri(false)
+	if uri == nil {
+		return ""
+	}
+	if uri.FileSystem() != constants.FileSystemPublic {
+		return uri.String()
+	}
+
+	elements := uri.Elements()
+	if len(elements) != 1 {
+		return uri.String()
+	}
+
+	name := normalizePublicTopLevelName(f, hasher)
+	if name == "" {
+		return uri.String()
+	}
+
+	return uri.Root().Join(name).String()
 }
 
 func BuildExtendedInfo(ctx context.Context, u *ent.User, f fs.File, hasher hashid.Encoder) *ExtendedInfo {

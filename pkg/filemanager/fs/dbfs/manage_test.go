@@ -165,6 +165,33 @@ func TestShouldQueueFullTextCopySkipsWhenFTSDisabledWithoutExistingIndex(t *test
 	}
 }
 
+func TestIsPublicFileMutationTarget(t *testing.T) {
+	publicURI, err := fs.NewUriFromString("cloudreve://public/team-alpha")
+	if err != nil {
+		t.Fatalf("failed to parse public uri: %v", err)
+	}
+	myURI, err := fs.NewUriFromString("cloudreve://my/docs")
+	if err != nil {
+		t.Fatalf("failed to parse my uri: %v", err)
+	}
+
+	if !isPublicFileMutationTarget(&File{
+		Model: &ent.File{ID: 1, Name: "team-alpha"},
+		Path:  [2]*fs.URI{publicURI, publicURI},
+	}) {
+		t.Fatal("expected public file target to be recognized")
+	}
+	if isPublicFileMutationTarget(&File{
+		Model: &ent.File{ID: 2, Name: "docs"},
+		Path:  [2]*fs.URI{myURI, myURI},
+	}) {
+		t.Fatal("did not expect my file target to be recognized as public")
+	}
+	if isPublicFileMutationTarget(nil) {
+		t.Fatal("did not expect nil target to be public")
+	}
+}
+
 func mustTestFile(t *testing.T, id int, host, userInfo, filePath string) *File {
 	t.Helper()
 
