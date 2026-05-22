@@ -1,0 +1,23 @@
+{
+  "active": false,
+  "current_phase": "completed_rebuild_folder_sync_fix",
+  "iteration": 1,
+  "max_iterations": 1,
+  "task_description": "Fix rebuild index so FTSSyncFolders switch is honored during rebuild and verify with focused tests",
+  "run_outcome": "finish",
+  "lifecycle_outcome": "finished",
+  "validated_tests": [
+    "go test ./pkg/filemanager/manager -run TestShouldExtractTextAllowsTikaToDetectByContent|TestShouldExtractTextRejectsEmptyFile|TestResolveOwnerFTSURIPreservesOwnerPathForPublicSubtree|TestBuildFTSExtractionPlanSkipsEmptyFileExtractionAndSidecarPersistence|TestPersistFTSSidecarsToHandlerUsesRMetaRootContentFallback|TestPerformIndexingUpsertsLatestVersionWhenTextExtractionFails|TestResolveFTSFileURIByModelPrefersPublicURI|TestApplySlaveFTSSidecarResultPublicURIUsesBypassOwnerCheck",
+    "go test ./pkg/filemanager/fs/dbfs -run TestOwnerForNewChildUsesCurrentUserForPublicTargets|TestStoragePolicyForOwnerUsesGroupCache",
+    "go test ./pkg/filemanager/manager -run TestWithUploadSessionPublicVisibilityRestoresOverride|TestWithPublicBypassMarksPublicURI",
+    "go test ./service/explorer -run TestBuildFullTextSidecarResponseIncludesHierarchyAndIDBasedURLs|TestParseFullTextSidecarObjectURIReturnsParentAsFsURI",
+    "go test ./pkg/filemanager/manager -run TestCreateQueuesFullTextReconcileForNewFilesAndFolders"
+  ],
+  "completed_at": "2026-04-28T00:52:58.531Z",
+  "files": [
+    "pkg/filemanager/workflows/rebuild_index.go",
+    "pkg/filemanager/workflows/rebuild_index_filter_test.go"
+  ],
+  "tests": "go test ./pkg/filemanager/workflows -run 'TestShouldIndexRebuildURI|TestMatchesRebuildStoragePolicy|TestShouldIndexRebuildFile|TestFilterRebuildFiles|TestNewRebuildIndexTaskStoresSkipExtractionOptions|TestRebuildIndexTaskSummarizeIncludesSkipExtractionOptions'",
+  "summary": "Rebuild path previously used Count/ListIndexableFiles including folders and only filtered trash; now it skips folders when FTSSyncFolders=false and adjusts total progress for skipped folders."
+}

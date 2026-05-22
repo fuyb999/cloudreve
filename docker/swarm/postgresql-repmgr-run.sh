@@ -15,6 +15,28 @@ readonly repmgrd_cmd="$(command -v repmgrd)"
 readonly local_host="127.0.0.1"
 readonly advertised_host="${REPMGR_ADVERTISE_HOST:-$REPMGR_NODE_NAME}"
 
+ensure_local_repmgr_hostname() {
+    local hostnames=""
+    local candidate
+
+    for candidate in "${REPMGR_NODE_NAME:-}" "${REPMGR_NODE_NETWORK_NAME:-}" "${REPMGR_ADVERTISE_HOST:-}"; do
+        [[ -n "${candidate}" && "${candidate}" != "${local_host}" ]] || continue
+        if [[ " ${hostnames} " != *" ${candidate} "* ]]; then
+            hostnames="${hostnames:+${hostnames} }${candidate}"
+        fi
+    done
+
+    [[ -n "${hostnames}" ]] || return 0
+    if grep -Eq "^[[:space:]]*${local_host//./\\.}[[:space:]].*(^|[[:space:]])(${hostnames// /|})([[:space:]]|$)" /etc/hosts; then
+        return 0
+    fi
+
+    info "Mapping local repmgr hostname(s) to ${local_host}: ${hostnames}"
+    if ! echo "${local_host} ${hostnames}" >>/etc/hosts; then
+        warn "Could not update /etc/hosts; ensure the service uses extra_hosts for: ${hostnames}"
+    fi
+}
+
 clean_stale_postgres_state() {
     local -a pg_isready_args=(
         -U postgres
@@ -47,7 +69,7 @@ psql_super() {
 }
 
 wait_for_local_postgres() {
-    local -i timeout=60
+    local -i timeout="${POSTGRESQL_LOCAL_START_TIMEOUT:-600}"
     local -i step=1
     local -i max_tries=$((timeout / step))
     local -i i
@@ -104,6 +126,7 @@ sync_advertised_conninfo() {
     psql_super "${REPMGR_DATABASE}" "UPDATE repmgr.nodes SET conninfo = regexp_replace(conninfo, 'host=[^ ]+', 'host=${advertised_host}') WHERE node_id=${REPMGR_NODE_ID} OR node_name='${REPMGR_NODE_NAME}';"
 }
 
+ensure_local_repmgr_hostname
 clean_stale_postgres_state
 postgresql_start_bg true
 patch_local_repmgr_conf

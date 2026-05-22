@@ -132,7 +132,7 @@ services:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_MODE_ENABLED: "${MINIO_DISTRIBUTED_MODE_ENABLED:-yes}"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
@@ -163,7 +163,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${MINIO_NODE_1_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -184,7 +184,7 @@ services:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_MODE_ENABLED: "${MINIO_DISTRIBUTED_MODE_ENABLED:-yes}"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
@@ -215,7 +215,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${MINIO_NODE_2_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -236,7 +236,7 @@ services:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_MODE_ENABLED: "${MINIO_DISTRIBUTED_MODE_ENABLED:-yes}"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
@@ -267,7 +267,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${MINIO_NODE_3_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -288,7 +288,7 @@ services:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: MINIO_ROOT_PASSWORD=minio_root_password
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_DISTRIBUTED_MODE_ENABLED: "yes"
+      MINIO_DISTRIBUTED_MODE_ENABLED: "${MINIO_DISTRIBUTED_MODE_ENABLED:-yes}"
       MINIO_DISTRIBUTED_NODES: ${MINIO_DISTRIBUTED_NODES:-minio-1,minio-2,minio-3,minio-4}
       MINIO_DATA_DIR: /bitnami/minio/data
       MINIO_API_PORT_NUMBER: "9000"
@@ -319,7 +319,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${MINIO_NODE_4_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -475,7 +475,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
-      replicas: 1
+      replicas: ${ELASTICSEARCH_NODE_1_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -519,7 +519,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
-      replicas: 1
+      replicas: ${ELASTICSEARCH_NODE_2_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -563,7 +563,7 @@ services:
     networks:
       - cloudreve_backend
     deploy:
-      replicas: 1
+      replicas: ${ELASTICSEARCH_NODE_3_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -647,7 +647,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${KAFKA_NODE_1_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -700,7 +700,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${KAFKA_NODE_2_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:
@@ -753,7 +753,7 @@ services:
       - cloudreve_backend
     deploy:
       endpoint_mode: dnsrr
-      replicas: 1
+      replicas: ${KAFKA_NODE_3_REPLICAS:-1}
       restart_policy: *default-restart-policy
       placement:
         constraints:

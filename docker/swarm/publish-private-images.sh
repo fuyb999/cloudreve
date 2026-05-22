@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/docker/swarm/lib-env.sh"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.swarm}"
-IMAGE_KEYS="${IMAGE_KEYS:-${PRIVATE_REGISTRY_IMAGE_KEYS:-TIKA}}"
+IMAGE_KEYS="${IMAGE_KEYS:-}"
 HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
 
 usage() {
@@ -63,6 +63,8 @@ elif [[ -z "${PRIVATE_REGISTRY_ADDR:-}" ]]; then
   echo "[$HOST_NAME] 找不到环境变量文件: $ENV_FILE，且当前环境也没有 PRIVATE_REGISTRY_ADDR。" >&2
   exit 1
 fi
+
+IMAGE_KEYS="${IMAGE_KEYS:-${PRIVATE_REGISTRY_IMAGE_KEYS:-TIKA}}"
 
 PRIVATE_REGISTRY_SCHEME="${PRIVATE_REGISTRY_SCHEME:-http}"
 PRIVATE_REGISTRY_ADDR="${PRIVATE_REGISTRY_ADDR:-}"

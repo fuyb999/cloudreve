@@ -60,18 +60,25 @@ x-default-rollback-config: &default-rollback-config
 
 x-default-restart-policy: &default-restart-policy
   condition: any
-  delay: 5s
-  window: 2m
+  delay: ${SWARM_RESTART_DELAY:-5s}
+  window: ${SWARM_RESTART_WINDOW:-2m}
 
 x-restart-policy-with-attempts: &restart-policy-with-attempts
-  <<: *default-restart-policy
-  max_attempts: 10
+  condition: any
+  delay: ${SWARM_RESTART_WITH_ATTEMPTS_DELAY:-5s}
+  max_attempts: ${SWARM_RESTART_MAX_ATTEMPTS:-10}
+  window: ${SWARM_RESTART_WITH_ATTEMPTS_WINDOW:-2m}
+
+x-stateful-restart-policy: &stateful-restart-policy
+  condition: any
+  delay: ${SWARM_STATEFUL_RESTART_DELAY:-30s}
+  window: ${SWARM_STATEFUL_RESTART_WINDOW:-10m}
 
 x-onlyoffice-restart-policy: &onlyoffice-restart-policy
   condition: any
-  delay: 10s
-  max_attempts: 10
-  window: 3m
+  delay: ${ONLYOFFICE_RESTART_DELAY:-10s}
+  max_attempts: ${ONLYOFFICE_RESTART_MAX_ATTEMPTS:-10}
+  window: ${ONLYOFFICE_RESTART_WINDOW:-3m}
 
 services:
   postgresql-1:
@@ -80,6 +87,8 @@ services:
     hostname: "{{.Node.Hostname}}-pg1"
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
     command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
+    extra_hosts:
+      - "postgresql-1:127.0.0.1"
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
@@ -87,6 +96,11 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_MAX_CONNECTIONS: ${POSTGRESQL_MAX_CONNECTIONS:-500}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
+      POSTGRESQL_LOCAL_START_TIMEOUT: ${POSTGRESQL_LOCAL_START_TIMEOUT:-600}
+      REPMGR_CONNECT_TIMEOUT: ${REPMGR_CONNECT_TIMEOUT:-10}
+      REPMGR_RECONNECT_ATTEMPTS: ${REPMGR_RECONNECT_ATTEMPTS:-12}
+      REPMGR_RECONNECT_INTERVAL: ${REPMGR_RECONNECT_INTERVAL:-5}
+      REPMGR_DEGRADED_MONITORING_TIMEOUT: ${REPMGR_DEGRADED_MONITORING_TIMEOUT:-180}
       REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-1
@@ -98,7 +112,7 @@ services:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: postgresql_repmgr_run_v4
+      - source: postgresql_repmgr_run_v6
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     secrets:
@@ -114,14 +128,14 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRESQL_USERNAME:-cloudreve} -d ${POSTGRESQL_DATABASE:-cloudreve} || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 2m
+      interval: ${POSTGRESQL_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${POSTGRESQL_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${POSTGRESQL_HEALTHCHECK_RETRIES:-20}
+      start_period: ${POSTGRESQL_HEALTHCHECK_START_PERIOD:-10m}
     deploy:
       replicas: 1
       update_config: *stateful-update-config
-      restart_policy: *default-restart-policy
+      restart_policy: *stateful-restart-policy
       placement:
         constraints:
           - ${PG_NODE_1_CONSTRAINT:-node.labels.cloudreve.pg1==true}
@@ -139,6 +153,8 @@ services:
     hostname: "{{.Node.Hostname}}-pg2"
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
     command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
+    extra_hosts:
+      - "postgresql-2:127.0.0.1"
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
@@ -146,6 +162,11 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_MAX_CONNECTIONS: ${POSTGRESQL_MAX_CONNECTIONS:-500}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
+      POSTGRESQL_LOCAL_START_TIMEOUT: ${POSTGRESQL_LOCAL_START_TIMEOUT:-600}
+      REPMGR_CONNECT_TIMEOUT: ${REPMGR_CONNECT_TIMEOUT:-10}
+      REPMGR_RECONNECT_ATTEMPTS: ${REPMGR_RECONNECT_ATTEMPTS:-12}
+      REPMGR_RECONNECT_INTERVAL: ${REPMGR_RECONNECT_INTERVAL:-5}
+      REPMGR_DEGRADED_MONITORING_TIMEOUT: ${REPMGR_DEGRADED_MONITORING_TIMEOUT:-180}
       REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-2
@@ -157,7 +178,7 @@ services:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: postgresql_repmgr_run_v4
+      - source: postgresql_repmgr_run_v6
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     secrets:
@@ -173,14 +194,14 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRESQL_USERNAME:-cloudreve} -d ${POSTGRESQL_DATABASE:-cloudreve} || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 2m
+      interval: ${POSTGRESQL_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${POSTGRESQL_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${POSTGRESQL_HEALTHCHECK_RETRIES:-20}
+      start_period: ${POSTGRESQL_HEALTHCHECK_START_PERIOD:-10m}
     deploy:
       replicas: 1
       update_config: *stateful-update-config
-      restart_policy: *default-restart-policy
+      restart_policy: *stateful-restart-policy
       placement:
         constraints:
           - ${PG_NODE_2_CONSTRAINT:-node.labels.cloudreve.pg2==true}
@@ -198,6 +219,8 @@ services:
     hostname: "{{.Node.Hostname}}-pg3"
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
     command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
+    extra_hosts:
+      - "postgresql-3:127.0.0.1"
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
@@ -205,6 +228,11 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_MAX_CONNECTIONS: ${POSTGRESQL_MAX_CONNECTIONS:-500}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS:-1}
+      POSTGRESQL_LOCAL_START_TIMEOUT: ${POSTGRESQL_LOCAL_START_TIMEOUT:-600}
+      REPMGR_CONNECT_TIMEOUT: ${REPMGR_CONNECT_TIMEOUT:-10}
+      REPMGR_RECONNECT_ATTEMPTS: ${REPMGR_RECONNECT_ATTEMPTS:-12}
+      REPMGR_RECONNECT_INTERVAL: ${REPMGR_RECONNECT_INTERVAL:-5}
+      REPMGR_DEGRADED_MONITORING_TIMEOUT: ${REPMGR_DEGRADED_MONITORING_TIMEOUT:-180}
       REPMGR_PRIMARY_HOST: ${REPMGR_PRIMARY_HOST:-postgresql-1}
       REPMGR_PARTNER_NODES: ${REPMGR_PARTNER_NODES:-tasks.postgresql-1,tasks.postgresql-2,tasks.postgresql-3}
       REPMGR_NODE_NAME: postgresql-3
@@ -216,7 +244,7 @@ services:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: postgresql_repmgr_run_v4
+      - source: postgresql_repmgr_run_v6
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     secrets:
@@ -232,14 +260,14 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRESQL_USERNAME:-cloudreve} -d ${POSTGRESQL_DATABASE:-cloudreve} || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 2m
+      interval: ${POSTGRESQL_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${POSTGRESQL_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${POSTGRESQL_HEALTHCHECK_RETRIES:-20}
+      start_period: ${POSTGRESQL_HEALTHCHECK_START_PERIOD:-10m}
     deploy:
       replicas: 1
       update_config: *stateful-update-config
-      restart_policy: *default-restart-policy
+      restart_policy: *stateful-restart-policy
       placement:
         constraints:
           - ${PG_NODE_3_CONSTRAINT:-node.labels.cloudreve.pg3==true}
@@ -288,10 +316,10 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD", "/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 2m
+      interval: ${PGPOOL_HEALTHCHECK_INTERVAL:-20s}
+      timeout: ${PGPOOL_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${PGPOOL_HEALTHCHECK_RETRIES:-18}
+      start_period: ${PGPOOL_HEALTHCHECK_START_PERIOD:-6m}
     deploy:
       replicas: ${PGPOOL_REPLICAS:-1}
       update_config: *delayed-update-config
@@ -356,10 +384,10 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD", "/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 2m
+      interval: ${PGPOOL_HEALTHCHECK_INTERVAL:-20s}
+      timeout: ${PGPOOL_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${PGPOOL_HEALTHCHECK_RETRIES:-18}
+      start_period: ${PGPOOL_HEALTHCHECK_START_PERIOD:-6m}
     deploy:
       replicas: ${PGPOOL_PUBLIC_REPLICAS:-1}
       update_config: *default-update-config
@@ -404,14 +432,15 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
+      interval: ${REDIS_HEALTHCHECK_INTERVAL:-20s}
+      timeout: ${REDIS_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${REDIS_HEALTHCHECK_RETRIES:-18}
+      start_period: ${REDIS_HEALTHCHECK_START_PERIOD:-5m}
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       update_config: *stateful-update-config
-      restart_policy: *restart-policy-with-attempts
+      restart_policy: *stateful-restart-policy
       placement:
         constraints:
           - ${REDIS_NODE_1_CONSTRAINT:-node.labels.cloudreve.redis1==true}
@@ -435,8 +464,8 @@ services:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
-      REDIS_MASTER_HOST: redis-1
-      REDIS_MASTER_PORT_NUMBER: "6379"
+      REDIS_MASTER_HOST: ${REDIS_REPLICA_MASTER_HOST:-redis-1}
+      REDIS_MASTER_PORT_NUMBER: "${REDIS_REPLICA_MASTER_PORT_NUMBER:-6379}"
     configs:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
@@ -452,14 +481,15 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
+      interval: ${REDIS_HEALTHCHECK_INTERVAL:-20s}
+      timeout: ${REDIS_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${REDIS_HEALTHCHECK_RETRIES:-18}
+      start_period: ${REDIS_HEALTHCHECK_START_PERIOD:-5m}
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       update_config: *stateful-update-config
-      restart_policy: *restart-policy-with-attempts
+      restart_policy: *stateful-restart-policy
       placement:
         constraints:
           - ${REDIS_NODE_2_CONSTRAINT:-node.labels.cloudreve.redis2==true}
@@ -483,8 +513,8 @@ services:
       ALLOW_EMPTY_PASSWORD: "no"
       REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
       REDIS_REPLICATION_MODE: slave
-      REDIS_MASTER_HOST: redis-1
-      REDIS_MASTER_PORT_NUMBER: "6379"
+      REDIS_MASTER_HOST: ${REDIS_REPLICA_MASTER_HOST:-redis-1}
+      REDIS_MASTER_PORT_NUMBER: "${REDIS_REPLICA_MASTER_PORT_NUMBER:-6379}"
     configs:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
@@ -500,14 +530,15 @@ services:
       - cloudreve_backend
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$$$(cat /run/secrets/redis_password)\" ping | grep PONG >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
+      interval: ${REDIS_HEALTHCHECK_INTERVAL:-20s}
+      timeout: ${REDIS_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${REDIS_HEALTHCHECK_RETRIES:-18}
+      start_period: ${REDIS_HEALTHCHECK_START_PERIOD:-5m}
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       update_config: *stateful-update-config
-      restart_policy: *restart-policy-with-attempts
+      restart_policy: *stateful-restart-policy
       placement:
         constraints:
           - ${REDIS_NODE_3_CONSTRAINT:-node.labels.cloudreve.redis3==true}
@@ -528,12 +559,20 @@ services:
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: REDIS_MASTER_PASSWORD=redis_password
-      REDIS_MASTER_HOST: redis-1
-      REDIS_MASTER_PORT_NUMBER: "6379"
+      REDIS_MASTER_HOST: ${REDIS_SENTINEL_BOOTSTRAP_MASTER_HOST:-redis-1}
+      REDIS_MASTER_PORT_NUMBER: "${REDIS_SENTINEL_BOOTSTRAP_MASTER_PORT_NUMBER:-6379}"
       REDIS_MASTER_SET: ${REDIS_SENTINEL_MASTER_SET:-mymaster}
       REDIS_SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
       REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS: ${REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS:-5000}
       REDIS_SENTINEL_FAILOVER_TIMEOUT: ${REDIS_SENTINEL_FAILOVER_TIMEOUT:-10000}
+      REDIS_SENTINEL_RESOLVE_HOSTNAMES: ${REDIS_SENTINEL_RESOLVE_HOSTNAMES:-yes}
+      REDIS_SENTINEL_ANNOUNCE_HOSTNAMES: ${REDIS_SENTINEL_ANNOUNCE_HOSTNAMES:-no}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG >/dev/null || exit 1"]
+      interval: ${REDIS_SENTINEL_HEALTHCHECK_INTERVAL:-20s}
+      timeout: ${REDIS_SENTINEL_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${REDIS_SENTINEL_HEALTHCHECK_RETRIES:-12}
+      start_period: ${REDIS_SENTINEL_HEALTHCHECK_START_PERIOD:-2m}
     configs:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
@@ -547,7 +586,7 @@ services:
     deploy:
       replicas: ${REDIS_SENTINEL_REPLICAS:-3}
       update_config: *default-update-config
-      restart_policy: *restart-policy-with-attempts
+      restart_policy: *stateful-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -569,16 +608,31 @@ services:
       SWARM_SECRET_ENV_MAPPINGS: REDIS_PASSWORD=redis_password
       REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
       REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
+      REDIS_NODES: ${REDIS_NODES:-redis-1:6379,redis-2:6379,redis-3:6379}
       REDIS_SENTINEL_HOST: ${REDIS_SENTINEL_HOST:-redis-sentinel}
       REDIS_SENTINEL_PORT_NUMBER: ${REDIS_SENTINEL_PORT_NUMBER:-26379}
       REDIS_MASTER_SET: ${REDIS_SENTINEL_MASTER_SET:-mymaster}
+      REDIS_SENTINEL_ENABLED: ${REDIS_SENTINEL_ENABLED:-yes}
+      REDIS_SENTINEL_LOOKUP_RETRIES: ${REDIS_SENTINEL_LOOKUP_RETRIES:-120}
+      REDIS_SENTINEL_LOOKUP_INTERVAL: ${REDIS_SENTINEL_LOOKUP_INTERVAL:-2}
+      REDIS_HAPROXY_CONNECT_TIMEOUT: ${REDIS_HAPROXY_CONNECT_TIMEOUT:-5s}
+      REDIS_HAPROXY_CHECK_TIMEOUT: ${REDIS_HAPROXY_CHECK_TIMEOUT:-5s}
+      REDIS_HAPROXY_CLIENT_TIMEOUT: ${REDIS_HAPROXY_CLIENT_TIMEOUT:-5m}
+      REDIS_HAPROXY_SERVER_TIMEOUT: ${REDIS_HAPROXY_SERVER_TIMEOUT:-5m}
+      REDIS_HAPROXY_CHECK_INTERVAL: ${REDIS_HAPROXY_CHECK_INTERVAL:-2s}
+      REDIS_HAPROXY_CHECK_FALL: ${REDIS_HAPROXY_CHECK_FALL:-5}
+      REDIS_HAPROXY_CHECK_RISE: ${REDIS_HAPROXY_CHECK_RISE:-2}
+      REDIS_HAPROXY_MAXCONN: ${REDIS_HAPROXY_MAXCONN:-65536}
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: redis_proxy_bootstrap_v8
+      - source: redis_proxy_bootstrap_v9
         target: /usr/local/bin/redis-proxy-bootstrap.sh
+        mode: 0555
+      - source: redis_proxy_healthcheck_v1
+        target: /usr/local/bin/redis-proxy-healthcheck.sh
         mode: 0555
     secrets:
       - redis_password
@@ -586,11 +640,20 @@ services:
       - *localtime-volume
     networks:
       - cloudreve_backend
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/usr/local/bin/redis-proxy-healthcheck.sh"]
+      interval: ${REDIS_PROXY_HEALTHCHECK_INTERVAL:-15s}
+      timeout: ${REDIS_PROXY_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${REDIS_PROXY_HEALTHCHECK_RETRIES:-12}
+      start_period: ${REDIS_PROXY_HEALTHCHECK_START_PERIOD:-1m}
     deploy:
       replicas: ${REDIS_PROXY_REPLICAS:-2}
-      update_config: *default-update-config
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
       rollback_config: *default-rollback-config
-      restart_policy: *restart-policy-with-attempts
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -609,9 +672,14 @@ services:
     hostname: "{{.Node.Hostname}}-redis-proxy-public-{{.Task.Slot}}"
     environment: *default-env
     configs:
-      - source: redis_public_tls_cfg_v2
+      - source: redis_public_tls_cfg_v3
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
+      - source: redis_proxy_healthcheck_v1
+        target: /usr/local/bin/redis-proxy-healthcheck.sh
+        mode: 0555
+    secrets:
+      - redis_password
     ports:
       - target: 6379
         published: ${REDIS_PROXY_PUBLIC_PORT:-16379}
@@ -622,11 +690,20 @@ services:
       - *pki-volume
     networks:
       - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "REDIS_PROXY_HEALTH_HOST=redis-proxy-internal /bin/sh /usr/local/bin/redis-proxy-healthcheck.sh"]
+      interval: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_INTERVAL:-15s}
+      timeout: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_RETRIES:-12}
+      start_period: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_START_PERIOD:-1m}
     deploy:
       replicas: ${REDIS_PROXY_PUBLIC_REPLICAS:-2}
-      update_config: *default-update-config
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
       rollback_config: *default-rollback-config
-      restart_policy: *restart-policy-with-attempts
+      restart_policy: *default-restart-policy
       placement:
         max_replicas_per_node: 1
         constraints:
@@ -789,6 +866,8 @@ services:
       REDIS_SERVER_DB: ${ONLYOFFICE_REDIS_DB:-1}
       ALLOW_PRIVATE_IP_ADDRESS: "${ONLYOFFICE_ALLOW_PRIVATE_IP_ADDRESS:-true}"
       JWT_ENABLED: ${ONLYOFFICE_JWT_ENABLED:-true}
+      ONLYOFFICE_DB_READY_TIMEOUT_SECONDS: ${ONLYOFFICE_DB_READY_TIMEOUT_SECONDS:-900}
+      ONLYOFFICE_DB_READY_INTERVAL_SECONDS: ${ONLYOFFICE_DB_READY_INTERVAL_SECONDS:-2}
     configs:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
@@ -914,11 +993,13 @@ volumes:
 configs:
   swarm_secret_wrap_v1:
     file: ./docker/swarm/swarm-secret-wrap.sh
-  postgresql_repmgr_run_v4:
+  postgresql_repmgr_run_v6:
     file: ./docker/swarm/postgresql-repmgr-run.sh
-  redis_proxy_bootstrap_v8:
+  redis_proxy_bootstrap_v9:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
-  redis_public_tls_cfg_v2:
+  redis_proxy_healthcheck_v1:
+    file: ./docker/swarm/redis-proxy-healthcheck.sh
+  redis_public_tls_cfg_v3:
     file: ./docker/swarm/haproxy/redis-public-tls.cfg
   http_tls_proxy_template_v2:
     file: ./docker/swarm/nginx/http-tls-proxy.conf.template

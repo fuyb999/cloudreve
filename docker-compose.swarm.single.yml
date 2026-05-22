@@ -225,6 +225,8 @@ services:
     hostname: "{{.Node.Hostname}}-pg1"
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh"]
     command: ["/opt/bitnami/scripts/postgresql-repmgr/run.sh"]
+    extra_hosts:
+      - "postgresql-1:127.0.0.1"
     environment:
       <<: *default-env
       SWARM_SECRET_ENV_MAPPINGS: POSTGRESQL_POSTGRES_PASSWORD=postgresql_postgres_password,POSTGRESQL_PASSWORD=postgresql_password,REPMGR_PASSWORD=repmgr_password
@@ -232,6 +234,11 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE:-cloudreve}
       POSTGRESQL_MAX_CONNECTIONS: ${POSTGRESQL_MAX_CONNECTIONS:-200}
       POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS: ${POSTGRESQL_SINGLE_NODE_NUM_SYNCHRONOUS_REPLICAS:-0}
+      POSTGRESQL_LOCAL_START_TIMEOUT: ${POSTGRESQL_LOCAL_START_TIMEOUT:-600}
+      REPMGR_CONNECT_TIMEOUT: ${REPMGR_CONNECT_TIMEOUT:-10}
+      REPMGR_RECONNECT_ATTEMPTS: ${REPMGR_RECONNECT_ATTEMPTS:-12}
+      REPMGR_RECONNECT_INTERVAL: ${REPMGR_RECONNECT_INTERVAL:-5}
+      REPMGR_DEGRADED_MONITORING_TIMEOUT: ${REPMGR_DEGRADED_MONITORING_TIMEOUT:-180}
       REPMGR_PRIMARY_HOST: postgresql-1
       REPMGR_PARTNER_NODES: ${REPMGR_SINGLE_NODE_PARTNER_NODES:-postgresql-1}
       REPMGR_NODE_NAME: postgresql-1
@@ -243,7 +250,7 @@ services:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: postgresql_repmgr_run_v4
+      - source: postgresql_repmgr_run_v6
         target: /opt/bitnami/scripts/postgresql-repmgr/run.sh
         mode: 0555
     secrets:
@@ -457,6 +464,7 @@ services:
       SWARM_SECRET_ENV_MAPPINGS: REDIS_PASSWORD=redis_password
       REDIS_MASTER_HOST: ${REDIS_MASTER_HOST:-redis-1}
       REDIS_MASTER_PORT_NUMBER: ${REDIS_MASTER_PORT_NUMBER:-6379}
+      REDIS_NODES: ${REDIS_NODES:-redis-1:6379}
       REDIS_SENTINEL_ENABLED: "no"
     entrypoint: ["/bin/sh", "/usr/local/bin/swarm-secret-wrap.sh", "/bin/sh", "/usr/local/bin/redis-proxy-bootstrap.sh"]
     configs:
@@ -472,6 +480,12 @@ services:
       - *localtime-volume
     networks:
       - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6379 >/dev/null 2>&1 || exit 1"]
+      interval: ${REDIS_PROXY_HEALTHCHECK_INTERVAL:-15s}
+      timeout: ${REDIS_PROXY_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${REDIS_PROXY_HEALTHCHECK_RETRIES:-12}
+      start_period: ${REDIS_PROXY_HEALTHCHECK_START_PERIOD:-1m}
     deploy:
       replicas: 1
       update_config: *default-update-config
@@ -494,7 +508,7 @@ services:
     hostname: "{{.Node.Hostname}}-redis-proxy-public"
     environment: *default-env
     configs:
-      - source: redis_public_tls_cfg_v2
+      - source: redis_public_tls_cfg_v3
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
     ports:
@@ -507,6 +521,12 @@ services:
       - *pki-volume
     networks:
       - cloudreve_backend
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6379 >/dev/null 2>&1 || exit 1"]
+      interval: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_INTERVAL:-15s}
+      timeout: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_RETRIES:-12}
+      start_period: ${REDIS_PROXY_PUBLIC_HEALTHCHECK_START_PERIOD:-1m}
     deploy:
       replicas: 1
       update_config: *default-update-config
@@ -1289,11 +1309,11 @@ configs:
     file: ./docker/swarm/nginx/cloudreve-proxy.conf.template
   authverse_proxy_template_v1:
     file: ./docker/swarm/nginx/authverse-proxy.conf.template
-  postgresql_repmgr_run_v4:
+  postgresql_repmgr_run_v6:
     file: ./docker/swarm/postgresql-repmgr-run.sh
   redis_proxy_bootstrap_v8:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
-  redis_public_tls_cfg_v2:
+  redis_public_tls_cfg_v3:
     file: ./docker/swarm/haproxy/redis-public-tls.cfg
   minio_public_tls_cfg_v2:
     file: ./docker/swarm/haproxy/minio-public-tls.cfg

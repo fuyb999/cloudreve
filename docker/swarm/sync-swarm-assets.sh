@@ -124,6 +124,11 @@ fi
 
 load_swarm_env "$ENV_FILE"
 
+TARGETS="${TARGETS:-${SWARM_SYNC_TARGETS:-}}"
+SSH_USER="${SSH_USER:-${SWARM_SYNC_SSH_USER:-}}"
+SSH_OPTIONS="${SSH_OPTIONS:-${SWARM_SYNC_SSH_OPTIONS:-}}"
+USE_SUDO="${USE_SUDO:-${SWARM_SYNC_USE_SUDO:-no}}"
+
 if [[ -n "$SSH_OPTIONS" ]]; then
   read -r -a _ssh_options_array <<<"$SSH_OPTIONS"
   SSH_CMD+=("${_ssh_options_array[@]}")
