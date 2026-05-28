@@ -234,8 +234,17 @@ func (m *MeilisearchIndexer) Search(ctx context.Context, req *searcher.SearchReq
 			filters = append(filters, filter)
 		}
 	}
-	if req != nil && req.SearchBaseURI != "" {
-		filters = append(filters, fmt.Sprintf(`search_paths = "%s"`, escapeMeilisearchFilterString(req.SearchBaseURI)))
+	if req != nil {
+		searchBaseURIs := compactSearchBaseURIs(req.SearchBaseURIs, req.SearchBaseURI)
+		if len(searchBaseURIs) == 1 {
+			filters = append(filters, fmt.Sprintf(`search_paths = "%s"`, escapeMeilisearchFilterString(searchBaseURIs[0])))
+		} else if len(searchBaseURIs) > 1 {
+			parts := make([]string, 0, len(searchBaseURIs))
+			for _, uri := range searchBaseURIs {
+				parts = append(parts, fmt.Sprintf(`search_paths = "%s"`, escapeMeilisearchFilterString(uri)))
+			}
+			filters = append(filters, "("+strings.Join(parts, " OR ")+")")
+		}
 	}
 
 	offset := 0

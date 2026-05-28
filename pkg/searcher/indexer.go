@@ -93,6 +93,7 @@ type SearchRequest struct {
 	Offset           int                         `json:"offset"`
 	OwnerID          *int                        `json:"owner_id,omitempty"`
 	SearchBaseURI    string                      `json:"search_base_uri,omitempty"`
+	SearchBaseURIs   []string                    `json:"search_base_uris,omitempty"`
 	VisibilityFilter *publicshare.FileFilterExpr `json:"visibility_filter,omitempty"`
 }
 

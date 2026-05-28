@@ -138,7 +138,7 @@ func newConsoleLogger(level LogLevel, out io.Writer, now func() time.Time, opts 
 
 	logFunc := func(level string) loggingFunc {
 		return func(logger *consoleLogger, s string, a ...any) {
-			logger.println(level, fmt.Sprintf(s, a...))
+			logger.println(level, formatLogMessage(s, a...))
 		}
 	}
 
@@ -267,6 +267,14 @@ func Recover(l Logger, format string, v ...any) {
 	if l != nil {
 		l.Error("%s", fmt.Sprintf(format, v...))
 	}
+}
+
+func formatLogMessage(format string, args ...any) string {
+	if len(args) == 0 {
+		return format
+	}
+
+	return fmt.Sprintf(format, args...)
 }
 
 // println 打印

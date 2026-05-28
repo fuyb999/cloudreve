@@ -123,6 +123,26 @@ func TestConsoleLoggerDebugDriverMessageUsesVisibleColor(t *testing.T) {
 	}
 }
 
+func TestConsoleLoggerTreatsPercentInLiteralMessageAsText(t *testing.T) {
+	restoreColor := disableColorsForTest()
+	defer restoreColor()
+
+	var out bytes.Buffer
+	logger := newConsoleLogger(LevelDebug, &out, func() time.Time {
+		return time.Date(2026, 4, 1, 9, 30, 15, 123_000_000, time.Local)
+	}, WithCallerMode(CallerModeOff))
+
+	logger.Debug("uri=cloudreve://public/%E8%81%94%E8%B0%83")
+
+	line := out.String()
+	if !strings.Contains(line, "uri=cloudreve://public/%E8%81%94%E8%B0%83") {
+		t.Fatalf("percent escapes should remain literal when no format args are supplied, got: %q", line)
+	}
+	if strings.Contains(line, "%!") {
+		t.Fatalf("literal percent escapes should not be interpreted as fmt verbs, got: %q", line)
+	}
+}
+
 func TestFromContextUsesDefaultLoggerWhenContextMissingLogger(t *testing.T) {
 	restoreColor := disableColorsForTest()
 	defer restoreColor()

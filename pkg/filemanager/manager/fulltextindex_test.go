@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -71,6 +72,39 @@ func (t failingTextExtractor) Extract(ctx context.Context, reader io.Reader) (st
 		return "", t.err
 	}
 	return "", errors.New("extract failed")
+}
+
+type mutatingTextExtractor struct {
+	testTextExtractor
+	onExtract func()
+	text      string
+	calls     int
+}
+
+func (t *mutatingTextExtractor) Extract(ctx context.Context, reader io.Reader) (string, error) {
+	t.calls++
+	if t.onExtract != nil {
+		t.onExtract()
+	}
+	return t.text, nil
+}
+
+type sequentialMutatingTextExtractor struct {
+	testTextExtractor
+	onExtract func(call int)
+	texts     []string
+	calls     int
+}
+
+func (t *sequentialMutatingTextExtractor) Extract(ctx context.Context, reader io.Reader) (string, error) {
+	t.calls++
+	if t.onExtract != nil {
+		t.onExtract(t.calls)
+	}
+	if len(t.texts) >= t.calls {
+		return t.texts[t.calls-1], nil
+	}
+	return "", nil
 }
 
 func TestFullTextIndexTaskStateUpsertRemoveAndNormalize(t *testing.T) {
@@ -933,6 +967,202 @@ func TestSearchFullTextReturnsPublicVisibleURI(t *testing.T) {
 	}
 }
 
+func TestSearchFullTextSkipsPersonalResultsOwnedByOtherUsers(t *testing.T) {
+	user := &ent.User{ID: 7}
+	indexer := &testSearchIndexer{
+		results: []searcher.SearchResult{
+			{FileID: 22, OwnerID: 9, Text: "private keyword"},
+		},
+		total: 1,
+	}
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			22: {
+				ID:      22,
+				Name:    "other-user.txt",
+				OwnerID: 9,
+				Type:    int(inventorytypes.FileTypeFile),
+			},
+		},
+	}
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     user,
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings:      testSettingProvider{enabled: true},
+			searchIndexer: indexer,
+			fileClient:    fileClient,
+			registry:      queue.NewTaskRegistry(),
+			config:        testConfigProvider{},
+		},
+		fs: dbfs.NewDatabaseFS(
+			user,
+			fileClient,
+			nil,
+			logging.NewConsoleLogger(logging.LevelError),
+			nil,
+			testSettingProvider{enabled: true},
+			testSettingClient{},
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+		),
+	}
+	defer m.Recycle()
+
+	results, err := m.SearchFullText(context.Background(), "keyword", 0, nil)
+	if err != nil {
+		t.Fatalf("failed to search full text: %v", err)
+	}
+	if results == nil || len(results.Hits) != 0 {
+		t.Fatalf("expected other user's personal file to be skipped, got %+v", results)
+	}
+	if indexer.lastSearchReq == nil || indexer.lastSearchReq.OwnerID == nil || *indexer.lastSearchReq.OwnerID != user.ID {
+		t.Fatalf("expected owner filter for personal search, got %+v", indexer.lastSearchReq)
+	}
+}
+
+func TestSearchFullTextSkipsPublicResultsOutsideVisibility(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+
+	user := &ent.User{
+		ID: 7,
+		Edges: ent.UserEdges{
+			Group: &ent.Group{Permissions: &boolset.BooleanSet{}},
+		},
+	}
+	indexer := &testSearchIndexer{
+		results: []searcher.SearchResult{
+			{FileID: 31, OwnerID: 9, Text: "forbidden keyword"},
+		},
+		total: 1,
+	}
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			9:  {ID: 9, Name: inventory.RootFolderName, OwnerID: -1, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9"},
+			20: {ID: 20, Name: "可见空间", OwnerID: 9, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9.20"},
+			30: {ID: 30, Name: "隐藏空间", OwnerID: 9, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9.30"},
+			31: {
+				ID:       31,
+				Name:     "隐藏方案.docx",
+				OwnerID:  9,
+				Type:     int(inventorytypes.FileTypeFile),
+				TreePath: "1.9.30.31",
+			},
+		},
+		rootByOwner: map[int]*ent.File{
+			7: {ID: 1, Name: inventory.RootFolderName, OwnerID: 7, Type: int(inventorytypes.FileTypeFolder)},
+			9: {ID: 2, Name: inventory.RootFolderName, OwnerID: 9, Type: int(inventorytypes.FileTypeFolder)},
+		},
+		ancestorByID: map[int][]*ent.File{
+			31: {
+				{ID: 1, Name: inventory.RootFolderName, OwnerID: -1},
+				{ID: 9, Name: inventory.RootFolderName, OwnerID: -1},
+				{ID: 30, Name: "隐藏空间", OwnerID: 9},
+				{ID: 31, Name: "隐藏方案.docx", OwnerID: 9},
+			},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			9: {
+				"可见空间__" + hashid.EncodeFileID(hasher, 20): {ID: 20, Name: "可见空间", OwnerID: 9, Type: int(inventorytypes.FileTypeFolder), TreePath: "1.9.20"},
+			},
+		},
+	}
+
+	m := &manager{
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		user:     user,
+		settings: testSettingProvider{enabled: true},
+		dep: testDep{
+			settings:      testSettingProvider{enabled: true},
+			searchIndexer: indexer,
+			fileClient:    fileClient,
+			settingClient: testSettingClient{
+				values: map[string]string{
+					publicshare.PublicRootFileIDSetting: "9",
+				},
+			},
+			userClient: &testUserClient{
+				userByID: map[int]*ent.User{
+					7: user,
+					9: {ID: 9, Edges: ent.UserEdges{Group: &ent.Group{Permissions: &boolset.BooleanSet{}}}},
+				},
+			},
+			registry: queue.NewTaskRegistry(),
+			config:   testConfigProvider{},
+			hasher:   hasher,
+		},
+		hasher: hasher,
+		fs: dbfs.NewDatabaseFS(
+			user,
+			fileClient,
+			nil,
+			logging.NewConsoleLogger(logging.LevelError),
+			nil,
+			testSettingProvider{enabled: true},
+			testSettingClient{
+				values: map[string]string{
+					publicshare.PublicRootFileIDSetting: "9",
+				},
+			},
+			nil,
+			hasher,
+			&testUserClient{
+				userByID: map[int]*ent.User{
+					7: user,
+					9: {ID: 9, Edges: ent.UserEdges{Group: &ent.Group{Permissions: &boolset.BooleanSet{}}}},
+				},
+			},
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+		),
+	}
+	defer m.Recycle()
+
+	publicGrants := []publicshare.RootGrant{
+		{
+			RootFileID:   20,
+			RootOwnerID:  9,
+			RootName:     "可见空间",
+			RootTreePath: "1.9.20",
+			Actions: map[publicshare.Action]bool{
+				publicshare.ActionList:     true,
+				publicshare.ActionDownload: true,
+			},
+		},
+	}
+	ctx := context.WithValue(context.Background(), publicshare.VisibilityOverrideCtx{}, &publicshare.VisibilityResult{
+		Filter:     publicshare.BuildVisibilityFilter(publicGrants),
+		RootGrants: publicGrants,
+	})
+
+	results, err := m.SearchFullText(ctx, "keyword", 0, publicshare.BuildPublicURI())
+	if err != nil {
+		t.Fatalf("failed to search full text: %v", err)
+	}
+	if results == nil || len(results.Hits) != 0 {
+		t.Fatalf("expected invisible public file to be skipped, got %+v", results)
+	}
+	if indexer.lastSearchReq == nil || indexer.lastSearchReq.OwnerID != nil {
+		t.Fatalf("expected public search without owner filter, got %+v", indexer.lastSearchReq)
+	}
+	if indexer.lastSearchReq.VisibilityFilter == nil {
+		t.Fatal("expected public search visibility filter")
+	}
+}
+
 func TestSearchFullTextFiltersPersonalBaseURI(t *testing.T) {
 	hasher, err := hashid.New("test-salt")
 	if err != nil {
@@ -964,6 +1194,41 @@ func TestSearchFullTextFiltersPersonalBaseURI(t *testing.T) {
 	}
 	if indexer.lastSearchReq.OwnerID == nil || *indexer.lastSearchReq.OwnerID != user.ID {
 		t.Fatalf("expected personal search owner filter, got %+v", indexer.lastSearchReq.OwnerID)
+	}
+}
+
+func TestSearchFullTextFiltersPersonalBaseURIWithOwnerlessCompatibility(t *testing.T) {
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hasher: %v", err)
+	}
+	user := &ent.User{ID: 7}
+	indexer := &testSearchIndexer{}
+	m := &manager{
+		l:      logging.NewConsoleLogger(logging.LevelError),
+		user:   user,
+		dep:    testDep{searchIndexer: indexer, registry: queue.NewTaskRegistry()},
+		hasher: hasher,
+	}
+
+	base := mustURI(t, "cloudreve://my/docs?name=report")
+	results, err := m.SearchFullText(context.Background(), "report", 0, base)
+	if err != nil {
+		t.Fatalf("failed to search full text: %v", err)
+	}
+	if results == nil {
+		t.Fatal("expected empty result object")
+	}
+	if indexer.lastSearchReq == nil {
+		t.Fatal("expected search request to be recorded")
+	}
+
+	want := []string{
+		fs.NewMyUri(hashid.EncodeUserID(hasher, user.ID)) + "/docs",
+		"cloudreve://my/docs",
+	}
+	if !reflect.DeepEqual(indexer.lastSearchReq.SearchBaseURIs, want) {
+		t.Fatalf("unexpected compatible search base uris: got %#v want %#v", indexer.lastSearchReq.SearchBaseURIs, want)
 	}
 }
 
@@ -1164,7 +1429,8 @@ func TestUpdatePendingTaskStateInRegistryUpdatesRegisteredTask(t *testing.T) {
 }
 
 func TestProcessIndexDiffMixedOperationStressKeepsLastStatePerFile(t *testing.T) {
-	ctx := context.Background()
+	correlationID := uuid.Must(uuid.NewV4())
+	ctx := context.WithValue(context.Background(), logging.CorrelationIDCtx{}, correlationID)
 	settings := testSettingProvider{enabled: true}
 	pending := &ent.Task{
 		ID:           1,
@@ -1173,6 +1439,7 @@ func TestProcessIndexDiffMixedOperationStressKeepsLastStatePerFile(t *testing.T)
 		UpdatedAt:    time.Now(),
 		PrivateState: "",
 	}
+	pending.CorrelationID = &correlationID
 	taskClient := &testTaskClient{pending: []*ent.Task{pending}}
 	tasks := &testQueue{}
 	dep := testDep{
@@ -1526,6 +1793,466 @@ func TestPerformIndexingUpsertsLatestVersionWhenTextExtractionFails(t *testing.T
 	}
 	if backend.patches[0].Key != dbfs.FullTextIndexKey {
 		t.Fatalf("unexpected metadata patch key: %+v", backend.patches[0])
+	}
+}
+
+func TestPerformIndexingRefreshesPathWhenFileMovesDuringExtraction(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "moving.txt")
+	if err := os.WriteFile(tempFile, []byte("moving payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("moving payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	oldParent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "old",
+	}
+	newParent := &ent.File{
+		ID:      3,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "new",
+	}
+	oldFile := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "moving.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  oldParent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	newFile := *oldFile
+	newFile.FileChildren = newParent.ID
+	newFile.TreePath = "1.3.801"
+	newFile.UpdatedAt = time.Unix(1710000300, 0)
+	newFile.Edges = oldFile.Edges
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	fileClient := &testFileClient{
+		cloneOnGet: true,
+		fileByID: map[int]*ent.File{
+			oldFile.ID: oldFile,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+		},
+		ancestorByID: map[int][]*ent.File{
+			oldFile.ID: {rootModel, oldParent, oldFile},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				oldParent.Name: oldParent,
+				newParent.Name: newParent,
+			},
+			oldParent.ID: {
+				oldFile.Name: oldFile,
+			},
+			newParent.ID: {
+				newFile.Name: &newFile,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			entityModel.ID: entityModel,
+		},
+	}
+	moveDuringExtract := func() {
+		fileClient.fileByID[oldFile.ID] = &newFile
+		fileClient.ancestorByID[oldFile.ID] = []*ent.File{rootModel, newParent, &newFile}
+		delete(fileClient.childByParentName[oldParent.ID], oldFile.Name)
+		fileClient.childByParentName[newParent.ID][newFile.Name] = &newFile
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	extractor := &mutatingTextExtractor{
+		testTextExtractor: testTextExtractor{
+			exts:        []string{"txt"},
+			maxFileSize: 1024,
+		},
+		onExtract: moveDuringExtract,
+		text:      "moving payload",
+	}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: extractor,
+		fileClient:    fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, oldFile.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if indexer.lastDoc == nil {
+		t.Fatal("expected indexed document to be captured")
+	}
+
+	wantURI := "cloudreve://my/new/moving.txt"
+	if got := indexer.lastDoc.OwnerURI; got != wantURI {
+		t.Fatalf("expected final document to use current owner uri, got %q want %q", got, wantURI)
+	}
+	if !containsString(indexer.lastDoc.SearchPaths, wantURI) {
+		t.Fatalf("expected current search path %q, got %+v", wantURI, indexer.lastDoc.SearchPaths)
+	}
+	if got := indexer.lastDoc.Content; got != "moving payload" {
+		t.Fatalf("expected extracted content to be preserved, got %q", got)
+	}
+	if extractor.calls != 1 {
+		t.Fatalf("expected path-only move to reuse extraction result without a second extraction, got %d calls", extractor.calls)
+	}
+}
+
+func TestPerformIndexingReextractsWhenEntityChangesDuringExtraction(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "versioned.txt")
+	if err := os.WriteFile(tempFile, []byte("versioned payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	oldEntity := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("old payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	newEntity := &ent.Entity{
+		ID:             902,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("new payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000100, 0),
+		UpdatedAt:      time.Unix(1710000160, 0),
+	}
+	parent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "docs",
+	}
+	fileModel := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "versioned.txt",
+		FileExt:       "txt",
+		Size:          oldEntity.Size,
+		PrimaryEntity: oldEntity.ID,
+		FileChildren:  parent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000200, 0),
+		UpdatedAt:     time.Unix(1710000300, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{oldEntity},
+		},
+	}
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	fileClient := &testFileClient{
+		cloneOnGet: true,
+		fileByID: map[int]*ent.File{
+			fileModel.ID: fileModel,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+		},
+		ancestorByID: map[int][]*ent.File{
+			fileModel.ID: {rootModel, parent, fileModel},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				parent.Name: parent,
+			},
+			parent.ID: {
+				fileModel.Name: fileModel,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			oldEntity.ID: oldEntity,
+			newEntity.ID: newEntity,
+		},
+	}
+	extractor := &sequentialMutatingTextExtractor{
+		testTextExtractor: testTextExtractor{
+			exts:        []string{"txt"},
+			maxFileSize: 1024,
+		},
+		texts: []string{"old extracted text", "new extracted text"},
+	}
+	extractor.onExtract = func(call int) {
+		if call != 1 {
+			return
+		}
+		updated := *fileModel
+		updated.Size = newEntity.Size
+		updated.PrimaryEntity = newEntity.ID
+		updated.UpdatedAt = time.Unix(1710000400, 0)
+		updated.Edges = ent.FileEdges{Entities: []*ent.Entity{newEntity}}
+		fileClient.fileByID[fileModel.ID] = &updated
+		fileClient.ancestorByID[fileModel.ID] = []*ent.File{rootModel, parent, &updated}
+		fileClient.childByParentName[parent.ID][updated.Name] = &updated
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: extractor,
+		fileClient:    fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if extractor.calls != 2 {
+		t.Fatalf("expected extraction to retry for changed entity, got %d call(s)", extractor.calls)
+	}
+	if indexer.lastDoc == nil {
+		t.Fatal("expected indexed document to be captured")
+	}
+	if got := indexer.lastDoc.EntityID; got != newEntity.ID {
+		t.Fatalf("expected current entity id, got %d want %d", got, newEntity.ID)
+	}
+	if got := indexer.lastDoc.Content; got != "new extracted text" {
+		t.Fatalf("expected current entity content, got %q", got)
+	}
+}
+
+func TestPerformIndexingReusesExtractionWhenFileRenamesDuringExtraction(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "renamed.txt")
+	if err := os.WriteFile(tempFile, []byte("renamed payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("renamed payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	parent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "docs",
+	}
+	oldFile := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "old.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  parent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	newFile := *oldFile
+	newFile.Name = "new.txt"
+	newFile.UpdatedAt = time.Unix(1710000300, 0)
+	newFile.Edges = oldFile.Edges
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	fileClient := &testFileClient{
+		cloneOnGet: true,
+		fileByID: map[int]*ent.File{
+			oldFile.ID: oldFile,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+		},
+		ancestorByID: map[int][]*ent.File{
+			oldFile.ID: {rootModel, parent, oldFile},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				parent.Name: parent,
+			},
+			parent.ID: {
+				oldFile.Name: oldFile,
+				newFile.Name: &newFile,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			entityModel.ID: entityModel,
+		},
+	}
+	renameDuringExtract := func() {
+		fileClient.fileByID[oldFile.ID] = &newFile
+		fileClient.ancestorByID[oldFile.ID] = []*ent.File{rootModel, parent, &newFile}
+		delete(fileClient.childByParentName[parent.ID], oldFile.Name)
+		fileClient.childByParentName[parent.ID][newFile.Name] = &newFile
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	extractor := &mutatingTextExtractor{
+		testTextExtractor: testTextExtractor{
+			exts:        []string{"txt"},
+			maxFileSize: 1024,
+		},
+		onExtract: renameDuringExtract,
+		text:      "renamed payload",
+	}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: extractor,
+		fileClient:    fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, oldFile.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if indexer.lastDoc == nil {
+		t.Fatal("expected indexed document to be captured")
+	}
+
+	wantURI := "cloudreve://my/docs/new.txt"
+	if got := indexer.lastDoc.OwnerURI; got != wantURI {
+		t.Fatalf("expected final document to use renamed owner uri, got %q want %q", got, wantURI)
+	}
+	if got := indexer.lastDoc.FileName; got != "new.txt" {
+		t.Fatalf("expected final document to use renamed file name, got %q", got)
+	}
+	if got := indexer.lastDoc.Content; got != "renamed payload" {
+		t.Fatalf("expected extracted content to be preserved, got %q", got)
+	}
+	if extractor.calls != 1 {
+		t.Fatalf("expected rename-only change to reuse extraction result without a second extraction, got %d calls", extractor.calls)
 	}
 }
 
@@ -2015,7 +2742,6 @@ func TestFullTextIndexTaskSummarizeReportsPhaseNodeAndCurrentFile(t *testing.T) 
 		t.Fatalf("unexpected summary src: %+v", summary.Props["src"])
 	}
 }
-
 
 func TestFullTextIndexTaskSummarizeReportsLastNodeForCompletedTask(t *testing.T) {
 	taskModel := &ent.Task{
@@ -2987,10 +3713,14 @@ type testFileClient struct {
 	ancestorByID      map[int][]*ent.File
 	childByParentName map[int]map[string]*ent.File
 	entityByID        map[int]*ent.Entity
+	cloneOnGet        bool
 }
 
 func (c *testFileClient) GetByID(ctx context.Context, id int) (*ent.File, error) {
 	if file, ok := c.fileByID[id]; ok {
+		if c.cloneOnGet {
+			return cloneEntFile(file), nil
+		}
 		return file, nil
 	}
 	return nil, &ent.NotFoundError{}
@@ -3040,6 +3770,25 @@ func (c *testFileClient) GetChildFile(ctx context.Context, root *ent.File, owner
 	}
 
 	return nil, &ent.NotFoundError{}
+}
+
+func cloneEntFile(file *ent.File) *ent.File {
+	if file == nil {
+		return nil
+	}
+
+	cloned := *file
+	cloned.Edges = file.Edges
+	if len(file.Edges.Entities) > 0 {
+		cloned.Edges.Entities = append([]*ent.Entity(nil), file.Edges.Entities...)
+	}
+	if len(file.Edges.Metadata) > 0 {
+		cloned.Edges.Metadata = append([]*ent.Metadata(nil), file.Edges.Metadata...)
+	}
+	if len(file.Edges.Shares) > 0 {
+		cloned.Edges.Shares = append([]*ent.Share(nil), file.Edges.Shares...)
+	}
+	return &cloned
 }
 
 type testUserClient struct {

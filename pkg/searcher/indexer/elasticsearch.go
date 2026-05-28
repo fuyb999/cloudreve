@@ -344,6 +344,29 @@ func (e *ElasticsearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...in
 	return nil
 }
 
+func compactSearchBaseURIs(values []string, fallback string) []string {
+	res := make([]string, 0, len(values)+1)
+	seen := map[string]struct{}{}
+	appendValue := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+
+		seen[value] = struct{}{}
+		res = append(res, value)
+	}
+
+	for _, value := range values {
+		appendValue(value)
+	}
+	appendValue(fallback)
+	return res
+}
+
 func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
 	filters := make([]any, 0, 2)
 	if req != nil && req.OwnerID != nil {
@@ -358,12 +381,21 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 			filters = append(filters, filter)
 		}
 	}
-	if req != nil && req.SearchBaseURI != "" {
-		filters = append(filters, map[string]any{
-			"term": map[string]any{
-				"search_paths": req.SearchBaseURI,
-			},
-		})
+	if req != nil {
+		searchBaseURIs := compactSearchBaseURIs(req.SearchBaseURIs, req.SearchBaseURI)
+		if len(searchBaseURIs) == 1 {
+			filters = append(filters, map[string]any{
+				"term": map[string]any{
+					"search_paths": searchBaseURIs[0],
+				},
+			})
+		} else if len(searchBaseURIs) > 1 {
+			filters = append(filters, map[string]any{
+				"terms": map[string]any{
+					"search_paths": searchBaseURIs,
+				},
+			})
+		}
 	}
 
 	queryString := ""

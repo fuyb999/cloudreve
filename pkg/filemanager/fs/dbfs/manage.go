@@ -1099,7 +1099,11 @@ func (f *DBFS) copyFiles(ctx context.Context, targets map[Navigator][]*File, des
 		return nil, nil, nil, fmt.Errorf("user group not loaded")
 	}
 	limit := max(f.user.Edges.Group.Settings.MaxWalkedFiles, 1)
-	capacity, err := f.Capacity(ctx, destination.Owner())
+	destinationOwner, err := f.ensureOwnerWithGroup(ctx, destination)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("copy files: failed to load destination owner: %w", err)
+	}
+	capacity, err := f.Capacity(ctx, destinationOwner)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("copy files: failed to destination owner capacity: %w", err)
 	}
@@ -1298,7 +1302,7 @@ func (f *DBFS) buildMoveIndexDiff(ctx context.Context, targets []*File, destinat
 			newRoot = newBase.Join(target.DisplayName())
 		}
 
-		if err := f.Walk(withHiddenPublicRootAccess(ctx, target), target.Uri(true), -1, func(file fs.File, level int) error {
+		if err := f.Walk(withHiddenPublicRootAccess(ctx, target), indexDiffWalkURI(target), -1, func(file fs.File, level int) error {
 			dbFile, ok := file.(*File)
 			if !ok || dbFile == nil {
 				return nil
@@ -1334,6 +1338,18 @@ func (f *DBFS) buildMoveIndexDiff(ctx context.Context, targets []*File, destinat
 	}
 
 	return diff, nil
+}
+
+func indexDiffWalkURI(target *File) *fs.URI {
+	if target == nil {
+		return nil
+	}
+
+	if visible := target.Uri(false); visible != nil && visible.FileSystem() == constants.FileSystemPublic {
+		return visible
+	}
+
+	return target.Uri(true)
 }
 
 func (f *DBFS) buildRenameIndexDiff(ctx context.Context, target *File, newName string) (*fs.IndexDiff, error) {
@@ -1376,7 +1392,7 @@ func (f *DBFS) buildRebasedIndexDiff(ctx context.Context, targets []*File, rebas
 			continue
 		}
 
-		if err := f.Walk(withHiddenPublicRootAccess(ctx, target), target.Uri(true), -1, func(file fs.File, level int) error {
+		if err := f.Walk(withHiddenPublicRootAccess(ctx, target), indexDiffWalkURI(target), -1, func(file fs.File, level int) error {
 			dbFile, ok := file.(*File)
 			if !ok || dbFile == nil {
 				return nil

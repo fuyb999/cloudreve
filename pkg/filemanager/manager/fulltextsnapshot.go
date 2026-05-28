@@ -36,6 +36,8 @@ const (
 	ftsMetadataCustomPropPrefix = "props:"
 )
 
+const maxFTSExtractionSnapshotAttempts = 3
+
 var tikaMarkupTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
 
 type FTSBuildOptions struct {
@@ -43,6 +45,25 @@ type FTSBuildOptions struct {
 	SkipAttachmentExtraction  bool `json:"skip_attachment_extraction,omitempty"`
 	ForceTextExtraction       bool `json:"-"`
 	ForceAttachmentExtraction bool `json:"-"`
+}
+
+type ftsDocumentSnapshot struct {
+	fileModel        *ent.File
+	ownerManager     FileManager
+	ownerURI         *fs.URI
+	publicURI        *fs.URI
+	sidecarURI       *fs.URI
+	primaryEntity    *ent.Entity
+	primaryFTSEntity fs.Entity
+}
+
+func (s *ftsDocumentSnapshot) recycle() {
+	if s == nil || s.ownerManager == nil {
+		return
+	}
+
+	s.ownerManager.Recycle()
+	s.ownerManager = nil
 }
 
 func BuildFTSFileDocument(ctx context.Context, dep dependency.Dep, user *ent.User, fileID int) (*searcher.SearchFileDocument, *fs.URI, error) {
@@ -76,56 +97,16 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 	fileID int,
 	opts FTSBuildOptions,
 ) (*searcher.SearchFileDocument, *fs.URI, error) {
-	fileModel, err := m.loadFTSFileModel(ctx, fileID)
+	snapshot, content, embeddedAttachments, err := m.extractFTSContentWithFreshSnapshot(ctx, fileID, opts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load file model: %w", err)
+		return nil, nil, err
 	}
+	defer snapshot.recycle()
 
-	ownerManager, err := m.fileManagerForOwner(ctx, fileModel.OwnerID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load file owner context: %w", err)
-	}
-	defer ownerManager.Recycle()
-
-	actualOwnerURI, err := m.resolveOwnerFTSActualURI(ctx, fileModel, ownerManager)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve owner file uri: %w", err)
-	}
-	ownerURI := actualOwnerURI
-	if displayOwnerURI, displayErr := m.resolveOwnerFTSURI(ctx, fileModel, ownerManager); displayErr == nil && displayOwnerURI != nil {
-		ownerURI = displayOwnerURI
-	}
-
-	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
-	sidecarURI := ownerURI
-	if publicURI != nil {
-		sidecarURI = publicURI
-	}
-
-	var primaryEntity *ent.Entity
-	for _, entity := range fileModel.Edges.Entities {
-		if entity.ID == fileModel.PrimaryEntity {
-			primaryEntity = entity
-			break
-		}
-	}
-	var primaryFTSEntity fs.Entity
-	if primaryEntity != nil {
-		primaryFTSEntity = fs.NewEntity(primaryEntity)
-	}
-
-	content, embeddedAttachments, extractErr := extractFTSContent(
-		ctx,
-		m.dep.TextExtractor(ctx),
-		ownerManager,
-		fileModel,
-		primaryFTSEntity,
-		sidecarURI,
-		opts,
-	)
-	if extractErr != nil {
-		m.l.Warning("Failed to extract FTS content for file %d name=%q: %s", fileModel.ID, fileModel.Name, extractErr)
-	}
+	fileModel := snapshot.fileModel
+	ownerURI := snapshot.ownerURI
+	publicURI := snapshot.publicURI
+	primaryEntity := snapshot.primaryEntity
 	metadata := lo.Associate(fileModel.Edges.Metadata, func(item *ent.Metadata) (string, string) {
 		return item.Name, item.Value
 	})
@@ -186,6 +167,130 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 	}
 
 	return doc, ownerURI, nil
+}
+
+func (m *manager) extractFTSContentWithFreshSnapshot(
+	ctx context.Context,
+	fileID int,
+	opts FTSBuildOptions,
+) (*ftsDocumentSnapshot, string, []searcher.SearchAttachmentDocument, error) {
+	var lastSnapshot *ftsDocumentSnapshot
+	for attempt := 0; attempt < maxFTSExtractionSnapshotAttempts; attempt++ {
+		if lastSnapshot != nil {
+			lastSnapshot.recycle()
+		}
+
+		snapshot, err := m.loadFTSDocumentSnapshot(ctx, fileID)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		lastSnapshot = snapshot
+
+		content, embeddedAttachments, extractErr := extractFTSContent(
+			ctx,
+			m.dep.TextExtractor(ctx),
+			snapshot.ownerManager,
+			snapshot.fileModel,
+			snapshot.primaryFTSEntity,
+			snapshot.sidecarURI,
+			opts,
+		)
+		if extractErr != nil {
+			m.l.Warning("Failed to extract FTS content for file %d name=%q: %s", snapshot.fileModel.ID, snapshot.fileModel.Name, extractErr)
+		}
+
+		refreshed, err := m.loadFTSDocumentSnapshot(ctx, fileID)
+		if err != nil {
+			snapshot.recycle()
+			return nil, "", nil, err
+		}
+
+		if sameFTSExtractionInput(snapshot.fileModel, refreshed.fileModel) {
+			snapshot.recycle()
+			return refreshed, content, embeddedAttachments, nil
+		}
+
+		refreshed.recycle()
+	}
+
+	if lastSnapshot != nil {
+		lastSnapshot.recycle()
+	}
+	return nil, "", nil, fmt.Errorf("file %d changed during full text extraction; retry later", fileID)
+}
+
+func (m *manager) loadFTSDocumentSnapshot(ctx context.Context, fileID int) (*ftsDocumentSnapshot, error) {
+	fileModel, err := m.loadFTSFileModel(ctx, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load file model: %w", err)
+	}
+
+	ownerManager, err := m.fileManagerForOwner(ctx, fileModel.OwnerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load file owner context: %w", err)
+	}
+
+	actualOwnerURI, err := m.resolveOwnerFTSActualURI(ctx, fileModel, ownerManager)
+	if err != nil {
+		ownerManager.Recycle()
+		return nil, fmt.Errorf("failed to resolve owner file uri: %w", err)
+	}
+
+	ownerURI := actualOwnerURI
+	if displayOwnerURI, displayErr := m.resolveOwnerFTSURI(ctx, fileModel, ownerManager); displayErr == nil && displayOwnerURI != nil {
+		ownerURI = displayOwnerURI
+	}
+
+	publicURI := m.resolvePublicSearchURI(ctx, fileModel)
+	sidecarURI := ownerURI
+	if publicURI != nil {
+		sidecarURI = publicURI
+	}
+
+	primaryEntity := findPrimaryFTSEntity(fileModel)
+	var primaryFTSEntity fs.Entity
+	if primaryEntity != nil {
+		primaryFTSEntity = fs.NewEntity(primaryEntity)
+	}
+
+	return &ftsDocumentSnapshot{
+		fileModel:        fileModel,
+		ownerManager:     ownerManager,
+		ownerURI:         ownerURI,
+		publicURI:        publicURI,
+		sidecarURI:       sidecarURI,
+		primaryEntity:    primaryEntity,
+		primaryFTSEntity: primaryFTSEntity,
+	}, nil
+}
+
+func sameFTSExtractionInput(a, b *ent.File) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.ID != b.ID ||
+		a.OwnerID != b.OwnerID ||
+		a.PrimaryEntity != b.PrimaryEntity ||
+		a.Type != b.Type ||
+		a.Size != b.Size ||
+		a.StoragePolicyFiles != b.StoragePolicyFiles {
+		return false
+	}
+
+	return sameFTSEntityForExtraction(findPrimaryFTSEntity(a), findPrimaryFTSEntity(b))
+}
+
+func sameFTSEntityForExtraction(a, b *ent.Entity) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.ID == b.ID &&
+		a.Type == b.Type &&
+		a.Source == b.Source &&
+		a.Size == b.Size &&
+		a.StoragePolicyEntities == b.StoragePolicyEntities &&
+		a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
 func (m *manager) resolveOwnerFTSURI(ctx context.Context, fileModel *ent.File, ownerManager FileManager) (*fs.URI, error) {

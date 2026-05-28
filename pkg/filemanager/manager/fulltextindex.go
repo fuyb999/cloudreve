@@ -150,8 +150,9 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 
 		searchReq.VisibilityFilter = filter
 	} else if base != nil && base.FileSystem() == constants.FileSystemMy {
-		if normalized := m.normalizeFullTextSearchBaseURI(base); normalized != "" {
-			searchReq.SearchBaseURI = normalized
+		if normalized := m.normalizeFullTextSearchBaseURIs(base); len(normalized) > 0 {
+			searchReq.SearchBaseURI = normalized[0]
+			searchReq.SearchBaseURIs = normalized
 		}
 	}
 
@@ -204,20 +205,59 @@ func (m *manager) SearchFullText(ctx context.Context, query string, offset int, 
 }
 
 func (m *manager) normalizeFullTextSearchBaseURI(base *fs.URI) string {
-	if base == nil || base.U == nil {
+	normalized := m.normalizeFullTextSearchBaseURIs(base)
+	if len(normalized) == 0 {
 		return ""
 	}
 
-	normalized := base.SetQuery("")
-	if normalized.FileSystem() == constants.FileSystemMy && normalized.U.User == nil && m != nil && m.user != nil {
-		userID := hashid.EncodeUserID(m.hasher, m.user.ID)
-		if userID == "" {
-			return ""
-		}
-		normalized.U.User = url.User(userID)
+	return normalized[0]
+}
+
+func (m *manager) normalizeFullTextSearchBaseURIs(base *fs.URI) []string {
+	if base == nil || base.U == nil {
+		return nil
 	}
 
-	return normalized.String()
+	normalized := base.SetQuery("")
+	if normalized.FileSystem() != constants.FileSystemMy || normalized.U.User != nil || m == nil || m.user == nil {
+		raw := strings.TrimSuffix(normalized.String(), "/")
+		if raw == "" {
+			return nil
+		}
+
+		return []string{raw}
+	}
+
+	ownerless := strings.TrimSuffix(normalized.String(), "/")
+	withOwner := normalized
+	if withOwner.U.User == nil {
+		userID := hashid.EncodeUserID(m.hasher, m.user.ID)
+		if userID == "" {
+			return compactSearchBaseURIs(ownerless)
+		}
+		withOwner.U.User = url.User(userID)
+	}
+
+	return compactSearchBaseURIs(strings.TrimSuffix(withOwner.String(), "/"), ownerless)
+}
+
+func compactSearchBaseURIs(candidates ...string) []string {
+	res := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(strings.TrimSuffix(candidate, "/"))
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+
+		seen[candidate] = struct{}{}
+		res = append(res, candidate)
+	}
+
+	return res
 }
 
 func (m *manager) resolvePublicSearchResultFile(ctx context.Context, fileID int, visibility *publicshare.VisibilityResult) (fs.File, error) {
