@@ -7,11 +7,43 @@
       <env name="CR_CONF_System.ForceColor" value="true" />
       <env name="CR_CONF_Database.Type" value="postgres" />
       <env name="CR_CONF_Database.Host" value="127.0.0.1" />
-      <env name="CR_CONF_Database.Port" value="5432" />
+      <env name="CR_CONF_Database.Port" value="15432" />
       <env name="CR_CONF_Database.Name" value="cloudreve" />
       <env name="CR_CONF_Database.User" value="cloudreve" />
       <env name="CR_CONF_Database.Password" value="cloudreve" />
-      <env name="CR_CONF_Redis.Server" value="127.0.0.1:6379" />
+      <env name="CR_CONF_Database.SSLMode" value="disable" />
+      <env name="CR_CONF_Redis.Server" value="127.0.0.1:16379" />
+      <env name="CR_CONF_Kafka.Enabled" value="true" />
+      <env name="CR_CONF_Kafka.Brokers" value="127.0.0.1:19092" />
+      <env name="CR_CONF_Kafka.Version" value="3.7.0" />
+      <env name="CR_CONF_Kafka.ClientID" value="cloudreve-dev-idea" />
+      <env name="CR_CONF_Kafka.SecurityProtocol" value="PLAINTEXT" />
+      <env name="CR_SETTING_DEFAULT_siteURL" value="http://localhost:5212" />
+      <env name="CR_SETTING_DEFAULT_oidc_enabled" value="1" />
+      <env name="CR_SETTING_DEFAULT_oidc_display_name" value="Authverse SSO" />
+      <env name="CR_SETTING_DEFAULT_oidc_config_mode" value="remote" />
+      <env name="CR_SETTING_DEFAULT_oidc_binding_code" value="cloudreve-main" />
+      <env name="CR_SETTING_DEFAULT_oidc_sso_url" value="http://localhost:18080/sso" />
+      <env name="CR_SETTING_DEFAULT_oidc_wellknown_url" value="http://localhost:48080/.well-known/openid-configuration" />
+      <env name="CR_SETTING_DEFAULT_oidc_client_id" value="cloudreve" />
+      <env name="CR_SETTING_DEFAULT_oidc_client_secret" value="cloudreve123" />
+      <env name="CR_SETTING_DEFAULT_oidc_scope" value="openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write Workflow.Read Workflow.Write Shares.Read Shares.Write" />
+      <env name="CR_SETTING_DEFAULT_fts_enabled" value="1" />
+      <env name="CR_SETTING_DEFAULT_fts_index_type" value="elasticsearch" />
+      <env name="CR_SETTING_DEFAULT_fts_extractor_type" value="tika" />
+      <env name="CR_SETTING_DEFAULT_fts_elasticsearch_endpoint" value="http://127.0.0.1:19200" />
+      <env name="CR_SETTING_DEFAULT_fts_tika_endpoint" value="http://127.0.0.1:19998" />
+      <env name="CR_INIT_DEFAULT_STORAGE" value="s3" />
+      <env name="CR_INIT_S3_ENDPOINT" value="http://127.0.0.1:19000" />
+      <env name="CR_INIT_S3_BUCKET" value="cloudreve" />
+      <env name="CR_INIT_S3_ACCESS_KEY" value="minio" />
+      <env name="CR_INIT_S3_SECRET_KEY" value="minio123456" />
+      <env name="CR_INIT_S3_REGION" value="us-east-1" />
+      <env name="CR_INIT_S3_FORCE_PATH_STYLE" value="true" />
+      <env name="CR_INIT_S3_RELAY" value="true" />
+      <env name="CR_INIT_S3_INTERNAL_PROXY" value="true" />
+      <env name="CR_INIT_S3_IS_PRIVATE" value="true" />
+      <env name="CR_INIT_S3_CHUNK_SIZE" value="26214400" />
     </envs>
     <kind value="DIRECTORY" />
     <package value="github.com/cloudreve/Cloudreve/v4" />

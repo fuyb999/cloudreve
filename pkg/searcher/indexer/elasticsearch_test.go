@@ -328,6 +328,51 @@ func TestElasticsearchSearchFiltersBySearchBaseURI(t *testing.T) {
 	}
 }
 
+func TestElasticsearchSearchFiltersByCompatibleSearchBaseURIs(t *testing.T) {
+	transport := &testElasticsearchTransport{
+		statuses: []int{http.StatusOK},
+		bodies:   []string{`{"hits":{"total":{"value":0},"hits":[]}}`},
+	}
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{"http://example.com"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("failed to create elasticsearch client: %v", err)
+	}
+
+	indexer := &ElasticsearchIndexer{
+		client:   client,
+		index:    elasticsearchDefaultIndexName,
+		pageSize: 10,
+	}
+	ownerID := 7
+	_, _, err = indexer.Search(context.Background(), &searcher.SearchRequest{
+		Query:   "report",
+		OwnerID: &ownerID,
+		SearchBaseURIs: []string{
+			"cloudreve://u7@my/docs",
+			"cloudreve://my/docs",
+		},
+	})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(transport.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(transport.requests))
+	}
+
+	payload := string(transport.requests[0])
+	for _, want := range []string{
+		`"owner_id":7`,
+		`"terms":{"search_paths":["cloudreve://u7@my/docs","cloudreve://my/docs"]}`,
+	} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("expected search payload to contain %q, got %s", want, payload)
+		}
+	}
+}
+
 type testElasticsearchTransport struct {
 	statuses []int
 	bodies   []string

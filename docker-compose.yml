@@ -1,123 +1,363 @@
-services:
-  cloudreve:
-    image: cloudreve/cloudreve:4.15.0
-    container_name: cloudreve-backend
-    depends_on:
-      - postgresql
-      - redis
-    restart: unless-stopped
-    ports:
-      - 5212:5212
-      - 6888:6888
-      - 6888:6888/udp
-    environment:
-      - CR_CONF_Database.Type=postgres
-      - CR_CONF_Database.Host=postgresql
-      - CR_CONF_Database.User=cloudreve
-      - CR_CONF_Database.Name=cloudreve
-      - CR_CONF_Database.Port=5432
-      - CR_CONF_Redis.Server=redis:6379
-    volumes:
-      - backend_data:/cloudreve/data
+name: cloudreve-dev
 
-  postgresql:
-    # Best practice: Pin to major version.
-    # NOTE: For major version jumps:
-    # backup & consult https://www.postgresql.org/docs/current/pgupgrade.html
-    image: postgres:17
-    container_name: postgresql
+x-default-env: &default-env
+  TZ: ${TZ:-Asia/Shanghai}
+
+x-host-gateway: &host-gateway
+  - "host.docker.internal:host-gateway"
+
+services:
+  postgresql-1:
+    image: ${CLOUDREVE_DEV_POSTGRES_IMAGE:-paradedb/paradedb:latest-pg17}
+    container_name: cloudreve-dev-postgresql
+    hostname: postgresql-1
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=cloudreve
-      - POSTGRES_DB=cloudreve
-      - POSTGRES_HOST_AUTH_METHOD=trust
+      <<: *default-env
+      POSTGRES_USER: ${POSTGRESQL_USERNAME:-cloudreve}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:-cloudreve}
+      POSTGRES_DB: ${POSTGRESQL_DATABASE:-cloudreve}
     ports:
-      - "5432:5432"
+      - "${CLOUDREVE_DEV_POSTGRES_PORT:-15432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - cloudreve_dev
 
-  redis:
-    image: redis:8.6.2
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
+  authverse-db-init:
+    image: ${CLOUDREVE_DEV_POSTGRES_IMAGE:-paradedb/paradedb:latest-pg17}
+    container_name: cloudreve-dev-authverse-db-init
+    depends_on:
+      postgresql-1:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRESQL_PASSWORD:-cloudreve}
+      POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME:-cloudreve}
+      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD:-cloudreve}
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        until psql -h postgresql-1 -U "$$POSTGRESQL_USERNAME" -d postgres -Atc "select 1" >/dev/null; do
+          sleep 2
+        done
+        if ! psql -h postgresql-1 -U "$$POSTGRESQL_USERNAME" -d postgres -Atc "select 1 from pg_database where datname = 'authverse'" | grep -q 1; then
+          psql -h postgresql-1 -U "$$POSTGRESQL_USERNAME" -d postgres -c "create database authverse owner cloudreve"
+        fi
+
+        core_table="$$(psql -h postgresql-1 -U "$$POSTGRESQL_USERNAME" -d authverse -Atc "select to_regclass('public.system_users')" || true)"
+        if [ "$$core_table" = "system_users" ] || [ "$$core_table" = "public.system_users" ]; then
+          echo "[authverse-db-init] authverse schema already exists, skip SQL import"
+          exit 0
+        fi
+
+        for file in \
+          /authverse-sql/authverse-20260329.sql \
+          /authverse-sql/authverse-20260329-authz-integration-registry.sql \
+          /authverse-sql/authverse-20260413-authz-row-data-permission.sql \
+          /authverse-sql/authverse-20260413-authz-unique-index-repair.sql \
+          /authverse-sql/authverse-20260413-search-policy-subject-options.sql
+        do
+          if [ -f "$$file" ]; then
+            echo "[authverse-db-init] applying $${file}"
+            psql -h postgresql-1 -U "$$POSTGRESQL_USERNAME" -d authverse -v ON_ERROR_STOP=1 -f "$$file"
+          fi
+        done
     volumes:
-      - redis_data:/data
+      - ../authverse-backend/sql/postgresql:/authverse-sql:ro
+    networks:
+      - cloudreve_dev
+    restart: "no"
+
+  redis-1:
+    image: bitnamilegacy/redis:8.2.1-debian-12-r0
+    container_name: cloudreve-dev-redis
+    hostname: redis-1
+    restart: unless-stopped
+    environment:
+      <<: *default-env
+      ALLOW_EMPTY_PASSWORD: "yes"
+      REDIS_AOF_ENABLED: ${REDIS_AOF_ENABLED:-yes}
+      REDIS_REPLICATION_MODE: master
+    ports:
+      - "${CLOUDREVE_DEV_REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis_data:/bitnami/redis/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h 127.0.0.1 -p 6379 ping | grep PONG >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - cloudreve_dev
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    container_name: minio
+    image: bitnamilegacy/minio:2024.10.2-debian-12-r0
+    container_name: cloudreve-dev-minio
+    hostname: minio
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minio}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minio123456}
+      <<: *default-env
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123456}
+      MINIO_DISTRIBUTED_MODE_ENABLED: "no"
+      MINIO_DATA_DIR: /bitnami/minio/data
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS:-cloudreve}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${MINIO_API_PORT:-19000}:9000"
+      - "${MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
-      - minio_data:/data
-
-  kafka:
-    image: apache/kafka:4.2.0
-    container_name: cloudreve-kafka
-    restart: unless-stopped
-    ports:
-      - "9092:9092"
-    environment:
-      - KAFKA_NODE_ID=1
-      - KAFKA_PROCESS_ROLES=broker,controller
-      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:9092
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:9093
-      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
-      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
-      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
-      - KAFKA_NUM_PARTITIONS=1
-      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-    volumes:
-      - kafka_data:/var/lib/kafka/data
+      - minio_data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    networks:
+      - cloudreve_dev
 
   elasticsearch:
     image: elasticsearch:8.12.2
-    container_name: elasticsearch
+    container_name: cloudreve-dev-elasticsearch
+    hostname: elasticsearch
     restart: unless-stopped
     environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      <<: *default-env
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
     ports:
-      - "9200:9200"
-      - "9300:9300"
+      - "${ELASTICSEARCH_HTTP_PORT:-19200}:9200"
+      - "${ELASTICSEARCH_TRANSPORT_PORT:-19300}:9300"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200 >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    networks:
+      - cloudreve_dev
 
-  tika:
-    build:
-      context: .
-      dockerfile: docker/tika-unrar/Dockerfile
-    image: cloudreve/tika:3.2.3.0-full-unrar-charset
-    container_name: tika
+  kafka:
+    image: apache/kafka:4.2.0
+    container_name: cloudreve-dev-kafka
+    hostname: kafka
     restart: unless-stopped
     environment:
-      - TIKA_FONT_DIRS=${TIKA_FONT_DIRS:-/tika-fonts/custom}
-      - TIKA_FONT_DEBUG=${TIKA_FONT_DEBUG:-0}
+      <<: *default-env
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${CLOUDREVE_DEV_KAFKA_PORT:-19092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_BOOTSTRAP_SERVERS: kafka:9093
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xms512m -Xmx512m}
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "1"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_MIN_INSYNC_REPLICAS: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
     ports:
-      - "9998:9998"
+      - "${CLOUDREVE_DEV_KAFKA_PORT:-19092}:19092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'kafka\\.Kafka' >/dev/null || pgrep -f 'kafka\\.KRaft' >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 15
+      start_period: 90s
+    networks:
+      - cloudreve_dev
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: cloudreve-dev-kafka-ui
+    hostname: kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      <<: *default-env
+      SERVER_PORT: "8080"
+      DYNAMIC_CONFIG_ENABLED: "false"
+      KAFKA_CLUSTERS_0_NAME: cloudreve-dev
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: PLAINTEXT
+    ports:
+      - "${KAFKA_UI_HTTP_PORT:-18089}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/actuator/health >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 15
+      start_period: 90s
+    networks:
+      - cloudreve_dev
+
+  tika:
+    image: cloudreve/tika:3.2.3.0-full-unrar-charset
+    container_name: cloudreve-dev-tika
+    hostname: tika
+    restart: unless-stopped
+    environment:
+      <<: *default-env
+      TIKA_FONT_DIRS: ${TIKA_FONT_DIRS:-/tika-fonts/custom}
+      TIKA_FONT_DEBUG: ${TIKA_FONT_DEBUG:-0}
+    ports:
+      - "${TIKA_HTTP_PORT:-19998}:9998"
     volumes:
       - ${TIKA_CUSTOM_FONTS_HOST_PATH:-./docker/tika-unrar/fonts}:/tika-fonts/custom:ro
-      # 额外挂载更多字体目录时，可在这里追加 volume，并把容器内路径追加到 TIKA_FONT_DIRS
-      # - /absolute/path/to/company-fonts:/tika-fonts/company:ro
+    networks:
+      - cloudreve_dev
+
+  authverse-backend:
+    image: authverse/authverse-backend:2024-local
+    container_name: cloudreve-dev-authverse-backend
+    hostname: authverse-backend
+    restart: unless-stopped
+    depends_on:
+      authverse-db-init:
+        condition: service_completed_successfully
+      redis-1:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    extra_hosts: *host-gateway
+    environment:
+      <<: *default-env
+      SPRING_PROFILES_ACTIVE: local
+      JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms512m -Xmx1g -Djava.security.egd=file:/dev/./urandom}
+      SPRING_APPLICATION_JSON: >-
+        {"spring":{"datasource":{"dynamic":{"datasource":{"master":{"url":"jdbc:postgresql://postgresql-1:5432/authverse","username":"cloudreve","password":"cloudreve"},"slave":{"lazy":true,"url":"jdbc:postgresql://postgresql-1:5432/authverse","username":"cloudreve","password":"cloudreve"}}}},"data":{"redis":{"host":"redis-1","port":6379,"database":0}}},"authverse":{"cloudreve":{"base-uri":"${AUTHVERSE_CLOUDREVE_BASE_URI:-http://host.docker.internal:5212}"},"search":{"elasticsearch":{"enabled":true,"uris":["http://elasticsearch:9200"]}},"oidc":{"issuer":"${AUTHVERSE_OIDC_ISSUER:-http://localhost:48080}"}}}
+    ports:
+      - "${AUTHVERSE_BACKEND_PORT:-48080}:48080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:48080/ >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 180s
+    networks:
+      - cloudreve_dev
+
+  authverse-web:
+    image: authverse/authverse-web:2024-local
+    container_name: cloudreve-dev-authverse-web
+    hostname: authverse-web
+    restart: unless-stopped
+    depends_on:
+      authverse-backend:
+        condition: service_healthy
+    extra_hosts: *host-gateway
+    environment:
+      <<: *default-env
+      SERVER_NAME: ${AUTHVERSE_SERVER_NAME:-_}
+      CLIENT_MAX_BODY_SIZE: ${AUTHVERSE_CLIENT_MAX_BODY_SIZE:-0}
+      PROXY_READ_TIMEOUT: ${AUTHVERSE_PROXY_READ_TIMEOUT:-3600s}
+      PROXY_SEND_TIMEOUT: ${AUTHVERSE_PROXY_SEND_TIMEOUT:-3600s}
+      UPSTREAM_AUTHVERSE_BACKEND: authverse-backend:48080
+      UPSTREAM_AUTHVERSE_BACKEND_HOST_HEADER: $$host
+      UPSTREAM_CLOUDREVE: ${AUTHVERSE_CLOUDREVE_UPSTREAM:-host.docker.internal:5212}
+      UPSTREAM_CLOUDREVE_HOST_HEADER: $$host
+    ports:
+      - "${AUTHVERSE_HTTP_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cloudreve_dev
+
+  cloudreve:
+    profiles: ["cloudreve"]
+    image: cloudreve/cloudreve:4.15.0
+    container_name: cloudreve-dev-backend
+    hostname: cloudreve
+    restart: unless-stopped
+    depends_on:
+      postgresql-1:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      tika:
+        condition: service_healthy
+    environment:
+      <<: *default-env
+      CR_CONF_System.Mode: master
+      CR_CONF_System.Listen: ":5212"
+      CR_CONF_System.ProxyHeader: X-Forwarded-For
+      CR_CONF_Database.Type: postgres
+      CR_CONF_Database.Host: postgresql-1
+      CR_CONF_Database.Port: "5432"
+      CR_CONF_Database.User: ${POSTGRESQL_USERNAME:-cloudreve}
+      CR_CONF_Database.Password: ${POSTGRESQL_PASSWORD:-cloudreve}
+      CR_CONF_Database.Name: ${POSTGRESQL_DATABASE:-cloudreve}
+      CR_CONF_Database.SSLMode: disable
+      CR_CONF_Redis.Server: redis-1:6379
+      CR_CONF_Kafka.Enabled: ${CLOUDREVE_GLOBAL_KAFKA_ENABLED:-true}
+      CR_CONF_Kafka.Brokers: kafka:9092
+      CR_CONF_Kafka.Version: ${CLOUDREVE_GLOBAL_KAFKA_VERSION:-3.7.0}
+      CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve-dev}
+      CR_CONF_Kafka.SecurityProtocol: PLAINTEXT
+      CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:-http://localhost:5212}
+      CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
+      CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-http://minio:9000}
+      CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}
+      CR_INIT_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
+      CR_INIT_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123456}
+      CR_INIT_S3_REGION: ${CR_INIT_S3_REGION:-us-east-1}
+      CR_INIT_S3_FORCE_PATH_STYLE: "true"
+      CR_INIT_S3_RELAY: "true"
+      CR_INIT_S3_INTERNAL_PROXY: "true"
+      CR_INIT_S3_IS_PRIVATE: "true"
+      CR_INIT_S3_CHUNK_SIZE: "26214400"
+    ports:
+      - "${CLOUDREVE_HTTP_PORT:-5212}:5212"
+      - "${CLOUDREVE_ARIA2_PORT:-6888}:6888"
+      - "${CLOUDREVE_ARIA2_PORT:-6888}:6888/udp"
+    volumes:
+      - backend_data:/cloudreve/data
+    networks:
+      - cloudreve_dev
+
+networks:
+  cloudreve_dev:
+    driver: bridge
 
 volumes:
   backend_data:
-  minio_data:
-  kafka_data:
-  elasticsearch_data:
   pg_data:
   redis_data:
+  minio_data:
+  elasticsearch_data:
+  kafka_data:
