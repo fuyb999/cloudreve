@@ -114,6 +114,11 @@ func (c *shareClient) Upsert(ctx context.Context, params *CreateShareParams) (*e
 	if params.Existed != nil {
 		createQuery := c.client.Share.
 			UpdateOne(params.Existed)
+		if params.Password != "" {
+			createQuery.SetPassword(params.Password)
+		} else {
+			createQuery.ClearPassword()
+		}
 		if params.RemainDownloads > 0 {
 			createQuery.SetRemainDownloads(params.RemainDownloads)
 		} else {
