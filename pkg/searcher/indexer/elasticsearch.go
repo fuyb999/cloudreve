@@ -328,6 +328,8 @@ func (e *ElasticsearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...in
 		[]string{e.index},
 		bytes.NewReader(body),
 		e.client.DeleteByQuery.WithContext(ctx),
+		e.client.DeleteByQuery.WithConflicts("proceed"),
+		e.client.DeleteByQuery.WithRefresh(true),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to delete file documents: %w", err)

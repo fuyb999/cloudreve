@@ -27,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
+	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/samber/lo"
 )
@@ -1295,7 +1296,7 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 		return task.StatusCompleted, nil
 	}
 
-	doc, _, err := fm.buildFTSFileDocument(ctx, fileID)
+	doc, currentURI, err := fm.buildFTSFileDocument(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
@@ -1308,6 +1309,9 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
 		return task.StatusError, fmt.Errorf("failed to build search document for file %d: %w", fileID, err)
 	}
+	if refreshedURI := metadataURIForFTSDocument(doc, currentURI); refreshedURI != nil {
+		uri = refreshedURI
+	}
 
 	if err := searchIdx.UpsertFile(ctx, doc); err != nil {
 		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
@@ -1319,12 +1323,73 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 			Key:   dbfs.FullTextIndexKey,
 			Value: dbfs.BuildFullTextIndexMetadataValue(fm.hasher, doc.FileID, doc.EntityID),
 		}); err != nil {
+			if shouldIgnoreFTSSyncError(err) {
+				if refreshErr := refreshFullTextIndexAfterStaleMetadata(ctx, fm, searchIdx, fileID); refreshErr == nil {
+					l.Debug("Refreshed full text index for file %d after metadata uri became stale.", fileID)
+					return task.StatusCompleted, nil
+				} else if !shouldIgnoreFTSSyncError(refreshErr) {
+					return task.StatusError, fmt.Errorf("failed to refresh full text index after metadata uri became stale: %w", refreshErr)
+				}
+
+				if err := deleteStaleFullTextIndex(ctx, searchIdx, fileID); err != nil {
+					l.Warning("Failed to delete stale index for file %d after metadata target disappeared: %s", fileID, err)
+				}
+
+				l.Debug("File %d disappeared before full text metadata was patched, removed stale index entry.", fileID)
+				return task.StatusCompleted, nil
+			}
 			return task.StatusError, fmt.Errorf("failed to patch metadata: %w", err)
 		}
 	}
 
 	l.Debug("Successfully indexed file %d for owner %d.", fileID, doc.OwnerID)
 	return task.StatusCompleted, nil
+}
+
+func refreshFullTextIndexAfterStaleMetadata(ctx context.Context, fm *manager, searchIdx searcher.SearchIndexer, fileID int) error {
+	doc, _, err := fm.buildFTSFileDocument(ctx, fileID)
+	if err != nil {
+		return err
+	}
+
+	if err := searchIdx.UpsertFile(ctx, doc); err != nil {
+		return fmt.Errorf("failed to index refreshed file %d: %w", fileID, err)
+	}
+
+	return patchFullTextIndexMetadataByFileID(ctx, fm, fileID, doc)
+}
+
+func patchFullTextIndexMetadataByFileID(ctx context.Context, fm *manager, fileID int, doc *searcher.SearchFileDocument) error {
+	if fm == nil || fm.dep == nil || fm.dep.FileClient() == nil || doc == nil {
+		return fmt.Errorf("file metadata patch dependencies unavailable")
+	}
+
+	fileModel, err := fm.loadFTSFileModel(ctx, fileID)
+	if err != nil {
+		return err
+	}
+
+	return fm.dep.FileClient().UpsertMetadata(ctx, fileModel, map[string]string{
+		dbfs.FullTextIndexKey: dbfs.BuildFullTextIndexMetadataValue(fm.hasher, doc.FileID, doc.EntityID),
+	}, nil)
+}
+
+func deleteStaleFullTextIndex(ctx context.Context, searchIdx searcher.SearchIndexer, fileID int) error {
+	if searchIdx == nil {
+		return nil
+	}
+
+	return searchIdx.DeleteByFileIDs(ctx, fileID)
+}
+
+func metadataURIForFTSDocument(doc *searcher.SearchFileDocument, currentURI *fs.URI) *fs.URI {
+	if doc != nil && strings.TrimSpace(doc.PublicURI) != "" {
+		if publicURI, err := fs.NewUriFromString(doc.PublicURI); err == nil && publicURI != nil {
+			return publicURI
+		}
+	}
+
+	return currentURI
 }
 
 func clearFullTextIndexMetadataBestEffort(ctx context.Context, fm *manager, uri *fs.URI) {
@@ -1486,7 +1551,38 @@ func (m *manager) canResolveFTSFileURI() bool {
 
 func shouldIgnoreFTSSyncError(err error) bool {
 	var notFound *ent.NotFoundError
-	return errors.As(err, &notFound)
+	if errors.As(err, &notFound) {
+		return true
+	}
+
+	var aggregate *serializer.AggregateError
+	if errors.As(err, &aggregate) {
+		raw := aggregate.Raw()
+		if len(raw) == 0 {
+			return false
+		}
+		for _, item := range raw {
+			if !shouldIgnoreFTSSyncError(item) {
+				return false
+			}
+		}
+		return true
+	}
+
+	var appErr serializer.AppError
+	if !errors.As(err, &appErr) {
+		return false
+	}
+
+	switch appErr.ErrCode() {
+	case serializer.CodeNotFound,
+		serializer.CodeParentNotExist,
+		serializer.CodeEntityNotExist,
+		serializer.CodeFileDeleted:
+		return true
+	default:
+		return false
+	}
 }
 
 // ShouldExtractText checks if a file is eligible for text extraction.

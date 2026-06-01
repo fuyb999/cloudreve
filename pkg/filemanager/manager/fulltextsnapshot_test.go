@@ -46,6 +46,21 @@ func TestBuildFTSSearchPathTextKeepsOwnerPathForNonPublicFile(t *testing.T) {
 	}
 }
 
+func TestCurrentFTSFileNamePrefersResolvedURIName(t *testing.T) {
+	staleModel := &ent.File{
+		Name:    "old-copy.txt",
+		FileExt: "txt",
+	}
+	currentURI := publicshare.BuildPublicURI().Join("team", "new-copy.txt")
+
+	if got, want := currentFTSFileName(staleModel, currentURI), "new-copy.txt"; got != want {
+		t.Fatalf("unexpected current fts file name: got %q want %q", got, want)
+	}
+	if got, want := currentFTSFileExt(staleModel, currentURI), "txt"; got != want {
+		t.Fatalf("unexpected current fts file ext: got %q want %q", got, want)
+	}
+}
+
 func TestBuildFTSSearchPathsIncludesAncestorScopes(t *testing.T) {
 	ownerBase, err := fs.NewUriFromString(fs.NewMyUri("owner"))
 	if err != nil {

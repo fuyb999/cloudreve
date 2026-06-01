@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,38 @@ func TestRetryUpsertFileDocumentShrinksOversizedPayloadAndRetries(t *testing.T) 
 	}
 	if len(transport.requests[1]) >= len(transport.requests[0]) {
 		t.Fatalf("expected retry payload to shrink, got first=%d second=%d", len(transport.requests[0]), len(transport.requests[1]))
+	}
+}
+
+func TestDeleteByFileIDsProceedsOnVersionConflicts(t *testing.T) {
+	transport := &testElasticsearchTransport{
+		statuses: []int{http.StatusOK},
+		bodies:   []string{`{"deleted":0,"version_conflicts":1}`},
+	}
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{"http://example.com"},
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("failed to create elasticsearch client: %v", err)
+	}
+
+	indexer := &ElasticsearchIndexer{
+		client: client,
+		index:  elasticsearchDefaultIndexName,
+	}
+
+	if err := indexer.DeleteByFileIDs(context.Background(), 268); err != nil {
+		t.Fatalf("expected delete by file id to ignore version conflicts, got %v", err)
+	}
+	if len(transport.urls) != 1 {
+		t.Fatalf("expected one request, got %d", len(transport.urls))
+	}
+	if got := transport.urls[0].Query().Get("conflicts"); got != "proceed" {
+		t.Fatalf("expected delete_by_query conflicts=proceed, got %q in %s", got, transport.urls[0].String())
+	}
+	if got := transport.urls[0].Query().Get("refresh"); got != "true" {
+		t.Fatalf("expected delete_by_query refresh=true so deleted files stop appearing in search immediately, got %q in %s", got, transport.urls[0].String())
 	}
 }
 
@@ -376,11 +409,14 @@ func TestElasticsearchSearchFiltersByCompatibleSearchBaseURIs(t *testing.T) {
 type testElasticsearchTransport struct {
 	statuses []int
 	bodies   []string
+	urls     []*url.URL
 	requests [][]byte
 }
 
 func (t *testElasticsearchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	raw, _ := io.ReadAll(req.Body)
+	copiedURL := *req.URL
+	t.urls = append(t.urls, &copiedURL)
 	t.requests = append(t.requests, raw)
 
 	index := len(t.requests) - 1

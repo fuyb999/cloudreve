@@ -110,11 +110,14 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 	metadata := lo.Associate(fileModel.Edges.Metadata, func(item *ent.Metadata) (string, string) {
 		return item.Name, item.Value
 	})
+	currentURI := firstNonNilURI(publicURI, ownerURI)
+	fileName := currentFTSFileName(fileModel, currentURI)
+	fileExt := currentFTSFileExt(fileModel, currentURI)
 
 	filePolicy, _ := m.storagePolicyFromID(ctx, fileModel.StoragePolicyFiles)
-	latestVersion := buildSearchVersion(primaryEntity, fileModel.Name, filePolicy)
+	latestVersion := buildSearchVersion(primaryEntity, fileName, filePolicy)
 	if latestVersion == nil && fileModel.Type == int(types.FileTypeFile) {
-		latestVersion = buildFallbackSearchVersion(fileModel, filePolicy)
+		latestVersion = buildFallbackSearchVersionWithName(fileModel, fileName, filePolicy)
 	}
 	attachments := buildSearchAttachments(fileModel, ownerURI, filePolicy)
 	pathText := buildFTSSearchPathText(ownerURI, publicURI)
@@ -128,8 +131,8 @@ func (m *manager) buildFTSFileDocumentWithOptions(
 		OwnerID:         fileModel.OwnerID,
 		EntityID:        fileModel.PrimaryEntity,
 		ParentID:        fileModel.FileChildren,
-		FileName:        fileModel.Name,
-		FileExt:         firstNonEmpty(fileModel.FileExt, util.Ext(fileModel.Name)),
+		FileName:        fileName,
+		FileExt:         fileExt,
 		FileType:        fileModel.Type,
 		Size:            fileModel.Size,
 		CreatedAt:       util.NewDateTimeSecond(fileModel.CreatedAt),
@@ -529,6 +532,38 @@ func uriString(uri *fs.URI) string {
 
 	raw := uri.SetQuery("").String()
 	return strings.TrimSuffix(raw, "/")
+}
+
+func firstNonNilURI(values ...*fs.URI) *fs.URI {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+
+	return nil
+}
+
+func currentFTSFileName(fileModel *ent.File, currentURI *fs.URI) string {
+	if currentURI != nil {
+		if name := strings.TrimSpace(currentURI.Name()); name != "" && name != "." && name != "/" {
+			return name
+		}
+	}
+	if fileModel == nil {
+		return ""
+	}
+
+	return fileModel.Name
+}
+
+func currentFTSFileExt(fileModel *ent.File, currentURI *fs.URI) string {
+	fileName := currentFTSFileName(fileModel, currentURI)
+	if fileModel != nil {
+		return firstNonEmpty(fileModel.FileExt, util.Ext(fileName))
+	}
+
+	return util.Ext(fileName)
 }
 
 func searchableURIText(uri *fs.URI) string {
@@ -1508,9 +1543,14 @@ func buildSearchVersion(entity *ent.Entity, fileName string, policy *ent.Storage
 }
 
 func buildFallbackSearchVersion(fileModel *ent.File, policy *ent.StoragePolicy) *searcher.SearchFileVersionDocument {
+	return buildFallbackSearchVersionWithName(fileModel, "", policy)
+}
+
+func buildFallbackSearchVersionWithName(fileModel *ent.File, fileName string, policy *ent.StoragePolicy) *searcher.SearchFileVersionDocument {
 	if fileModel == nil {
 		return nil
 	}
+	fileName = firstNonEmpty(fileName, fileModel.Name)
 
 	doc := &searcher.SearchFileVersionDocument{
 		ID:              fmt.Sprintf("file:%d", fileModel.ID),
@@ -1520,7 +1560,7 @@ func buildFallbackSearchVersion(fileModel *ent.File, policy *ent.StoragePolicy) 
 		CreatedAt:       util.NewDateTimeSecond(fileModel.CreatedAt),
 		UpdatedAt:       util.NewDateTimeSecond(fileModel.UpdatedAt),
 		StoragePolicyID: fileModel.StoragePolicyFiles,
-		MimeType:        mime.TypeByExtension(filepath.Ext(fileModel.Name)),
+		MimeType:        mime.TypeByExtension(filepath.Ext(fileName)),
 	}
 
 	if policy != nil {

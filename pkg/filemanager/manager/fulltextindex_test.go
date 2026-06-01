@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"os"
@@ -40,6 +41,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/searcher"
 	tikaextractor "github.com/cloudreve/Cloudreve/v4/pkg/searcher/extractor"
 	searchindexer "github.com/cloudreve/Cloudreve/v4/pkg/searcher/indexer"
+	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/thumb"
 	"github.com/gofrs/uuid"
@@ -2254,6 +2256,293 @@ func TestPerformIndexingReusesExtractionWhenFileRenamesDuringExtraction(t *testi
 	if extractor.calls != 1 {
 		t.Fatalf("expected rename-only change to reuse extraction result without a second extraction, got %d calls", extractor.calls)
 	}
+	if len(backend.paths) != 1 {
+		t.Fatalf("expected metadata patch after indexing, got %+v", backend.paths)
+	}
+	if got := backend.paths[0].String(); got != wantURI {
+		t.Fatalf("expected metadata patch to use renamed uri, got %q want %q", got, wantURI)
+	}
+}
+
+func TestPerformIndexingTreatsMissingMetadataTargetAsStale(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "deleted.txt")
+	if err := os.WriteFile(tempFile, []byte("deleted payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("deleted payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	parent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "docs",
+	}
+	fileModel := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "deleted.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  parent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	fileClient := &testFileClient{
+		fileByID: map[int]*ent.File{
+			fileModel.ID: fileModel,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+		},
+		ancestorByID: map[int][]*ent.File{
+			fileModel.ID: {rootModel, parent, fileModel},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				parent.Name: parent,
+			},
+			parent.ID: {
+				fileModel.Name: fileModel,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			entityModel.ID: entityModel,
+		},
+	}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: testTextExtractor{
+			exts:        []string{"txt"},
+			maxFileSize: 1024,
+		},
+		fileClient: fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	patchErr := serializer.NewAggregateError()
+	patchErr.Add(
+		"cloudreve://public/deleted.txt",
+		fmt.Errorf("failed to get target file: %w", fs.ErrPathNotExist.WithError(errors.New("public file is not visible"))),
+	)
+	backend := &testMetadataFS{
+		onPatch: func() error {
+			delete(fileClient.fileByID, fileModel.ID)
+			return patchErr.Aggregate()
+		},
+	}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error for stale metadata target: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if indexer.upserted != 1 {
+		t.Fatalf("expected initial document upsert before stale metadata detection, got %d", indexer.upserted)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != fileModel.ID {
+		t.Fatalf("expected stale index deletion after metadata target disappeared, got %+v", indexer.deleted)
+	}
+}
+
+func TestPerformIndexingRefreshesIndexAndMetadataByFileIDWhenPatchURIStales(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "copy.txt")
+	if err := os.WriteFile(tempFile, []byte("copied payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("copied payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	parent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "docs",
+	}
+	oldFile := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "old-copy.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  parent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	newFile := *oldFile
+	newFile.Name = "new-copy.txt"
+	newFile.UpdatedAt = time.Unix(1710000300, 0)
+	newFile.Edges = oldFile.Edges
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	fileClient := &testFileClient{
+		cloneOnGet: true,
+		fileByID: map[int]*ent.File{
+			oldFile.ID: oldFile,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+		},
+		ancestorByID: map[int][]*ent.File{
+			oldFile.ID: {rootModel, parent, oldFile},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				parent.Name: parent,
+			},
+			parent.ID: {
+				oldFile.Name: oldFile,
+				newFile.Name: &newFile,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			entityModel.ID: entityModel,
+		},
+	}
+	renameDuringFirstPatch := true
+	backend := &testMetadataFS{
+		onPatch: func() error {
+			if !renameDuringFirstPatch {
+				return nil
+			}
+
+			renameDuringFirstPatch = false
+			fileClient.fileByID[oldFile.ID] = &newFile
+			fileClient.ancestorByID[oldFile.ID] = []*ent.File{rootModel, parent, &newFile}
+			delete(fileClient.childByParentName[parent.ID], oldFile.Name)
+			fileClient.childByParentName[parent.ID][newFile.Name] = &newFile
+
+			patchErr := serializer.NewAggregateError()
+			patchErr.Add(
+				"cloudreve://my/docs/old-copy.txt",
+				fmt.Errorf("failed to get target file: %w", fs.ErrPathNotExist.WithError(errors.New("public file is not visible"))),
+			)
+			return patchErr.Aggregate()
+		},
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: testTextExtractor{
+			exts:        []string{"txt"},
+			maxFileSize: 1024,
+		},
+		fileClient: fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, oldFile.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if indexer.upserted != 2 {
+		t.Fatalf("expected initial and refreshed upsert, got %d", indexer.upserted)
+	}
+	if indexer.lastDoc == nil || indexer.lastDoc.FileName != "new-copy.txt" {
+		t.Fatalf("expected refreshed index document to use current file name, got %+v", indexer.lastDoc)
+	}
+	if len(indexer.deleted) != 0 {
+		t.Fatalf("expected live renamed file not to be deleted from index, got %+v", indexer.deleted)
+	}
+	if got := fileClient.upsertedMetadata[oldFile.ID][dbfs.FullTextIndexKey]; got == "" {
+		t.Fatalf("expected metadata to be upserted by file id, got %+v", fileClient.upsertedMetadata)
+	}
 }
 
 func TestResolveFTSFileURIByModelPrefersPublicURI(t *testing.T) {
@@ -3713,6 +4002,8 @@ type testFileClient struct {
 	ancestorByID      map[int][]*ent.File
 	childByParentName map[int]map[string]*ent.File
 	entityByID        map[int]*ent.Entity
+	upsertedMetadata  map[int]map[string]string
+	deleteOnUpsert    map[int]bool
 	cloneOnGet        bool
 }
 
@@ -3770,6 +4061,34 @@ func (c *testFileClient) GetChildFile(ctx context.Context, root *ent.File, owner
 	}
 
 	return nil, &ent.NotFoundError{}
+}
+
+func (c *testFileClient) UpsertMetadata(ctx context.Context, file *ent.File, data map[string]string, privateMask map[string]bool) error {
+	if file == nil {
+		return &ent.NotFoundError{}
+	}
+	if c.deleteOnUpsert[file.ID] {
+		delete(c.fileByID, file.ID)
+		return &ent.NotFoundError{}
+	}
+	if c.upsertedMetadata == nil {
+		c.upsertedMetadata = map[int]map[string]string{}
+	}
+	if c.upsertedMetadata[file.ID] == nil {
+		c.upsertedMetadata[file.ID] = map[string]string{}
+	}
+	for key, value := range data {
+		c.upsertedMetadata[file.ID][key] = value
+	}
+	return nil
+}
+
+func (c *testFileClient) deleteOnUpsertMetadata(fileID int) *testFileClient {
+	if c.deleteOnUpsert == nil {
+		c.deleteOnUpsert = map[int]bool{}
+	}
+	c.deleteOnUpsert[fileID] = true
+	return c
 }
 
 func cloneEntFile(file *ent.File) *ent.File {
@@ -3899,6 +4218,8 @@ type testMetadataFS struct {
 	paths        []*fs.URI
 	patches      []fs.MetadataPatch
 	bypassStates []bool
+	patchErr     error
+	onPatch      func() error
 }
 
 func (f *testMetadataFS) PatchMetadata(ctx context.Context, path []*fs.URI, metas ...fs.MetadataPatch) error {
@@ -3906,7 +4227,10 @@ func (f *testMetadataFS) PatchMetadata(ctx context.Context, path []*fs.URI, meta
 	f.patches = append(f.patches, metas...)
 	_, bypassed := ctx.Value(dbfs.ByPassOwnerCheckCtxKey{}).(bool)
 	f.bypassStates = append(f.bypassStates, bypassed)
-	return nil
+	if f.onPatch != nil {
+		return f.onPatch()
+	}
+	return f.patchErr
 }
 
 func (f *testMetadataFS) GetEntity(ctx context.Context, entityID int) (fs.Entity, error) {
