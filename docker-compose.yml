@@ -330,6 +330,14 @@ services:
       CR_CONF_Kafka.ClientID: ${CLOUDREVE_GLOBAL_KAFKA_CLIENT_ID:-cloudreve-dev}
       CR_CONF_Kafka.SecurityProtocol: PLAINTEXT
       CR_SETTING_DEFAULT_siteURL: ${CLOUDREVE_SITE_URL:-http://localhost:5212}
+      CR_SETTING_fts_enabled: ${CLOUDREVE_FTS_ENABLED:-1}
+      CR_SETTING_fts_index_type: ${CLOUDREVE_FTS_INDEX_TYPE:-elasticsearch}
+      CR_SETTING_fts_extractor_type: ${CLOUDREVE_FTS_EXTRACTOR_TYPE:-tika}
+      CR_SETTING_fts_elasticsearch_endpoint: ${CLOUDREVE_FTS_ELASTICSEARCH_ENDPOINT:-http://elasticsearch:9200}
+      CR_SETTING_fts_tika_endpoint: ${CLOUDREVE_FTS_TIKA_ENDPOINT:-http://tika:9998}
+      CR_SETTING_fts_tika_sidecar_enabled: ${CLOUDREVE_FTS_TIKA_SIDECAR_ENABLED:-1}
+      CR_SETTING_fts_tika_sidecar_text_enabled: ${CLOUDREVE_FTS_TIKA_SIDECAR_TEXT_ENABLED:-1}
+      CR_SETTING_fts_tika_sidecar_assets_enabled: ${CLOUDREVE_FTS_TIKA_SIDECAR_ASSETS_ENABLED:-1}
       CR_INIT_DEFAULT_STORAGE: ${CR_INIT_DEFAULT_STORAGE:-s3}
       CR_INIT_S3_ENDPOINT: ${CR_INIT_S3_ENDPOINT:-http://minio:9000}
       CR_INIT_S3_BUCKET: ${CR_INIT_S3_BUCKET:-cloudreve}

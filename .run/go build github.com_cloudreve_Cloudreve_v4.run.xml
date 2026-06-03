@@ -28,11 +28,14 @@
       <env name="CR_SETTING_DEFAULT_oidc_client_id" value="cloudreve" />
       <env name="CR_SETTING_DEFAULT_oidc_client_secret" value="cloudreve123" />
       <env name="CR_SETTING_DEFAULT_oidc_scope" value="openid profile email user_info user.read UserInfo.Read Admin.Read Files.Read Files.Write Workflow.Read Workflow.Write Shares.Read Shares.Write" />
-      <env name="CR_SETTING_DEFAULT_fts_enabled" value="1" />
-      <env name="CR_SETTING_DEFAULT_fts_index_type" value="elasticsearch" />
-      <env name="CR_SETTING_DEFAULT_fts_extractor_type" value="tika" />
-      <env name="CR_SETTING_DEFAULT_fts_elasticsearch_endpoint" value="http://127.0.0.1:19200" />
-      <env name="CR_SETTING_DEFAULT_fts_tika_endpoint" value="http://127.0.0.1:19998" />
+      <env name="CR_SETTING_fts_enabled" value="1" />
+      <env name="CR_SETTING_fts_index_type" value="elasticsearch" />
+      <env name="CR_SETTING_fts_extractor_type" value="tika" />
+      <env name="CR_SETTING_fts_elasticsearch_endpoint" value="http://127.0.0.1:19200" />
+      <env name="CR_SETTING_fts_tika_endpoint" value="http://127.0.0.1:19998" />
+      <env name="CR_SETTING_fts_tika_sidecar_enabled" value="1" />
+      <env name="CR_SETTING_fts_tika_sidecar_text_enabled" value="1" />
+      <env name="CR_SETTING_fts_tika_sidecar_assets_enabled" value="1" />
       <env name="CR_INIT_DEFAULT_STORAGE" value="s3" />
       <env name="CR_INIT_S3_ENDPOINT" value="http://127.0.0.1:19000" />
       <env name="CR_INIT_S3_BUCKET" value="cloudreve" />
