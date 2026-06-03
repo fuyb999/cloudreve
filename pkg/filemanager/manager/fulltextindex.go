@@ -1312,6 +1312,14 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	if refreshedURI := metadataURIForFTSDocument(doc, currentURI); refreshedURI != nil {
 		uri = refreshedURI
 	}
+	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
+		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
+		}
+
+		l.Debug("File %d moved to trash before full text index upsert, removed index entry.", fileID)
+		return task.StatusCompleted, nil
+	}
 
 	if err := searchIdx.UpsertFile(ctx, doc); err != nil {
 		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)

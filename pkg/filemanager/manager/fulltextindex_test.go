@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/ent/task"
@@ -2264,6 +2265,291 @@ func TestPerformIndexingReusesExtractionWhenFileRenamesDuringExtraction(t *testi
 	}
 }
 
+func TestPerformIndexingDeletesIndexWhenFileMovesToTrashDuringExtraction(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "trashed.txt")
+	if err := os.WriteFile(tempFile, []byte("trashed payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	actor := &ent.User{
+		ID:     702,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("trashed payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	parent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "public-docs",
+	}
+	fileModel := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "trashed.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  parent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	fileClient := &testFileClient{
+		cloneOnGet: true,
+		fileByID: map[int]*ent.File{
+			fileModel.ID: fileModel,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+			actor.ID: {
+				ID:      10,
+				OwnerID: actor.ID,
+				Type:    int(inventorytypes.FileTypeFolder),
+				Name:    inventory.RootFolderName,
+			},
+		},
+		ancestorByID: map[int][]*ent.File{
+			fileModel.ID: {rootModel, parent, fileModel},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				parent.Name: parent,
+			},
+			parent.ID: {
+				fileModel.Name: fileModel,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			entityModel.ID: entityModel,
+		},
+	}
+	moveToTrashDuringExtract := func() {
+		trashed := *fileModel
+		trashed.Name = "trash-entry"
+		trashed.FileChildren = 0
+		trashed.TreePath = "801"
+		trashed.Edges = fileModel.Edges
+		fileClient.fileByID[fileModel.ID] = &trashed
+		fileClient.ancestorByID[fileModel.ID] = []*ent.File{&trashed}
+		delete(fileClient.childByParentName[parent.ID], fileModel.Name)
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+				actor.ID: actor,
+			},
+		},
+		textExtractor: &mutatingTextExtractor{
+			testTextExtractor: testTextExtractor{
+				exts:        []string{"txt"},
+				maxFileSize: 1024,
+			},
+			onExtract: moveToTrashDuringExtract,
+			text:      "trashed payload",
+		},
+		fileClient: fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{
+		denyNonPublicPatchForOwner: owner.ID,
+		patchRequesterID:           actor.ID,
+	}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     actor,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != fileModel.ID {
+		t.Fatalf("expected trashed file index to be deleted, got %v", indexer.deleted)
+	}
+	if indexer.upserted != 0 {
+		t.Fatalf("expected trashed file not to be upserted, got %d", indexer.upserted)
+	}
+	if len(backend.patches) != 0 {
+		t.Fatalf("expected no metadata patch after file moved to trash, got %+v", backend.patches)
+	}
+}
+
+func TestPerformIndexingDeletesIndexWhenFileIsHardDeletedDuringExtraction(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "deleted.txt")
+	if err := os.WriteFile(tempFile, []byte("deleted payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("deleted payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	parent := &ent.File{
+		ID:      2,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    "docs",
+	}
+	fileModel := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "deleted.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  parent.ID,
+		TreePath:      "1.2.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	fileClient := &testFileClient{
+		cloneOnGet: true,
+		fileByID: map[int]*ent.File{
+			fileModel.ID: fileModel,
+		},
+		rootByOwner: map[int]*ent.File{
+			owner.ID: rootModel,
+		},
+		ancestorByID: map[int][]*ent.File{
+			fileModel.ID: {rootModel, parent, fileModel},
+		},
+		childByParentName: map[int]map[string]*ent.File{
+			rootModel.ID: {
+				parent.Name: parent,
+			},
+			parent.ID: {
+				fileModel.Name: fileModel,
+			},
+		},
+		entityByID: map[int]*ent.Entity{
+			entityModel.ID: entityModel,
+		},
+	}
+	hardDeleteDuringExtract := func() {
+		delete(fileClient.fileByID, fileModel.ID)
+		delete(fileClient.ancestorByID, fileModel.ID)
+		delete(fileClient.childByParentName[parent.ID], fileModel.Name)
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: &mutatingTextExtractor{
+			testTextExtractor: testTextExtractor{
+				exts:        []string{"txt"},
+				maxFileSize: 1024,
+			},
+			onExtract: hardDeleteDuringExtract,
+			text:      "deleted payload",
+		},
+		fileClient: fileClient,
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusCompleted {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusCompleted)
+	}
+	if len(indexer.deleted) != 1 || indexer.deleted[0] != fileModel.ID {
+		t.Fatalf("expected hard-deleted file index to be deleted, got %v", indexer.deleted)
+	}
+	if indexer.upserted != 0 {
+		t.Fatalf("expected hard-deleted file not to be upserted, got %d", indexer.upserted)
+	}
+	if len(backend.patches) != 0 {
+		t.Fatalf("expected no metadata patch after file was hard-deleted, got %+v", backend.patches)
+	}
+}
+
 func TestPerformIndexingTreatsMissingMetadataTargetAsStale(t *testing.T) {
 	tempFile := filepath.Join(t.TempDir(), "deleted.txt")
 	if err := os.WriteFile(tempFile, []byte("deleted payload"), 0o644); err != nil {
@@ -4215,11 +4501,13 @@ func (n *testClusterNode) GetTask(ctx context.Context, id int, clearOnComplete b
 
 type testMetadataFS struct {
 	fs.FileSystem
-	paths        []*fs.URI
-	patches      []fs.MetadataPatch
-	bypassStates []bool
-	patchErr     error
-	onPatch      func() error
+	paths                      []*fs.URI
+	patches                    []fs.MetadataPatch
+	bypassStates               []bool
+	patchErr                   error
+	onPatch                    func() error
+	denyNonPublicPatchForOwner int
+	patchRequesterID           int
 }
 
 func (f *testMetadataFS) PatchMetadata(ctx context.Context, path []*fs.URI, metas ...fs.MetadataPatch) error {
@@ -4227,6 +4515,13 @@ func (f *testMetadataFS) PatchMetadata(ctx context.Context, path []*fs.URI, meta
 	f.patches = append(f.patches, metas...)
 	_, bypassed := ctx.Value(dbfs.ByPassOwnerCheckCtxKey{}).(bool)
 	f.bypassStates = append(f.bypassStates, bypassed)
+	if f.denyNonPublicPatchForOwner > 0 && f.patchRequesterID > 0 && f.patchRequesterID != f.denyNonPublicPatchForOwner {
+		for _, item := range path {
+			if item != nil && item.FileSystem() != constants.FileSystemPublic && !bypassed {
+				return fs.ErrOwnerOnly
+			}
+		}
+	}
 	if f.onPatch != nil {
 		return f.onPatch()
 	}

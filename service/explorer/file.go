@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
+	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/audit"
@@ -18,6 +20,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager/entitysource"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
@@ -29,6 +32,13 @@ import (
 )
 
 const slowListFileThreshold = 200 * time.Millisecond
+
+type publicVisibilityDeps interface {
+	Logger() logging.Logger
+	FileClient() inventory.FileClient
+	SettingClient() inventory.SettingClient
+	HashIDEncoder() hashid.Encoder
+}
 
 // SingleFileService 对单文件进行操作的五福，path为文件完整路径
 type SingleFileService struct {
@@ -250,13 +260,8 @@ func (service *CreateFileService) Create(c *gin.Context) (*FileResponse, error) 
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
 	}
-	if uri.FileSystem() == "public" {
-		visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
-		visibility, err := visibilityService.ResolveVisibility(c, user)
-		if err != nil {
-			return nil, serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
-		}
-		util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
+	if err := applyPublicVisibilityForURIs(c, dep, user, uri); err != nil {
+		return nil, err
 	}
 
 	fileType := types.FileTypeFromString(service.Type)
@@ -291,6 +296,9 @@ func (service *RenameFileService) Rename(c *gin.Context) (*FileResponse, error) 
 	uri, err := fs.NewUriFromString(service.Uri)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+	if err := applyPublicVisibilityForURIs(c, dep, user, uri); err != nil {
+		return nil, err
 	}
 
 	file, err := m.Rename(c, uri, service.NewName)
@@ -328,6 +336,9 @@ func (s *MoveFileService) Move(c *gin.Context) error {
 	dst, err := fs.NewUriFromString(s.Dst)
 	if err != nil {
 		return serializer.NewError(serializer.CodeParamErr, "unknown destination uri", err)
+	}
+	if err := applyPublicVisibilityForURIs(c, dep, user, append(uris, dst)...); err != nil {
+		return err
 	}
 
 	return m.MoveOrCopy(c, uris, dst, s.Copy)
@@ -628,6 +639,9 @@ func (s *DeleteFileService) Delete(c *gin.Context) error {
 	if err != nil {
 		return serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
 	}
+	if err := applyPublicVisibilityForURIs(c, dep, user, uris...); err != nil {
+		return err
+	}
 
 	if s.UnlinkOnly && !inventory.UserHasGroupPermission(user, types.GroupPermissionAdvanceDelete) {
 		return serializer.NewError(serializer.CodeNoPermissionErr, "advance delete permission is required", nil)
@@ -638,6 +652,32 @@ func (s *DeleteFileService) Delete(c *gin.Context) error {
 		return fmt.Errorf("failed to delete file: %w", err)
 	}
 
+	return nil
+}
+
+func applyPublicVisibilityForURIs(c *gin.Context, dep publicVisibilityDeps, user *ent.User, uris ...*fs.URI) error {
+	if c == nil {
+		return nil
+	}
+
+	needsPublicVisibility := false
+	for _, uri := range uris {
+		if uri != nil && uri.FileSystem() == constants.FileSystemPublic {
+			needsPublicVisibility = true
+			break
+		}
+	}
+	if !needsPublicVisibility {
+		return nil
+	}
+
+	visibilityService := publicshare.NewService(dep.Logger(), dep.FileClient(), dep.SettingClient(), dep.HashIDEncoder())
+	visibility, err := visibilityService.ResolveVisibility(c, user)
+	if err != nil {
+		return serializer.NewError(serializer.CodeParamErr, "Failed to resolve public visibility", err)
+	}
+
+	util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
 	return nil
 }
 
