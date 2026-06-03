@@ -1316,6 +1316,9 @@ func resolveTikaAttachmentTextLogicalID(
 		artifactByID[id] = artifact
 	}
 
+	if containerID := resolveTikaNestedDocumentContainerID(defaultLogicalID, artifactByID); containerID != "" {
+		return containerID
+	}
 	if _, exists := artifactByID[defaultLogicalID]; exists && isAvailable(defaultLogicalID) {
 		return defaultLogicalID
 	}
@@ -1373,6 +1376,46 @@ func resolveTikaAttachmentTextLogicalID(
 	}
 
 	return defaultLogicalID
+}
+
+func resolveTikaNestedDocumentContainerID(
+	defaultLogicalID string,
+	artifactByID map[string]FTSSidecarArtifact,
+) string {
+	defaultLogicalID, ok := normalizeFTSSidecarRelativePath(defaultLogicalID)
+	if !ok {
+		return ""
+	}
+
+	best := ""
+	for id := range artifactByID {
+		id, ok := normalizeFTSSidecarRelativePath(id)
+		if !ok || !isTikaRecursiveDocumentContainerPath(id) {
+			continue
+		}
+		if defaultLogicalID != id && !strings.HasPrefix(defaultLogicalID, id+"/") {
+			continue
+		}
+		if len(id) > len(best) {
+			best = id
+		}
+	}
+
+	return best
+}
+
+func isTikaRecursiveDocumentContainerPath(name string) bool {
+	switch util.Ext(name) {
+	case "docx", "docm", "dotx", "dotm",
+		"xlsx", "xlsm", "xltx", "xltm", "xlsb", "xlam",
+		"pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "sldx", "sldm", "ppam",
+		"odt", "fodt", "ott", "odm", "oth",
+		"ods", "fods", "ots",
+		"odp", "fodp", "otp":
+		return true
+	default:
+		return false
+	}
 }
 
 func requestClientForSidecar(m *manager) request.Client {

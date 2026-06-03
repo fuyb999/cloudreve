@@ -1060,6 +1060,9 @@ func buildEmbeddedSearchAttachments(
 		}
 	}
 
+	addArchiveEntriesToAttachments(unpackRaw, prefix, ftsSidecarEmbeddedDir, "embedded", upsert)
+	addArchiveEntriesToAttachments(docxRaw, prefix, ftsSidecarDocxDir, "docx_media", upsert)
+
 	if len(rmetaRaw) > 0 {
 		for index, item := range parseTikaRMetaAttachments(rmetaRaw) {
 			relativeName := preferredTikaAttachmentRelativeName(item.Name, item.Path)
@@ -1071,7 +1074,7 @@ func buildEmbeddedSearchAttachments(
 			if isTikaSyntheticAttachmentArtifact(relativeName) {
 				continue
 			}
-			key := path.Join(prefix, ftsSidecarEmbeddedDir, relativeName)
+			key := resolveEmbeddedAttachmentSearchKey(prefix, path.Join(ftsSidecarEmbeddedDir, relativeName), items)
 
 			upsert(key, func(doc *searcher.SearchAttachmentDocument) {
 				if item.Type != "" {
@@ -1104,9 +1107,6 @@ func buildEmbeddedSearchAttachments(
 		}
 	}
 
-	addArchiveEntriesToAttachments(unpackRaw, prefix, ftsSidecarEmbeddedDir, "embedded", upsert)
-	addArchiveEntriesToAttachments(docxRaw, prefix, ftsSidecarDocxDir, "docx_media", upsert)
-
 	attachments := make([]searcher.SearchAttachmentDocument, 0, len(order))
 	for _, key := range order {
 		item := items[key].doc
@@ -1117,6 +1117,39 @@ func buildEmbeddedSearchAttachments(
 	}
 
 	return attachments
+}
+
+func resolveEmbeddedAttachmentSearchKey(
+	prefix string,
+	defaultLogicalID string,
+	items map[string]*embeddedAttachmentAccumulator,
+) string {
+	defaultLogicalID, ok := normalizeFTSSidecarRelativePath(defaultLogicalID)
+	if !ok {
+		return ""
+	}
+
+	defaultKey := path.Join(prefix, defaultLogicalID)
+	artifactByID := make(map[string]FTSSidecarArtifact, len(items))
+	for key, item := range items {
+		relative, ok := ftsSidecarRelativePath(prefix, key)
+		if !ok {
+			continue
+		}
+		artifact := FTSSidecarArtifact{ID: relative}
+		if item != nil && item.doc != nil {
+			artifact.Name = item.doc.Name
+		}
+		artifactByID[relative] = artifact
+	}
+	if len(artifactByID) == 0 {
+		return defaultKey
+	}
+
+	if resolved := resolveTikaNestedDocumentContainerID(defaultLogicalID, artifactByID); resolved != "" {
+		return path.Join(prefix, resolved)
+	}
+	return defaultKey
 }
 
 func buildEmbeddedSearchAttachmentsFromManifest(

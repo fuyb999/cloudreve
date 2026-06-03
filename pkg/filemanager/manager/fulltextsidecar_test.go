@@ -524,6 +524,79 @@ func TestPersistFTSSidecarsToHandlerAlignsRMetaTextWithUnpackedArchivePath(t *te
 	}
 }
 
+func TestPersistFTSSidecarsToHandlerCollapsesNestedDocxRMetaTextToArchiveEntry(t *testing.T) {
+	tempDir := t.TempDir()
+	handler := &memorySidecarHandler{dir: tempDir}
+	ctx := context.Background()
+
+	m := &manager{
+		l: logging.NewConsoleLogger(logging.LevelError),
+		settings: testSettingProvider{
+			tikaCfg: &setting.FTSTikaExtractorSetting{
+				Endpoint:             "http://tika:9998",
+				SidecarEnabled:       true,
+				SidecarTextEnabled:   true,
+				SidecarAssetsEnabled: true,
+				DocumentExts:         []string{"pdf", "docx"},
+				ArchiveExts:          []string{"zip"},
+			},
+		},
+	}
+
+	rmetaRaw := []byte(`[
+		{"Content-Type":"application/zip","X-TIKA:content":"root zip text"},
+		{"X-TIKA:embedded_resource_path":"docs/report.docx/word/document.xml","resourceName":"word/document.xml","Content-Type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","X-TIKA:content":"docx正文内容"}
+	]`)
+	unpackRaw := buildZipForTest(t, map[string][]byte{
+		"docs/report.docx": []byte("docx binary payload"),
+	})
+	client := &fakeTikaClient{
+		responses: map[string][]byte{
+			"http://tika:9998/tika":       []byte("root zip text"),
+			"http://tika:9998/rmeta":      rmetaRaw,
+			"http://tika:9998/unpack/all": unpackRaw,
+		},
+	}
+	extractor := tikaextractor.NewTikaExtractor(client, m.settings, m.l, m.settings.FTSTikaExtractor(ctx))
+	fileModel := &ent.File{ID: 42, OwnerID: 1, Name: "archive.zip"}
+	entity := &testEntity{id: 7, source: "bucket/archive.zip"}
+	policy := &ent.StoragePolicy{ID: 9, BucketName: "bucket"}
+	source := bytes.NewReader([]byte("zip payload"))
+
+	manifest, manifestPath, err := m.persistFTSSidecarsToHandler(ctx, extractor, nil, fileModel, fileModel.Name, entity, policy, handler, readerAtReadSeekCloser{Reader: source}, "")
+	if err != nil {
+		t.Fatalf("persistFTSSidecarsToHandler returned error: %v", err)
+	}
+	if manifest == nil || manifestPath == "" {
+		t.Fatalf("expected manifest and path, got manifest=%+v path=%q", manifest, manifestPath)
+	}
+
+	textArtifactID := sidecarAttachmentTextObjectID("attachments/docs/report.docx")
+	textArtifact, ok := manifest.ObjectByID(textArtifactID)
+	if !ok {
+		t.Fatalf("expected manifest to include docx attachment text artifact %q", textArtifactID)
+	}
+	if got, want := textArtifact.ParentID, "attachments/docs/report.docx"; got != want {
+		t.Fatalf("unexpected text artifact parent: got %q want %q", got, want)
+	}
+
+	attachments := buildEmbeddedSearchAttachmentsFromManifest(fileModel, entity, manifest, rmetaRaw)
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected manifest attachment count: got %d want 1", len(attachments))
+	}
+	if got, want := attachments[0].Path, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), "attachments/docs/report.docx")); got != want {
+		t.Fatalf("unexpected attachment path: got %q want %q", got, want)
+	}
+	if got, want := attachments[0].Source, filepath.ToSlash(filepath.Join(filepath.Dir(manifestPath), textArtifactID)); got != want {
+		t.Fatalf("unexpected attachment source: got %q want %q", got, want)
+	}
+
+	hydrated := m.hydrateFTSSidecarAttachmentContents(ctx, handler, attachments)
+	if got, want := hydrated[0].Content, "docx正文内容"; got != want {
+		t.Fatalf("unexpected hydrated attachment content: got %q want %q", got, want)
+	}
+}
+
 func TestIsFTSDocumentLikeFile(t *testing.T) {
 	cfg := &setting.FTSTikaExtractorSetting{
 		DocumentExts: []string{"pdf", "docx", "txt"},

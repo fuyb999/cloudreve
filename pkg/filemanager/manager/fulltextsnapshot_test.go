@@ -238,6 +238,56 @@ func TestBuildEmbeddedSearchAttachmentsSkipsSyntheticTikaArtifacts(t *testing.T)
 	}
 }
 
+func TestBuildEmbeddedSearchAttachmentsCollapsesNestedDocxRMetaTextToArchiveEntry(t *testing.T) {
+	rmetaRaw, err := json.Marshal([]map[string]any{
+		{
+			"Content-Type":   "application/zip",
+			"X-TIKA:content": "root zip text",
+		},
+		{
+			"X-TIKA:embedded_resource_path": "docs/report.docx/word/document.xml",
+			"resourceName":                  "word/document.xml",
+			"Content-Type":                  "application/xml",
+			"X-TIKA:content":                "docx正文内容",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal rmeta payload: %v", err)
+	}
+
+	unpackRaw := buildZipForTest(t, map[string][]byte{
+		"docs/report.docx": []byte("docx binary payload"),
+	})
+
+	attachments := buildEmbeddedSearchAttachments(
+		&ent.File{ID: 12, OwnerID: 1, Name: "archive.zip"},
+		mustURI(t, "cloudreve:///docs/archive.zip"),
+		&testEntity{id: 4},
+		rmetaRaw,
+		unpackRaw,
+		nil,
+	)
+
+	if len(attachments) != 1 {
+		t.Fatalf("unexpected attachment count: got %d want 1: %#v", len(attachments), attachments)
+	}
+	if got, want := attachments[0].Name, "report.docx"; got != want {
+		t.Fatalf("unexpected attachment name: got %q want %q", got, want)
+	}
+	if got, want := attachments[0].Path, "cloudreve/fts-sidecar/1/12/4/attachments/docs/report.docx"; got != want {
+		t.Fatalf("unexpected attachment path: got %q want %q", got, want)
+	}
+	if got, want := attachments[0].Content, "docx正文内容"; got != want {
+		t.Fatalf("unexpected attachment content: got %q want %q", got, want)
+	}
+	if got, want := attachments[0].MimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"; got != want {
+		t.Fatalf("unexpected attachment mime type: got %q want %q", got, want)
+	}
+	if got, want := attachments[0].Metadata["embedded_path"], "docs/report.docx/word/document.xml"; got != want {
+		t.Fatalf("unexpected embedded path metadata: got %q want %q", got, want)
+	}
+}
+
 func TestBuildEmbeddedSearchAttachmentsFromManifestSkipsSyntheticTikaArtifacts(t *testing.T) {
 	rmetaRaw, err := json.Marshal([]map[string]any{
 		{
