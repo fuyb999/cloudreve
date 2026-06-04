@@ -69,6 +69,32 @@ func TestListArchiveFilesByLocalSupportZIP(t *testing.T) {
 	}
 }
 
+func TestListArchiveFilesByLocalSupportZIPAcceptsUTF8EncodingAlias(t *testing.T) {
+	raw := mustArchiveZip(t, map[string]string{
+		"docs/readme.txt": "hello",
+	})
+
+	enc, ok := ResolveZipTextEncoding("utf8")
+	if !ok {
+		t.Fatal("expected utf8 alias to be supported")
+	}
+
+	reader := bytes.NewReader(raw)
+	files, err := listArchiveFilesByLocalSupport(
+		context.Background(),
+		"sample.zip",
+		io.NewSectionReader(reader, 0, int64(len(raw))),
+		enc,
+	)
+	if err != nil {
+		t.Fatalf("failed to list archive with utf8 alias: %v", err)
+	}
+
+	if len(files) != 1 || files[0].Name != "docs/readme.txt" {
+		t.Fatalf("unexpected files: %+v", files)
+	}
+}
+
 func TestListArchiveFilesByLocalSupportTarGz(t *testing.T) {
 	raw := mustArchiveTarGz(t, map[string]string{
 		"nested/":           "",

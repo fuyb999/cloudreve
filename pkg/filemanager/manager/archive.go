@@ -88,6 +88,17 @@ var ZipEncodings = map[string]encoding.Encoding{
 	"utf16le":           unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM),
 }
 
+func ResolveZipTextEncoding(zipEncoding string) (encoding.Encoding, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(zipEncoding))
+	switch normalized {
+	case "", "utf8", "utf-8", "utf_8":
+		return nil, true
+	}
+
+	enc, ok := ZipEncodings[normalized]
+	return enc, ok
+}
+
 func (m *manager) ListArchiveFiles(ctx context.Context, uri *fs.URI, entity, zipEncoding string) ([]ArchivedFile, error) {
 	file, err := m.fs.Get(ctx, uri, dbfs.WithFileEntities(), dbfs.WithRequiredCapabilities(dbfs.NavigatorCapabilityDownloadFile))
 	if err != nil {
@@ -108,15 +119,9 @@ func (m *manager) ListArchiveFiles(ctx context.Context, uri *fs.URI, entity, zip
 		return nil, fs.ErrEntityNotExist
 	}
 
-	var (
-		enc encoding.Encoding
-		ok  bool
-	)
-	if zipEncoding != "" {
-		enc, ok = ZipEncodings[strings.ToLower(zipEncoding)]
-		if !ok {
-			return nil, fs.ErrNotSupportedAction.WithError(fmt.Errorf("not supported zip encoding: %s", zipEncoding))
-		}
+	enc, ok := ResolveZipTextEncoding(zipEncoding)
+	if !ok {
+		return nil, fs.ErrNotSupportedAction.WithError(fmt.Errorf("not supported zip encoding: %s", zipEncoding))
 	}
 
 	cacheKey := getArchiveListCacheKey(targetEntity.ID(), zipEncoding)

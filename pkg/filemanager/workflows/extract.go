@@ -313,7 +313,7 @@ func applyArchiveExtractorOptions(extractor archives.Extractor, encoding string,
 	if zipExtractor, ok := extractor.(archives.Zip); ok {
 		if encoding != "" {
 			l.Info("Using encoding %q for zip archive", encoding)
-			textEncoding, ok := manager.ZipEncodings[strings.ToLower(encoding)]
+			textEncoding, ok := manager.ResolveZipTextEncoding(encoding)
 			if !ok {
 				l.Warning("Unknown encoding %q, fallback to default encoding", encoding)
 			} else {

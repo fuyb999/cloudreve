@@ -1,6 +1,7 @@
 package explorer
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/manager"
+	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 )
 
 func TestBuildFullTextSidecarResponseIncludesHierarchyAndIDBasedURLs(t *testing.T) {
@@ -375,10 +377,24 @@ func TestParseFullTextSidecarObjectURIReturnsParentAsFsURI(t *testing.T) {
 }
 
 func TestBuildAndParseFullTextSidecarObjectAccessToken(t *testing.T) {
+	visibility := publicshare.EncodeVisibilityOverride(&publicshare.VisibilityResult{
+		RootGrants: []publicshare.RootGrant{
+			{
+				RootFileID:   42,
+				RootOwnerID:  7,
+				RootTreePath: "1.42",
+				Actions: map[publicshare.Action]bool{
+					publicshare.ActionList:     true,
+					publicshare.ActionDownload: true,
+				},
+			},
+		},
+	})
 	token := buildFullTextSidecarObjectAccessToken(fullTextSidecarObjectAccess{
-		FileID:    42,
-		ObjectID:  "attachments/nested.txt",
-		ParentURI: "cloudreve://public/install.sh__daxfb",
+		FileID:           42,
+		ObjectID:         "attachments/nested.txt",
+		ParentURI:        "cloudreve://public/install.sh__daxfb",
+		PublicVisibility: visibility,
 	})
 
 	decoded, err := parseFullTextSidecarObjectAccessToken(token)
@@ -394,6 +410,75 @@ func TestBuildAndParseFullTextSidecarObjectAccessToken(t *testing.T) {
 	if decoded.ParentURI != "cloudreve://public/install.sh__daxfb" {
 		t.Fatalf("unexpected decoded parent uri: got %q", decoded.ParentURI)
 	}
+	if decoded.PublicVisibility == "" {
+		t.Fatal("expected public visibility to round trip")
+	}
+	decodedVisibility, err := publicshare.DecodeVisibilityOverride(decoded.PublicVisibility)
+	if err != nil {
+		t.Fatalf("failed to decode public visibility: %v", err)
+	}
+	if decodedVisibility == nil || len(decodedVisibility.RootGrants) != 1 || decodedVisibility.RootGrants[0].RootFileID != 42 {
+		t.Fatalf("unexpected decoded public visibility: %+v", decodedVisibility)
+	}
+}
+
+func TestFullTextSidecarObjectAccessCarriesPublicVisibilityFromContext(t *testing.T) {
+	visibility := &publicshare.VisibilityResult{
+		RootGrants: []publicshare.RootGrant{
+			{
+				RootFileID:   42,
+				RootOwnerID:  7,
+				RootTreePath: "1.42",
+				Actions: map[publicshare.Action]bool{
+					publicshare.ActionList:     true,
+					publicshare.ActionDownload: true,
+				},
+			},
+		},
+	}
+
+	access := withFullTextSidecarPublicVisibility(
+		withPublicVisibilityContext(visibility),
+		fullTextSidecarObjectAccess{
+			FileID:    42,
+			ObjectID:  "attachments/nested.txt",
+			ParentURI: "cloudreve://public/install.sh",
+		},
+	)
+
+	if access.PublicVisibility == "" {
+		t.Fatal("expected public visibility to be carried for public parent uri")
+	}
+	decoded, err := publicshare.DecodeVisibilityOverride(access.PublicVisibility)
+	if err != nil {
+		t.Fatalf("failed to decode public visibility: %v", err)
+	}
+	if decoded == nil || len(decoded.RootGrants) != 1 || decoded.RootGrants[0].RootFileID != 42 {
+		t.Fatalf("unexpected public visibility: %+v", decoded)
+	}
+}
+
+func TestFullTextSidecarObjectAccessSkipsPublicVisibilityForPrivateParent(t *testing.T) {
+	visibility := &publicshare.VisibilityResult{
+		RootGrants: []publicshare.RootGrant{{RootFileID: 42}},
+	}
+
+	access := withFullTextSidecarPublicVisibility(
+		withPublicVisibilityContext(visibility),
+		fullTextSidecarObjectAccess{
+			FileID:    42,
+			ObjectID:  "attachments/nested.txt",
+			ParentURI: "cloudreve://my/install.sh",
+		},
+	)
+
+	if access.PublicVisibility != "" {
+		t.Fatalf("did not expect public visibility for private parent uri, got %q", access.PublicVisibility)
+	}
+}
+
+func withPublicVisibilityContext(visibility *publicshare.VisibilityResult) context.Context {
+	return context.WithValue(context.Background(), publicshare.VisibilityOverrideCtx{}, visibility)
 }
 
 func TestParseFullTextSidecarObjectAccessTokenRejectsInvalidInput(t *testing.T) {

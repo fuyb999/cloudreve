@@ -27,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/publicshare"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -74,9 +75,10 @@ type (
 	}
 
 	fullTextSidecarObjectAccess struct {
-		FileID    int    `json:"file_id"`
-		ObjectID  string `json:"object_id"`
-		ParentURI string `json:"parent_uri,omitempty"`
+		FileID           int    `json:"file_id"`
+		ObjectID         string `json:"object_id"`
+		ParentURI        string `json:"parent_uri,omitempty"`
+		PublicVisibility string `json:"public_visibility,omitempty"`
 	}
 )
 
@@ -84,12 +86,16 @@ const fullTextSidecarVirtualFS = "sidecar"
 
 func (s *FullTextSidecarService) Get(c *gin.Context) (*FullTextSidecarResponse, error) {
 	dep := dependency.FromContext(c)
-	fm := manager.NewFileManager(dep, inventory.UserFromContext(c))
+	user := inventory.UserFromContext(c)
+	fm := manager.NewFileManager(dep, user)
 	defer fm.Recycle()
 
 	uri, err := fs.NewUriFromString(s.Uri)
 	if err != nil {
 		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+	if err := applyPublicVisibilityForURIs(c, dep, user, uri); err != nil {
+		return nil, err
 	}
 
 	manifest, err := fm.GetFTSSidecar(c, uri)
@@ -104,6 +110,9 @@ func (s *FullTextSidecarContentService) Serve(c *gin.Context) error {
 	uri, err := fs.NewUriFromString(s.Uri)
 	if err != nil {
 		return serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+	if err := applyPublicVisibilityForURIs(c, dependency.FromContext(c), inventory.UserFromContext(c), uri); err != nil {
+		return err
 	}
 
 	return serveFullTextSidecarContent(c, nil, uri, s.Name, s.Download, false)
@@ -203,11 +212,11 @@ func BuildFullTextSidecarResponse(dep dependency.Dep, c *gin.Context, uri string
 		return buildSignedFullTextSidecarObjectURL(
 			dep,
 			c,
-			fullTextSidecarObjectAccess{
+			withFullTextSidecarPublicVisibility(c, fullTextSidecarObjectAccess{
 				FileID:    manifest.FileID,
 				ObjectID:  objectID,
 				ParentURI: parentURI.String(),
-			},
+			}),
 			false,
 			false,
 		)
@@ -387,6 +396,9 @@ func getFullTextSidecarObject(
 	}
 
 	dep := dependency.FromContext(c)
+	if err := applyPublicVisibilityForURIs(c, dep, inventory.UserFromContext(c), parentURI); err != nil {
+		return nil, nil, manager.FTSSidecarArtifact{}, true, err
+	}
 	fm := manager.NewFileManager(dep, inventory.UserFromContext(c))
 	defer fm.Recycle()
 
@@ -441,7 +453,13 @@ func resolveFullTextSidecarFileURI(c *gin.Context, access *fullTextSidecarObject
 		return nil, nil, "", err
 	}
 	if parentURI != nil && parentURI.FileSystem() == constants.FileSystemPublic {
-		if _, err := fm.Get(dbfs.WithBypassOwnerCheck(c), parentURI, dbfs.WithNotRoot()); err != nil {
+		publicCtx := context.Context(c)
+		if visibility, err := publicshare.DecodeVisibilityOverride(access.PublicVisibility); err == nil && visibility != nil {
+			util.WithValue(c, publicshare.VisibilityOverrideCtx{}, visibility)
+			publicCtx = context.WithValue(publicCtx, publicshare.VisibilityOverrideCtx{}, visibility)
+		}
+		publicCtx = dbfs.WithBypassOwnerCheck(publicCtx)
+		if _, err := fm.Get(publicCtx, parentURI, dbfs.WithNotRoot()); err != nil {
 			parentURI = nil
 		}
 	}
@@ -490,9 +508,10 @@ func resolvePublicFTSSidecarURI(c *gin.Context, dep dependency.Dep, fileModel *e
 
 func buildFullTextSidecarObjectAccessToken(access fullTextSidecarObjectAccess) string {
 	normalized := fullTextSidecarObjectAccess{
-		FileID:    access.FileID,
-		ObjectID:  normalizeFullTextSidecarObjectID(access.ObjectID),
-		ParentURI: strings.TrimSpace(access.ParentURI),
+		FileID:           access.FileID,
+		ObjectID:         normalizeFullTextSidecarObjectID(access.ObjectID),
+		ParentURI:        strings.TrimSpace(access.ParentURI),
+		PublicVisibility: strings.TrimSpace(access.PublicVisibility),
 	}
 	raw, _ := json.Marshal(normalized)
 	return base64.RawURLEncoding.EncodeToString(raw)
@@ -510,6 +529,7 @@ func parseFullTextSidecarObjectAccessToken(token string) (*fullTextSidecarObject
 	}
 	access.ObjectID = normalizeFullTextSidecarObjectID(access.ObjectID)
 	access.ParentURI = strings.TrimSpace(access.ParentURI)
+	access.PublicVisibility = strings.TrimSpace(access.PublicVisibility)
 	if access.FileID <= 0 || access.ObjectID == "" {
 		return nil, serializer.NewError(serializer.CodeParamErr, "invalid full text sidecar token", nil)
 	}
@@ -540,6 +560,21 @@ func buildSignedFullTextSidecarObjectURL(
 	return signed.String()
 }
 
+func withFullTextSidecarPublicVisibility(ctx context.Context, access fullTextSidecarObjectAccess) fullTextSidecarObjectAccess {
+	parentURI, err := resolveFullTextSidecarParentURI(access.ParentURI)
+	if err != nil || parentURI == nil || parentURI.FileSystem() != constants.FileSystemPublic {
+		return access
+	}
+
+	visibility := publicshare.VisibilityOverrideFromContext(ctx)
+	if visibility == nil {
+		return access
+	}
+
+	access.PublicVisibility = publicshare.EncodeVisibilityOverride(visibility)
+	return access
+}
+
 func resolveFullTextSidecarObjectURL(
 	c *gin.Context,
 	raw string,
@@ -554,11 +589,11 @@ func resolveFullTextSidecarObjectURL(
 	dep := dependency.FromContext(c)
 	expire := time.Now().Add(dep.SettingProvider().EntityUrlValidDuration(c))
 	return &manager.EntityUrl{
-		Url: buildSignedFullTextSidecarObjectURL(dep, c, fullTextSidecarObjectAccess{
+		Url: buildSignedFullTextSidecarObjectURL(dep, c, withFullTextSidecarPublicVisibility(c, fullTextSidecarObjectAccess{
 			FileID:    manifest.FileID,
 			ObjectID:  artifact.ID,
 			ParentURI: parentURI.String(),
-		}, download, usePrimarySiteURL),
+		}), download, usePrimarySiteURL),
 	}, &expire, true, nil
 }
 
