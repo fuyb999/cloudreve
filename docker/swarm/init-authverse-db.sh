@@ -77,6 +77,19 @@ AUTHVERSE_DB_NAME="${AUTHVERSE_DB_NAME:-authverse}"
 AUTHVERSE_DB_USERNAME="${AUTHVERSE_DB_USERNAME:-${POSTGRESQL_USERNAME:-cloudreve}}"
 AUTHVERSE_DB_ADMIN_USER="${AUTHVERSE_DB_ADMIN_USER:-postgres}"
 AUTHVERSE_DB_ADMIN_PASSWORD="${AUTHVERSE_DB_ADMIN_PASSWORD:-${POSTGRESQL_POSTGRES_PASSWORD:-}}"
+CLOUDREVE_APP_DB_NAME="${POSTGRESQL_DATABASE:-cloudreve}"
+
+if [[ -z "$AUTHVERSE_DB_NAME" ]]; then
+  echo "[$HOST_NAME] AUTHVERSE_DB_NAME 不能为空。" >&2
+  exit 1
+fi
+
+authverse_db_name_lc="$(printf '%s' "$AUTHVERSE_DB_NAME" | tr '[:upper:]' '[:lower:]')"
+cloudreve_app_db_name_lc="$(printf '%s' "$CLOUDREVE_APP_DB_NAME" | tr '[:upper:]' '[:lower:]')"
+if [[ "$authverse_db_name_lc" == "cloudreve" || "$authverse_db_name_lc" == "$cloudreve_app_db_name_lc" ]]; then
+  echo "[$HOST_NAME] 拒绝初始化统一认证数据库：AUTHVERSE_DB_NAME=$AUTHVERSE_DB_NAME 会指向 Cloudreve 主库($CLOUDREVE_APP_DB_NAME)。" >&2
+  exit 1
+fi
 
 if [[ -z "$AUTHVERSE_DB_ADMIN_PASSWORD" ]]; then
   echo "[$HOST_NAME] 缺少 AUTHVERSE_DB_ADMIN_PASSWORD 或 POSTGRESQL_POSTGRES_PASSWORD。" >&2

@@ -77,7 +77,10 @@ func (c *settingClient) Set(ctx context.Context, settings map[string]string) err
 			SetName(k).
 			SetValue(v).
 			OnConflictColumns(setting.FieldName).
-			UpdateNewValues().
+			Update(func(u *ent.SettingUpsert) {
+				u.SetValue(v)
+				u.ClearDeletedAt()
+			}).
 			Exec(ctx); err != nil {
 			return fmt.Errorf("failed to upsert setting %q: %w", k, err)
 		}
