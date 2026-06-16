@@ -126,13 +126,23 @@ services:
       JAVA_APP_ARGS: ${AUTHVERSE_BACKEND_EXTRA_ARGS:-}
       JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms1g -Xmx2g -Djava.security.egd=file:/dev/./urandom}
       JAVA_TOOL_OPTIONS: "${AUTHVERSE_JAVA_TOOL_OPTIONS:-}"
+      JAVA_WATCHDOG_ENABLED: ${AUTHVERSE_BACKEND_WATCHDOG_ENABLED:-true}
+      JAVA_WATCHDOG_URL: ${AUTHVERSE_BACKEND_WATCHDOG_URL:-http://127.0.0.1:48080/actuator/health/watchdog}
+      JAVA_WATCHDOG_INTERVAL_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_INTERVAL_SECONDS:-15}
+      JAVA_WATCHDOG_FAILURE_THRESHOLD: ${AUTHVERSE_BACKEND_WATCHDOG_FAILURE_THRESHOLD:-8}
+      JAVA_WATCHDOG_START_PERIOD_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_START_PERIOD_SECONDS:-180}
+      JAVA_WATCHDOG_STOP_TIMEOUT_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_STOP_TIMEOUT_SECONDS:-30}
+      JAVA_WATCHDOG_REQUEST_TIMEOUT_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_REQUEST_TIMEOUT_SECONDS:-5}
       SPRING_CONFIG_ADDITIONAL_LOCATION: ${AUTHVERSE_BACKEND_ADDITIONAL_CONFIG:-optional:file:/run/secrets/authverse-backend-application.yml}
     secrets:
       - source: authverse_backend_application
         target: authverse-backend-application.yml
     configs:
-      - source: java_service_launch_v2
+      - source: java_service_launch_v3
         target: /usr/local/bin/java-service-launch.sh
+        mode: 0555
+      - source: java_service_watchdog_v2
+        target: /usr/local/bin/java-service-watchdog.sh
         mode: 0555
     volumes:
       - *localtime-volume
@@ -144,7 +154,7 @@ services:
     networks:
       - cloudreve_backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -sS -o /dev/null http://127.0.0.1:48080/ || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:48080/actuator/health/watchdog | grep -Eq '^[[:space:]]*\\{[[:space:]]*\"status\"[[:space:]]*:[[:space:]]*\"UP\"'"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -175,8 +185,10 @@ volumes:
   authverse_oidc_keys:
 
 configs:
-  java_service_launch_v2:
+  java_service_launch_v3:
     file: ./docker/swarm/java-service-launch.sh
+  java_service_watchdog_v2:
+    file: ./docker/swarm/java-service-watchdog.sh
   authverse_proxy_template_v1:
     file: ./docker/swarm/nginx/authverse-proxy.conf.template
 

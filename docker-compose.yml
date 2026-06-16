@@ -237,6 +237,7 @@ services:
     container_name: cloudreve-dev-authverse-backend
     hostname: authverse-backend
     restart: unless-stopped
+    entrypoint: ["/__cacert_entrypoint.sh", "/usr/local/bin/java-service-launch.sh"]
     depends_on:
       authverse-db-init:
         condition: service_completed_successfully
@@ -248,13 +249,26 @@ services:
     environment:
       <<: *default-env
       SPRING_PROFILES_ACTIVE: local
+      JAVA_LAUNCH_MODE: jar
+      JAVA_APP_JAR: app.jar
+      JAVA_APP_ARGS: ${AUTHVERSE_BACKEND_EXTRA_ARGS:-}
+      JAVA_WATCHDOG_ENABLED: ${AUTHVERSE_BACKEND_WATCHDOG_ENABLED:-true}
+      JAVA_WATCHDOG_URL: ${AUTHVERSE_BACKEND_WATCHDOG_URL:-http://127.0.0.1:48080/actuator/health/watchdog}
+      JAVA_WATCHDOG_INTERVAL_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_INTERVAL_SECONDS:-15}
+      JAVA_WATCHDOG_FAILURE_THRESHOLD: ${AUTHVERSE_BACKEND_WATCHDOG_FAILURE_THRESHOLD:-8}
+      JAVA_WATCHDOG_START_PERIOD_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_START_PERIOD_SECONDS:-180}
+      JAVA_WATCHDOG_STOP_TIMEOUT_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_STOP_TIMEOUT_SECONDS:-30}
+      JAVA_WATCHDOG_REQUEST_TIMEOUT_SECONDS: ${AUTHVERSE_BACKEND_WATCHDOG_REQUEST_TIMEOUT_SECONDS:-5}
       JAVA_OPTS: ${AUTHVERSE_JAVA_OPTS:--Xms512m -Xmx1g -Djava.security.egd=file:/dev/./urandom}
       SPRING_APPLICATION_JSON: >-
-        {"spring":{"datasource":{"dynamic":{"datasource":{"master":{"url":"jdbc:postgresql://postgresql-1:5432/authverse","username":"cloudreve","password":"cloudreve"},"slave":{"lazy":true,"url":"jdbc:postgresql://postgresql-1:5432/authverse","username":"cloudreve","password":"cloudreve"}}}},"data":{"redis":{"host":"redis-1","port":6379,"database":0}}},"authverse":{"cloudreve":{"base-uri":"${AUTHVERSE_CLOUDREVE_BASE_URI:-http://host.docker.internal:5212}"},"search":{"elasticsearch":{"enabled":true,"uris":["http://elasticsearch:9200"]}},"oidc":{"issuer":"${AUTHVERSE_OIDC_ISSUER:-http://localhost:48080}"}}}
+        {"spring":{"datasource":{"dynamic":{"datasource":{"master":{"url":"jdbc:postgresql://postgresql-1:5432/authverse","username":"cloudreve","password":"cloudreve"},"slave":{"lazy":true,"url":"jdbc:postgresql://postgresql-1:5432/authverse","username":"cloudreve","password":"cloudreve"}}}},"data":{"redis":{"host":"redis-1","port":6379,"database":0}}},"management":{"endpoint":{"health":{"probes":{"enabled":true},"group":{"watchdog":{"include":"*","show-details":"never"},"readiness":{"include":"readinessState,*","show-details":"never"},"liveness":{"include":"livenessState","show-details":"never"}}}},"endpoints":{"web":{"exposure":{"include":"health,info"}}}},"authverse":{"cloudreve":{"base-uri":"${AUTHVERSE_CLOUDREVE_BASE_URI:-http://host.docker.internal:5212}"},"search":{"elasticsearch":{"enabled":true,"uris":["http://elasticsearch:9200"]}},"oidc":{"issuer":"${AUTHVERSE_OIDC_ISSUER:-http://localhost:48080}"}}}
     ports:
       - "${AUTHVERSE_BACKEND_PORT:-48080}:48080"
+    volumes:
+      - ./docker/swarm/java-service-launch.sh:/usr/local/bin/java-service-launch.sh:ro
+      - ./docker/swarm/java-service-watchdog.sh:/usr/local/bin/java-service-watchdog.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:48080/ >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:48080/actuator/health/watchdog | grep -Eq '^[[:space:]]*\\{[[:space:]]*\"status\"[[:space:]]*:[[:space:]]*\"UP\"'"]
       interval: 20s
       timeout: 5s
       retries: 20

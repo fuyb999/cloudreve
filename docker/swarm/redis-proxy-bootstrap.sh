@@ -117,12 +117,19 @@ defaults
   timeout client ${haproxy_client_timeout}
   timeout server ${haproxy_server_timeout}
 
+resolvers docker
+  nameserver dns 127.0.0.11:53
+  accepted_payload_size 8192
+  hold valid 10s
+
 frontend redis_front
   bind *:6379
   default_backend redis_master
 
 backend redis_master
   option tcp-check
+  default-server resolvers docker init-addr libc,none resolve-prefer ipv4
+  tcp-check connect
 EOF
 
 if [ -n "$redis_password" ]; then

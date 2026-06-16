@@ -14,9 +14,13 @@ spring:
         min-evictable-idle-time-millis: ${AUTHVERSE_DB_POOL_MIN_EVICTABLE_IDLE_TIME_MILLIS}
         max-evictable-idle-time-millis: ${AUTHVERSE_DB_POOL_MAX_EVICTABLE_IDLE_TIME_MILLIS}
         validation-query: SELECT 1
+        validation-query-timeout: ${AUTHVERSE_DB_POOL_VALIDATION_QUERY_TIMEOUT}
         test-while-idle: true
-        test-on-borrow: false
+        test-on-borrow: ${AUTHVERSE_DB_POOL_TEST_ON_BORROW}
         test-on-return: false
+        keep-alive: ${AUTHVERSE_DB_POOL_KEEP_ALIVE}
+        connection-error-retry-attempts: ${AUTHVERSE_DB_POOL_CONNECTION_ERROR_RETRY_ATTEMPTS}
+        break-after-acquire-failure: false
         pool-prepared-statements: true
         max-pool-prepared-statement-per-connection-size: 20
       datasource:
@@ -34,6 +38,8 @@ spring:
       port: ${AUTHVERSE_REDIS_PORT}
       password: "${AUTHVERSE_REDIS_PASSWORD}"
       database: ${AUTHVERSE_REDIS_DATABASE}
+      timeout: "${AUTHVERSE_REDIS_TIMEOUT}"
+      connect-timeout: "${AUTHVERSE_REDIS_CONNECT_TIMEOUT}"
       ssl:
         enabled: ${AUTHVERSE_REDIS_SSL_ENABLED}
   servlet:
@@ -41,39 +47,27 @@ spring:
       max-file-size: "${AUTHVERSE_MAX_FILE_SIZE}"
       max-request-size: "${AUTHVERSE_MAX_REQUEST_SIZE}"
 
-authverse:
-  tenant:
-    enable: ${AUTHVERSE_TENANT_ENABLED}
-  web:
-    admin-ui:
-      url: "${AUTHVERSE_PUBLIC_BASE_URL}"
-  cloudreve:
-    base-uri: "${AUTHVERSE_CLOUDREVE_PUBLIC_BASE_URL}"
-  search:
-    elasticsearch:
-      enabled: ${AUTHVERSE_ELASTICSEARCH_ENABLED}
-      uris:
-        - "${AUTHVERSE_ELASTICSEARCH_URI}"
-      connection-timeout: "${AUTHVERSE_ELASTICSEARCH_CONNECTION_TIMEOUT}"
-      socket-timeout: "${AUTHVERSE_ELASTICSEARCH_SOCKET_TIMEOUT}"
-      connection-request-timeout: "${AUTHVERSE_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT}"
-  oidc:
-    enabled: ${AUTHVERSE_OIDC_ENABLED}
-    issuer: "${AUTHVERSE_PUBLIC_BASE_URL}"
-    rsa:
-      auto-generate: ${AUTHVERSE_OIDC_RSA_AUTO_GENERATE}
-      private-key-path: "${AUTHVERSE_OIDC_PRIVATE_KEY_PATH}"
-      public-key-path: "${AUTHVERSE_OIDC_PUBLIC_KEY_PATH}"
-      key-id: "${AUTHVERSE_OIDC_KEY_ID}"
-    callback:
-      enabled: ${AUTHVERSE_TOKEN_CALLBACK_ENABLED}
-      timeout: ${AUTHVERSE_TOKEN_CALLBACK_TIMEOUT_MS}
-      retry-times: ${AUTHVERSE_TOKEN_CALLBACK_RETRY_TIMES}
-      retry-interval: ${AUTHVERSE_TOKEN_CALLBACK_RETRY_INTERVAL_MS}
-  websocket:
-    sender-type: "${AUTHVERSE_WEBSOCKET_SENDER_TYPE}"
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        watchdog:
+          include: "${AUTHVERSE_ACTUATOR_WATCHDOG_INCLUDE}"
+          show-details: never
+        readiness:
+          include: "readinessState,${AUTHVERSE_ACTUATOR_WATCHDOG_INCLUDE}"
+          show-details: never
+        liveness:
+          include: livenessState
+          show-details: never
+  endpoints:
+    web:
+      exposure:
+        include: health,info
 
-yudao:
+authverse:
   tenant:
     enable: ${AUTHVERSE_TENANT_ENABLED}
   web:

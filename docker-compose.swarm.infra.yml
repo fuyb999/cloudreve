@@ -60,7 +60,7 @@ services:
     hostname: "{{.Node.Hostname}}-minio-internal-{{.Task.Slot}}"
     environment: *default-env
     configs:
-      - source: minio_cluster_proxy_cfg_v2
+      - source: ${MINIO_PROXY_CONFIG_SOURCE:-minio_cluster_proxy_cfg_v3}
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
     volumes:
@@ -90,7 +90,7 @@ services:
     hostname: "{{.Node.Hostname}}-minio-public-{{.Task.Slot}}"
     environment: *default-env
     configs:
-      - source: minio_public_tls_cfg_v2
+      - source: minio_public_tls_cfg_v4
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0444
     ports:
@@ -863,9 +863,11 @@ services:
 configs:
   swarm_secret_wrap_v1:
     file: ./docker/swarm/swarm-secret-wrap.sh
-  minio_cluster_proxy_cfg_v2:
+  minio_cluster_proxy_cfg_v3:
     file: ./docker/swarm/haproxy/minio-cluster.cfg
-  minio_public_tls_cfg_v2:
+  minio_single_proxy_cfg_v2:
+    file: ./docker/swarm/haproxy/minio-single.cfg
+  minio_public_tls_cfg_v4:
     file: ./docker/swarm/haproxy/minio-public-tls.cfg
   minio_swarm_entrypoint_v1:
     file: ./docker/swarm/minio-swarm-entrypoint.sh

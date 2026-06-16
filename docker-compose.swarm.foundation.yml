@@ -322,7 +322,10 @@ services:
       start_period: ${PGPOOL_HEALTHCHECK_START_PERIOD:-6m}
     deploy:
       replicas: ${PGPOOL_REPLICAS:-1}
-      update_config: *delayed-update-config
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
       rollback_config: *default-rollback-config
       restart_policy: *default-restart-policy
       placement:
@@ -390,7 +393,10 @@ services:
       start_period: ${PGPOOL_HEALTHCHECK_START_PERIOD:-6m}
     deploy:
       replicas: ${PGPOOL_PUBLIC_REPLICAS:-1}
-      update_config: *default-update-config
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
       rollback_config: *default-rollback-config
       restart_policy: *default-restart-policy
       placement:
@@ -437,7 +443,7 @@ services:
       retries: ${REDIS_HEALTHCHECK_RETRIES:-18}
       start_period: ${REDIS_HEALTHCHECK_START_PERIOD:-5m}
     deploy:
-      endpoint_mode: dnsrr
+      endpoint_mode: vip
       replicas: 1
       update_config: *stateful-update-config
       restart_policy: *stateful-restart-policy
@@ -486,7 +492,7 @@ services:
       retries: ${REDIS_HEALTHCHECK_RETRIES:-18}
       start_period: ${REDIS_HEALTHCHECK_START_PERIOD:-5m}
     deploy:
-      endpoint_mode: dnsrr
+      endpoint_mode: vip
       replicas: 1
       update_config: *stateful-update-config
       restart_policy: *stateful-restart-policy
@@ -535,7 +541,7 @@ services:
       retries: ${REDIS_HEALTHCHECK_RETRIES:-18}
       start_period: ${REDIS_HEALTHCHECK_START_PERIOD:-5m}
     deploy:
-      endpoint_mode: dnsrr
+      endpoint_mode: vip
       replicas: 1
       update_config: *stateful-update-config
       restart_policy: *stateful-restart-policy
@@ -628,7 +634,7 @@ services:
       - source: swarm_secret_wrap_v1
         target: /usr/local/bin/swarm-secret-wrap.sh
         mode: 0555
-      - source: redis_proxy_bootstrap_v9
+      - source: redis_proxy_bootstrap_v11
         target: /usr/local/bin/redis-proxy-bootstrap.sh
         mode: 0555
       - source: redis_proxy_healthcheck_v1
@@ -995,7 +1001,7 @@ configs:
     file: ./docker/swarm/swarm-secret-wrap.sh
   postgresql_repmgr_run_v6:
     file: ./docker/swarm/postgresql-repmgr-run.sh
-  redis_proxy_bootstrap_v9:
+  redis_proxy_bootstrap_v11:
     file: ./docker/swarm/redis-proxy-bootstrap.sh
   redis_proxy_healthcheck_v1:
     file: ./docker/swarm/redis-proxy-healthcheck.sh
