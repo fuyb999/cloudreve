@@ -125,7 +125,11 @@ func upsertFTSDocument(ctx context.Context, fm *manager, uri *fs.URI, doc *searc
 	dep := dependency.FromContext(ctx)
 	searchIdx := dep.SearchIndexer(ctx)
 	if searchindexer.IsNoopIndexer(searchIdx) {
-		return enttask.StatusError, fmt.Errorf("search indexer is unavailable")
+		if searchindexer.IsRetryableNoopIndexer(searchIdx) {
+			dep.Logger().Warning("Full text indexing paused while search indexer recovers: %s", searchindexer.UnavailableError(searchIdx))
+			return enttask.StatusSuspending, nil
+		}
+		return enttask.StatusError, searchindexer.UnavailableError(searchIdx)
 	}
 	if doc == nil {
 		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
@@ -133,6 +137,10 @@ func upsertFTSDocument(ctx context.Context, fm *manager, uri *fs.URI, doc *searc
 	}
 
 	if err := searchIdx.UpsertFile(ctx, doc); err != nil {
+		if pauseFullTextIndexingForRetryableError(dep.Logger(), err) {
+			return enttask.StatusSuspending, nil
+		}
+
 		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
 		return enttask.StatusError, fmt.Errorf("failed to index file %d: %w", doc.FileID, err)
 	}
@@ -230,6 +238,10 @@ func (t *FullTextIndexTask) dispatchExternalIfConfigured(
 	if err != nil {
 		return status, true, err
 	}
+	if status == enttask.StatusSuspending {
+		t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+		return status, true, nil
+	}
 
 	state.CompleteActive()
 	next, err := t.persistAndContinue(state)
@@ -273,6 +285,10 @@ func (t *FullTextIndexTask) queueExternalExtraction(
 			return t.suspendForExternalJob(state, reusableJob.RequestID)
 		case ftsExternalJobStatusSuccess:
 			status, err := finalizeExternalIndexedFileForTask(ctx, fm, candidate.fileModel.ID, reusableJob)
+			if status == enttask.StatusSuspending && err == nil {
+				t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+				return status, nil
+			}
 			if err != nil {
 				return status, err
 			}
@@ -316,6 +332,10 @@ func (t *FullTextIndexTask) awaitExternalExtraction(ctx context.Context, fm *man
 		}
 
 		status, err := finalizeExternalIndexedFile(ctx, fm, item.FileID, job)
+		if status == enttask.StatusSuspending && err == nil {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return status, nil
+		}
 		if err != nil {
 			return status, err
 		}
@@ -362,6 +382,10 @@ func (t *FullTextIndexTask) retryOrFallbackExternal(
 	markFTSExternalJobLocalFallback(ctx, fm.dep, job, reason)
 
 	status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+	if status == enttask.StatusSuspending && err == nil {
+		t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+		return status, nil
+	}
 	if err != nil {
 		return status, fmt.Errorf("%s; local fallback failed: %w", reason, err)
 	}
@@ -446,7 +470,11 @@ func finalizeExternalIndexedFile(ctx context.Context, fm *manager, fileID int, j
 	dep := dependency.FromContext(ctx)
 	searchIdx := dep.SearchIndexer(ctx)
 	if searchindexer.IsNoopIndexer(searchIdx) {
-		return enttask.StatusError, fmt.Errorf("search indexer is unavailable")
+		if searchindexer.IsRetryableNoopIndexer(searchIdx) {
+			dep.Logger().Warning("Full text indexing paused while search indexer recovers: %s", searchindexer.UnavailableError(searchIdx))
+			return enttask.StatusSuspending, nil
+		}
+		return enttask.StatusError, searchindexer.UnavailableError(searchIdx)
 	}
 	if job == nil {
 		return enttask.StatusError, fmt.Errorf("external fts job is nil")
@@ -456,6 +484,10 @@ func finalizeExternalIndexedFile(ctx context.Context, fm *manager, fileID int, j
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+				if pauseFullTextIndexingForRetryableError(dep.Logger(), err) {
+					return enttask.StatusSuspending, nil
+				}
+
 				return enttask.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 			return enttask.StatusCompleted, nil
@@ -465,6 +497,10 @@ func finalizeExternalIndexedFile(ctx context.Context, fm *manager, fileID int, j
 
 	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
 		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			if pauseFullTextIndexingForRetryableError(dep.Logger(), err) {
+				return enttask.StatusSuspending, nil
+			}
+
 			return enttask.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
 		}
 		return enttask.StatusCompleted, nil

@@ -336,12 +336,35 @@ type (
 	SetSettingService struct {
 		Settings map[string]string `json:"settings" binding:"required"`
 	}
+	SetSettingResponse struct {
+		Settings map[string]string `json:"settings"`
+		Warnings []string          `json:"warnings,omitempty"`
+	}
 	SetSettingParamCtx   struct{}
 	SettingPreProcessor  func(ctx context.Context, settings map[string]string) error
 	SettingPostProcessor func(ctx context.Context, settings map[string]string) error
 )
 
 var (
+	searchIndexerSettingKeys = map[string]struct{}{
+		"fts_enabled":                       {},
+		"fts_sync_folders":                  {},
+		"fts_index_type":                    {},
+		"fts_chunk_size":                    {},
+		"fts_meilisearch_embed_config":      {},
+		"fts_meilisearch_endpoint":          {},
+		"fts_meilisearch_api_key":           {},
+		"fts_meilisearch_embed_enabled":     {},
+		"fts_meilisearch_page_size":         {},
+		"fts_elasticsearch_endpoint":        {},
+		"fts_elasticsearch_cloud_id":        {},
+		"fts_elasticsearch_api_key":         {},
+		"fts_elasticsearch_username":        {},
+		"fts_elasticsearch_password":        {},
+		"fts_elasticsearch_index":           {},
+		"fts_elasticsearch_page_size":       {},
+		"fts_elasticsearch_skip_tls_verify": {},
+	}
 	preprocessors = map[string]SettingPreProcessor{
 		"siteURL":      siteUrlPreProcessor,
 		"mime_mapping": mimeMappingPreProcessor,
@@ -441,7 +464,7 @@ var (
 	reloadFTSExternalKafka = manager.ReloadFTSExternalKafka
 )
 
-func (s *SetSettingService) SetSetting(c *gin.Context) (map[string]string, error) {
+func (s *SetSettingService) SetSetting(c *gin.Context) (*SetSettingResponse, error) {
 	dep := dependency.FromContext(c)
 	kv := dep.KV()
 	settingClient := dep.SettingClient()
@@ -499,7 +522,55 @@ func (s *SetSettingService) SetSetting(c *gin.Context) (map[string]string, error
 		}
 	}
 
-	return s.Settings, nil
+	warnings := settingOverrideWarnings(s.Settings)
+	warnings = append(warnings, searchIndexerWarnings(c, s.Settings)...)
+
+	return &SetSettingResponse{
+		Settings: s.Settings,
+		Warnings: warnings,
+	}, nil
+}
+
+func settingOverrideWarnings(settings map[string]string) []string {
+	warnings := make([]string, 0)
+	keys := lo.Keys(settings)
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		envName := setting.EnvOverrideName(key)
+		if _, ok := setting.EnvOverrideValue(key); ok {
+			warnings = append(warnings, fmt.Sprintf("Setting %s was saved to database, but runtime value is overridden by %s. Update the Swarm environment variable or remove the override.", key, envName))
+		}
+	}
+
+	return warnings
+}
+
+func searchIndexerWarnings(ctx context.Context, settings map[string]string) []string {
+	if !touchesSearchIndexerSettings(settings) {
+		return nil
+	}
+
+	dep := dependency.FromContext(ctx)
+	if !dep.SettingProvider().FTSEnabled(ctx) {
+		return nil
+	}
+
+	if reason := dep.SearchIndexerUnavailableReason(); reason != "" {
+		return []string{fmt.Sprintf("Search indexer is unavailable: %s", reason)}
+	}
+
+	return nil
+}
+
+func touchesSearchIndexerSettings(settings map[string]string) bool {
+	for key := range settings {
+		if _, ok := searchIndexerSettingKeys[key]; ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 func siteUrlPreProcessor(ctx context.Context, settings map[string]string) error {

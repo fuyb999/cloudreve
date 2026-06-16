@@ -1799,6 +1799,114 @@ func TestPerformIndexingUpsertsLatestVersionWhenTextExtractionFails(t *testing.T
 	}
 }
 
+func TestPerformIndexingSuspendsOnRetryableIndexerUpsertError(t *testing.T) {
+	tempFile := filepath.Join(t.TempDir(), "retryable.txt")
+	if err := os.WriteFile(tempFile, []byte("retryable payload"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	hasher, err := hashid.New("test-salt")
+	if err != nil {
+		t.Fatalf("failed to create hashid encoder: %v", err)
+	}
+
+	owner := &ent.User{
+		ID:     701,
+		Status: entuser.StatusActive,
+	}
+	entityModel := &ent.Entity{
+		ID:             901,
+		Type:           int(inventorytypes.EntityTypeVersion),
+		Source:         tempFile,
+		Size:           int64(len("retryable payload")),
+		ReferenceCount: 1,
+		CreatedAt:      time.Unix(1710000000, 0),
+		UpdatedAt:      time.Unix(1710000060, 0),
+	}
+	fileModel := &ent.File{
+		ID:            801,
+		OwnerID:       owner.ID,
+		Type:          int(inventorytypes.FileTypeFile),
+		Name:          "retryable.txt",
+		FileExt:       "txt",
+		Size:          entityModel.Size,
+		PrimaryEntity: entityModel.ID,
+		FileChildren:  1,
+		TreePath:      "1.801",
+		CreatedAt:     time.Unix(1710000100, 0),
+		UpdatedAt:     time.Unix(1710000200, 0),
+		Edges: ent.FileEdges{
+			Entities: []*ent.Entity{entityModel},
+		},
+	}
+	rootModel := &ent.File{
+		ID:      1,
+		OwnerID: owner.ID,
+		Type:    int(inventorytypes.FileTypeFolder),
+		Name:    inventory.RootFolderName,
+	}
+
+	settings := testSettingProvider{enabled: true}
+	indexer := &testSearchIndexer{
+		upsertErr: searchindexer.RetryableUnavailableError(errors.New("status=503")),
+	}
+	dep := testDep{
+		settings:      settings,
+		config:        testConfigProvider{},
+		hasher:        hasher,
+		settingClient: testSettingClient{},
+		searchIndexer: indexer,
+		userClient: &testUserClient{
+			userByID: map[int]*ent.User{
+				owner.ID: owner,
+			},
+		},
+		textExtractor: testTextExtractor{
+			exts:        []string{"txt"},
+			maxFileSize: 1024,
+		},
+		fileClient: &testFileClient{
+			fileByID: map[int]*ent.File{
+				fileModel.ID: fileModel,
+			},
+			rootByOwner: map[int]*ent.File{
+				owner.ID: rootModel,
+			},
+			ancestorByID: map[int][]*ent.File{
+				fileModel.ID: {rootModel, fileModel},
+			},
+			childByParentName: map[int]map[string]*ent.File{
+				rootModel.ID: {
+					fileModel.Name: fileModel,
+				},
+			},
+			entityByID: map[int]*ent.Entity{
+				entityModel.ID: entityModel,
+			},
+		},
+	}
+	ctx := context.WithValue(context.Background(), dependency.DepCtx{}, dep)
+	backend := &testMetadataFS{}
+
+	status, err := performIndexing(ctx, &manager{
+		user:     owner,
+		l:        logging.NewConsoleLogger(logging.LevelError),
+		fs:       backend,
+		hasher:   hasher,
+		settings: settings,
+		dep:      dep,
+	}, fileModel.ID)
+	if err != nil {
+		t.Fatalf("unexpected performIndexing error: %v", err)
+	}
+	if status != task.StatusSuspending {
+		t.Fatalf("unexpected status: got %s want %s", status, task.StatusSuspending)
+	}
+	if len(backend.patches) != 0 {
+		t.Fatalf("expected no metadata patch when indexer is temporarily unavailable, got %+v", backend.patches)
+	}
+}
+
 func TestPerformIndexingRefreshesPathWhenFileMovesDuringExtraction(t *testing.T) {
 	tempFile := filepath.Join(t.TempDir(), "moving.txt")
 	if err := os.WriteFile(tempFile, []byte("moving payload"), 0o644); err != nil {
@@ -4223,12 +4331,19 @@ type testSearchIndexer struct {
 	results       []searcher.SearchResult
 	total         int64
 	searchErr     error
+	upsertErr     error
+	bulkErr       error
+	deleteErr     error
 	lastSearchReq *searcher.SearchRequest
 }
 
 func (s *testSearchIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
 	s.upserted++
 	s.lastDoc = doc
+	if s.upsertErr != nil {
+		return s.upsertErr
+	}
+
 	return nil
 }
 
@@ -4237,11 +4352,19 @@ func (s *testSearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*searche
 	if len(docs) > 0 {
 		s.lastDoc = docs[len(docs)-1]
 	}
+	if s.bulkErr != nil {
+		return s.bulkErr
+	}
+
 	return nil
 }
 
 func (s *testSearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int) error {
 	s.deleted = append(s.deleted, fileID...)
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+
 	return nil
 }
 

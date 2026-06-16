@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
@@ -69,5 +70,29 @@ func TestQualityOnlySettingsDoNotTriggerExternalKafkaReload(t *testing.T) {
 	}
 	if _, ok := postprocessors["fts_external_kafka_process_topic"]; !ok {
 		t.Fatal("kafka topic changes should still trigger kafka reload")
+	}
+}
+
+func TestSettingOverrideWarnings(t *testing.T) {
+	t.Setenv("CR_SETTING_fts_elasticsearch_endpoint", "http://es-from-env:9200")
+
+	warnings := settingOverrideWarnings(map[string]string{
+		"fts_elasticsearch_endpoint": "http://es-from-ui:9200",
+		"fts_elasticsearch_index":    "cloudreve_files",
+	})
+	if len(warnings) != 1 {
+		t.Fatalf("expected one warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "CR_SETTING_fts_elasticsearch_endpoint") {
+		t.Fatalf("expected env override name in warning, got %q", warnings[0])
+	}
+}
+
+func TestTouchesSearchIndexerSettings(t *testing.T) {
+	if !touchesSearchIndexerSettings(map[string]string{"fts_elasticsearch_endpoint": "http://es:9200"}) {
+		t.Fatal("expected Elasticsearch setting to touch search indexer")
+	}
+	if touchesSearchIndexerSettings(map[string]string{"siteURL": "https://example.com"}) {
+		t.Fatal("siteURL should not touch search indexer")
 	}
 }

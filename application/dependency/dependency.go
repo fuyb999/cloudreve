@@ -3,6 +3,7 @@ package dependency
 import (
 	"context"
 	"errors"
+	"fmt"
 	iofs "io/fs"
 	"net/url"
 	"sync"
@@ -50,6 +51,53 @@ type (
 	// ReloadCtx force reload new dependency
 	ReloadCtx struct{}
 )
+
+type retryableSearchIndexer struct {
+	searcher.SearchIndexer
+	onRetryableError func(error)
+}
+
+func (r *retryableSearchIndexer) capture(err error) error {
+	if err != nil && indexer.IsRetryableUnavailableError(err) && r.onRetryableError != nil {
+		r.onRetryableError(err)
+	}
+
+	return err
+}
+
+func (r *retryableSearchIndexer) UpsertFile(ctx context.Context, doc *searcher.SearchFileDocument) error {
+	return r.capture(r.SearchIndexer.UpsertFile(ctx, doc))
+}
+
+func (r *retryableSearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*searcher.SearchFileDocument) error {
+	return r.capture(r.SearchIndexer.BulkUpsertFiles(ctx, docs))
+}
+
+func (r *retryableSearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int) error {
+	return r.capture(r.SearchIndexer.DeleteByFileIDs(ctx, fileID...))
+}
+
+func (r *retryableSearchIndexer) Search(ctx context.Context, req *searcher.SearchRequest) ([]searcher.SearchResult, int64, error) {
+	results, total, err := r.SearchIndexer.Search(ctx, req)
+	return results, total, r.capture(err)
+}
+
+func (r *retryableSearchIndexer) IndexReady(ctx context.Context) (bool, error) {
+	ready, err := r.SearchIndexer.IndexReady(ctx)
+	return ready, r.capture(err)
+}
+
+func (r *retryableSearchIndexer) EnsureIndex(ctx context.Context) error {
+	return r.capture(r.SearchIndexer.EnsureIndex(ctx))
+}
+
+func (r *retryableSearchIndexer) DeleteAll(ctx context.Context) error {
+	return r.capture(r.SearchIndexer.DeleteAll(ctx))
+}
+
+func (r *retryableSearchIndexer) Close() error {
+	return r.SearchIndexer.Close()
+}
 
 // Dep manages all dependencies of the server application. The default implementation is not
 // concurrent safe, so all inner deps should be initialized before any goroutine starts.
@@ -154,6 +202,8 @@ type Dep interface {
 	EventHub() eventhub.EventHub
 	// SearchIndexer Get a singleton searcher.SearchIndexer instance for full-text search indexing.
 	SearchIndexer(ctx context.Context) searcher.SearchIndexer
+	// SearchIndexerUnavailableReason returns the latest operator-facing reason why SearchIndexer is unavailable.
+	SearchIndexerUnavailableReason() string
 	// TextExtractor Get a singleton searcher.TextExtractor instance for text extraction.
 	TextExtractor(ctx context.Context) searcher.TextExtractor
 }
@@ -209,6 +259,8 @@ type dependency struct {
 	masterEncryptKeyVault  encrypt.MasterEncryptKeyVault
 	eventHub               eventhub.EventHub
 	searchIndexer          searcher.SearchIndexer
+	searchIndexerRetryAt   time.Time
+	searchIndexerLastError string
 	textExtractor          searcher.TextExtractor
 
 	configPath        string
@@ -438,57 +490,142 @@ func (d *dependency) SearchIndexer(ctx context.Context) searcher.SearchIndexer {
 
 	_, reload := ctx.Value(ReloadCtx{}).(bool)
 	if d.searchIndexer != nil && !reload {
+		if d.searchIndexerLastError != "" {
+			if d.searchIndexerRetryAt.IsZero() || time.Now().Before(d.searchIndexerRetryAt) {
+				d.searchIndexer = d.wrapActiveSearchIndexer(d.searchIndexer)
+				return d.searchIndexer
+			}
+			d.Logger().Info("Retrying search indexer initialization after previous failure: %s", d.searchIndexerLastError)
+			reload = true
+		} else if !indexer.IsRetryableNoopIndexer(d.searchIndexer) || time.Now().Before(d.searchIndexerRetryAt) {
+			d.searchIndexer = d.wrapActiveSearchIndexer(d.searchIndexer)
+			return d.searchIndexer
+		} else {
+			d.Logger().Info("Retrying search indexer initialization after previous failure: %s", indexer.UnavailableReason(d.searchIndexer))
+			reload = true
+		}
+	}
+
+	previous := d.searchIndexer
+	setNoop := func(reason string, retryable bool) searcher.SearchIndexer {
+		d.searchIndexerLastError = reason
+		if retryable && previous != nil && !indexer.IsNoopIndexer(previous) {
+			d.Logger().Warning("Search indexer reload failed: %s; keeping the previous active indexer", reason)
+			d.searchIndexerRetryAt = time.Now().Add(indexer.RetryableUnavailableDelay)
+			return previous
+		}
+
+		if retryable {
+			d.searchIndexerRetryAt = time.Now().Add(indexer.RetryableUnavailableDelay)
+			d.searchIndexer = indexer.NewRetryableNoopIndexer(reason)
+		} else {
+			d.searchIndexerRetryAt = time.Time{}
+			d.searchIndexer = indexer.NewNoopIndexer(reason)
+		}
 		return d.searchIndexer
 	}
 
 	sp := d.SettingProvider()
 	if !sp.FTSEnabled(ctx) {
-		d.searchIndexer = &indexer.NoopIndexer{}
-		return d.searchIndexer
+		return setNoop("full-text search is disabled by setting fts_enabled", false)
 	}
 
 	switch sp.FTSIndexType(ctx) {
 	case setting.FTSIndexTypeMeilisearch:
 		msCfg := sp.FTSIndexMeilisearch(ctx)
 		if msCfg.Endpoint == "" {
-			d.searchIndexer = &indexer.NoopIndexer{}
-			return d.searchIndexer
+			return setNoop("Meilisearch indexer endpoint is empty; check setting fts_meilisearch_endpoint or CR_SETTING_fts_meilisearch_endpoint", false)
 		}
 
 		idx := indexer.NewMeilisearchIndexer(msCfg, sp.FTSChunkSize(ctx), d.Logger())
 		if err := idx.EnsureIndex(ctx); err != nil {
-			d.Logger().Warning("Failed to ensure Meilisearch index: %s, falling back to noop", err)
-			d.searchIndexer = &indexer.NoopIndexer{}
-			return d.searchIndexer
+			reason := fmt.Sprintf("failed to ensure Meilisearch index at %s: %s", msCfg.Endpoint, err)
+			d.Logger().Warning("%s", reason)
+			return setNoop(reason, true)
 		}
 
-		d.searchIndexer = idx
+		d.searchIndexerLastError = ""
+		d.searchIndexerRetryAt = time.Time{}
+		d.searchIndexer = d.wrapActiveSearchIndexer(idx)
 		return d.searchIndexer
 	case setting.FTSIndexTypeElasticsearch:
 		esCfg := sp.FTSIndexElasticsearch(ctx)
 		if esCfg.Endpoint == "" && esCfg.CloudID == "" {
-			d.searchIndexer = &indexer.NoopIndexer{}
-			return d.searchIndexer
+			return setNoop("Elasticsearch indexer endpoint/cloud_id is empty; check setting fts_elasticsearch_endpoint or CR_SETTING_fts_elasticsearch_endpoint", false)
 		}
 
 		idx, err := indexer.NewElasticsearchIndexer(esCfg, d.Logger())
 		if err != nil {
-			d.Logger().Warning("Failed to create Elasticsearch indexer: %s, falling back to noop", err)
-			d.searchIndexer = &indexer.NoopIndexer{}
-			return d.searchIndexer
+			reason := fmt.Sprintf("failed to create Elasticsearch indexer for %s: %s", describeElasticsearchEndpoint(esCfg), err)
+			d.Logger().Warning("%s", reason)
+			return setNoop(reason, true)
 		}
 		if err := idx.EnsureIndex(ctx); err != nil {
-			d.Logger().Warning("Failed to ensure Elasticsearch index: %s, falling back to noop", err)
-			d.searchIndexer = &indexer.NoopIndexer{}
-			return d.searchIndexer
+			reason := fmt.Sprintf("failed to ensure Elasticsearch index at %s: %s", describeElasticsearchEndpoint(esCfg), err)
+			d.Logger().Warning("%s", reason)
+			return setNoop(reason, true)
 		}
 
-		d.searchIndexer = idx
+		d.searchIndexerLastError = ""
+		d.searchIndexerRetryAt = time.Time{}
+		d.searchIndexer = d.wrapActiveSearchIndexer(idx)
 		return d.searchIndexer
 	default:
-		d.searchIndexer = &indexer.NoopIndexer{}
-		return d.searchIndexer
+		return setNoop(fmt.Sprintf("unsupported full-text search index type %q; check setting fts_index_type or CR_SETTING_fts_index_type", sp.FTSIndexType(ctx)), false)
 	}
+}
+
+func (d *dependency) wrapActiveSearchIndexer(idx searcher.SearchIndexer) searcher.SearchIndexer {
+	if idx == nil || indexer.IsNoopIndexer(idx) {
+		return idx
+	}
+	if _, ok := idx.(*retryableSearchIndexer); ok {
+		return idx
+	}
+
+	var wrapped *retryableSearchIndexer
+	wrapped = &retryableSearchIndexer{
+		SearchIndexer: idx,
+		onRetryableError: func(err error) {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+
+			if d.searchIndexer != wrapped {
+				return
+			}
+
+			reason := fmt.Sprintf("search indexer runtime error: %s", err)
+			d.Logger().Warning("%s; pausing search indexer retry attempts for %s", reason, indexer.RetryableUnavailableDelay)
+			d.searchIndexerLastError = reason
+			d.searchIndexerRetryAt = time.Now().Add(indexer.RetryableUnavailableDelay)
+			d.searchIndexer = indexer.NewRetryableNoopIndexer(reason)
+		},
+	}
+	return wrapped
+}
+
+func (d *dependency) SearchIndexerUnavailableReason() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.searchIndexerLastError != "" {
+		return d.searchIndexerLastError
+	}
+
+	return indexer.UnavailableReason(d.searchIndexer)
+}
+
+func describeElasticsearchEndpoint(cfg *setting.FTSIndexElasticsearchSetting) string {
+	if cfg == nil {
+		return "<nil config>"
+	}
+	if cfg.Endpoint != "" {
+		return cfg.Endpoint
+	}
+	if cfg.CloudID != "" {
+		return "cloud_id"
+	}
+	return "<empty endpoint>"
 }
 
 func (d *dependency) TextExtractor(ctx context.Context) searcher.TextExtractor {

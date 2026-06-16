@@ -3,7 +3,9 @@ package indexer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -69,6 +71,11 @@ func (m *MeilisearchIndexer) IndexReady(ctx context.Context) (bool, error) {
 
 	settings, err := index.GetSettingsWithContext(ctx)
 	if err != nil {
+		var meiliErr *meilisearch.Error
+		if errors.As(err, &meiliErr) && meiliErr.StatusCode != http.StatusNotFound && IsRetryableUnavailableError(err) {
+			return false, RetryableUnavailableError(fmt.Errorf("failed to get index settings: %w", err))
+		}
+
 		return false, nil
 	}
 
@@ -106,6 +113,10 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 		PrimaryKey: "id",
 	})
 	if err != nil {
+		if IsRetryableUnavailableError(err) {
+			return RetryableUnavailableError(fmt.Errorf("failed to create index: %w", err))
+		}
+
 		m.l.Debug("Create index returned (may already exist): %s", err)
 	}
 
@@ -113,16 +124,16 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 
 	filterableAttrs := []any{"owner_id", "file_id", "entity_id", "tree_path", "search_paths"}
 	if _, err := index.UpdateFilterableAttributesWithContext(ctx, &filterableAttrs); err != nil {
-		return fmt.Errorf("failed to set filterable attributes: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to set filterable attributes: %w", err))
 	}
 
 	searchableAttrs := []string{"text", "file_name"}
 	if _, err := index.UpdateSearchableAttributesWithContext(ctx, &searchableAttrs); err != nil {
-		return fmt.Errorf("failed to set searchable attributes: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to set searchable attributes: %w", err))
 	}
 
 	if _, err := index.UpdateDistinctAttributeWithContext(ctx, "file_id"); err != nil {
-		return fmt.Errorf("failed to set distinct attribute: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to set distinct attribute: %w", err))
 	}
 
 	if m.cfg.EmbeddingEnbaled {
@@ -138,7 +149,7 @@ func (m *MeilisearchIndexer) EnsureIndex(ctx context.Context) error {
 			embedderName: embedder,
 		})
 		if err != nil {
-			return fmt.Errorf("failed to set embedders: %w", err)
+			return RetryableUnavailableIfTransient(fmt.Errorf("failed to set embedders: %w", err))
 		}
 	} else {
 		_, err := index.ResetEmbeddersWithContext(ctx)
@@ -167,7 +178,7 @@ func (m *MeilisearchIndexer) UpsertFile(ctx context.Context, doc *searcher.Searc
 	index := m.client.Index(indexName)
 	pk := "id"
 	if _, err := index.AddDocumentsWithContext(ctx, docs, &meilisearch.DocumentOptions{PrimaryKey: &pk}); err != nil {
-		return fmt.Errorf("failed to add documents: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to add documents: %w", err))
 	}
 
 	return nil
@@ -199,7 +210,7 @@ func (m *MeilisearchIndexer) BulkUpsertFiles(ctx context.Context, docs []*search
 	index := m.client.Index(indexName)
 	pk := "id"
 	if _, err := index.AddDocumentsWithContext(ctx, meiliDocs, &meilisearch.DocumentOptions{PrimaryKey: &pk}); err != nil {
-		return fmt.Errorf("failed to add documents: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to add documents: %w", err))
 	}
 
 	return nil
@@ -217,7 +228,7 @@ func (m *MeilisearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...int)
 	}
 	filter := fmt.Sprintf("file_id IN [%s]", strings.Join(strs, ", "))
 	if _, err := index.DeleteDocumentsByFilterWithContext(ctx, filter, nil); err != nil {
-		return fmt.Errorf("failed to delete documents by file_ids: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to delete documents by file_ids: %w", err))
 	}
 	return nil
 }
@@ -269,7 +280,7 @@ func (m *MeilisearchIndexer) Search(ctx context.Context, req *searcher.SearchReq
 
 	resp, err := index.SearchWithContext(ctx, query, searchReq)
 	if err != nil {
-		return nil, 0, fmt.Errorf("search failed: %w", err)
+		return nil, 0, RetryableUnavailableIfTransient(fmt.Errorf("search failed: %w", err))
 	}
 
 	results := make([]searcher.SearchResult, 0, len(resp.Hits))
@@ -305,7 +316,7 @@ func (m *MeilisearchIndexer) Search(ctx context.Context, req *searcher.SearchReq
 func (m *MeilisearchIndexer) DeleteAll(ctx context.Context) error {
 	index := m.client.Index(indexName)
 	if _, err := index.DeleteAllDocumentsWithContext(ctx, nil); err != nil {
-		return fmt.Errorf("failed to delete all documents: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to delete all documents: %w", err))
 	}
 	return nil
 }

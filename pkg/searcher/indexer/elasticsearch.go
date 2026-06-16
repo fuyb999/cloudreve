@@ -93,7 +93,7 @@ func NewElasticsearchIndexer(cfg *setting.FTSIndexElasticsearchSetting, l loggin
 func (e *ElasticsearchIndexer) IndexReady(ctx context.Context) (bool, error) {
 	res, err := e.client.Indices.Exists([]string{e.index}, e.client.Indices.Exists.WithContext(ctx))
 	if err != nil {
-		return false, fmt.Errorf("failed to check index: %w", err)
+		return false, RetryableUnavailableIfTransient(fmt.Errorf("failed to check index: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -125,7 +125,7 @@ func (e *ElasticsearchIndexer) EnsureIndex(ctx context.Context) error {
 			e.client.Indices.Create.WithBody(bytes.NewReader(body)),
 		)
 		if err != nil {
-			return fmt.Errorf("failed to create index: %w", err)
+			return RetryableUnavailableIfTransient(fmt.Errorf("failed to create index: %w", err))
 		}
 		defer res.Body.Close()
 
@@ -145,7 +145,7 @@ func (e *ElasticsearchIndexer) EnsureIndex(ctx context.Context) error {
 		e.client.Indices.PutMapping.WithContext(ctx),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to update index mappings: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to update index mappings: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -181,7 +181,7 @@ func (e *ElasticsearchIndexer) upsertFileOnce(ctx context.Context, doc *searcher
 		e.client.Index.WithDocumentID(doc.ID),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to upsert file document: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to upsert file document: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -276,7 +276,7 @@ func (e *ElasticsearchIndexer) bulkUpsertFilesOnce(ctx context.Context, docs []*
 		e.client.Bulk.WithContext(ctx),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to bulk upsert file documents: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to bulk upsert file documents: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -301,7 +301,12 @@ func (e *ElasticsearchIndexer) bulkUpsertFilesOnce(ctx context.Context, docs []*
 
 	for _, item := range bulkRes.Items {
 		if indexItem, ok := item["index"]; ok && indexItem.Error != nil {
-			return fmt.Errorf("bulk item failed with status %d: %v", indexItem.Status, indexItem.Error)
+			err := fmt.Errorf("bulk item failed with status %d: %v", indexItem.Status, indexItem.Error)
+			if isRetryableHTTPStatus(indexItem.Status) {
+				return RetryableUnavailableError(err)
+			}
+
+			return err
 		}
 	}
 
@@ -332,7 +337,7 @@ func (e *ElasticsearchIndexer) DeleteByFileIDs(ctx context.Context, fileID ...in
 		e.client.DeleteByQuery.WithRefresh(true),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to delete file documents: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to delete file documents: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -467,7 +472,7 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 		e.client.Search.WithBody(bytes.NewReader(body)),
 	)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to execute search: %w", err)
+		return nil, 0, RetryableUnavailableIfTransient(fmt.Errorf("failed to execute search: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -497,7 +502,7 @@ func (e *ElasticsearchIndexer) Search(ctx context.Context, req *searcher.SearchR
 func (e *ElasticsearchIndexer) DeleteAll(ctx context.Context) error {
 	res, err := e.client.Indices.Delete([]string{e.index}, e.client.Indices.Delete.WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("failed to delete index: %w", err)
+		return RetryableUnavailableIfTransient(fmt.Errorf("failed to delete index: %w", err))
 	}
 	defer res.Body.Close()
 
@@ -812,9 +817,16 @@ func textWithKeywordMapping() map[string]any {
 
 func parseElasticsearchError(prefix, status string, bodyReader io.Reader) error {
 	body, _ := io.ReadAll(bodyReader)
+	var err error
 	if len(body) == 0 {
-		return fmt.Errorf("%s: status=%s", prefix, status)
+		err = fmt.Errorf("%s: status=%s", prefix, status)
+	} else {
+		err = fmt.Errorf("%s: status=%s body=%s", prefix, status, strings.TrimSpace(string(body)))
 	}
 
-	return fmt.Errorf("%s: status=%s body=%s", prefix, status, strings.TrimSpace(string(body)))
+	if IsRetryableStatus(status) {
+		return RetryableUnavailableError(err)
+	}
+
+	return err
 }

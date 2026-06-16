@@ -17,6 +17,16 @@ const (
 	EnvSettingOverwritePrefix = "CR_SETTING_"
 )
 
+// EnvOverrideName returns the environment variable name used to override a setting.
+func EnvOverrideName(name string) string {
+	return EnvSettingOverwritePrefix + name
+}
+
+// EnvOverrideValue returns the environment override for a setting, if present.
+func EnvOverrideValue(name string) (string, bool) {
+	return os.LookupEnv(EnvOverrideName(name))
+}
+
 // SettingStoreAdapter chains a setting get operation, if current adapter cannot locate setting value,
 // it will invoke next adapter until last one.
 type SettingStoreAdapter interface {

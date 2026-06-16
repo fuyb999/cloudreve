@@ -145,11 +145,22 @@ func (m *RebuildIndexTask) Do(ctx context.Context) (task.Status, error) {
 func (m *RebuildIndexTask) nuke(ctx context.Context, dep dependency.Dep) (task.Status, error) {
 	indexer := dep.SearchIndexer(ctx)
 	if searchindexer.IsNoopIndexer(indexer) {
-		return task.StatusError, fmt.Errorf("search indexer is unavailable")
+		if searchindexer.IsRetryableNoopIndexer(indexer) {
+			m.l.Warning("Full text rebuild paused while search indexer recovers: %s", searchindexer.UnavailableError(indexer))
+			m.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return task.StatusSuspending, nil
+		}
+		return task.StatusError, searchindexer.UnavailableError(indexer)
 	}
 
 	m.l.Info("Deleting all existing index documents...")
 	if err := indexer.DeleteAll(ctx); err != nil {
+		if searchindexer.IsRetryableUnavailableError(err) {
+			m.l.Warning("Full text rebuild paused while search indexer recovers: %s", err)
+			m.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return task.StatusSuspending, nil
+		}
+
 		return task.StatusError, fmt.Errorf("failed to delete all index documents: %w", err)
 	}
 
@@ -159,6 +170,12 @@ func (m *RebuildIndexTask) nuke(ctx context.Context, dep dependency.Dep) (task.S
 
 	m.l.Info("Ensuring index exists with correct configuration...")
 	if err := indexer.EnsureIndex(ctx); err != nil {
+		if searchindexer.IsRetryableUnavailableError(err) {
+			m.l.Warning("Full text rebuild paused while search indexer recovers: %s", err)
+			m.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return task.StatusSuspending, nil
+		}
+
 		return task.StatusError, fmt.Errorf("failed to ensure index: %w", err)
 	}
 
@@ -193,6 +210,16 @@ func (m *RebuildIndexTask) index(ctx context.Context, dep dependency.Dep) (task.
 		return task.StatusCompleted, nil
 	}
 
+	indexer := dep.SearchIndexer(ctx)
+	if searchindexer.IsNoopIndexer(indexer) {
+		if searchindexer.IsRetryableNoopIndexer(indexer) {
+			m.l.Warning("Full text rebuild paused while search indexer recovers: %s", searchindexer.UnavailableError(indexer))
+			m.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return task.StatusSuspending, nil
+		}
+		return task.StatusError, searchindexer.UnavailableError(indexer)
+	}
+
 	indexableFiles, skipped := filterRebuildFiles(files, dep.SettingProvider().FTSSyncFolders(ctx))
 	if skipped > 0 {
 		m.state.Total -= skipped
@@ -202,7 +229,12 @@ func (m *RebuildIndexTask) index(ctx context.Context, dep dependency.Dep) (task.
 		atomic.StoreInt64(&m.progress[ProgressTypeRebuildIndex].Total, int64(m.state.Total))
 	}
 
-	batchFailed := m.processBatch(ctx, dep, indexableFiles)
+	batchFailed, suspend := m.processBatch(ctx, dep, indexer, indexableFiles)
+	if suspend {
+		m.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+		return task.StatusSuspending, nil
+	}
+
 	m.state.Failed += batchFailed
 	m.state.Indexed += len(indexableFiles)
 	m.state.LastFileID = files[len(files)-1].ID
@@ -263,7 +295,7 @@ func matchesRebuildStoragePolicy(doc *searcher.SearchFileDocument, filteredStora
 }
 
 // processBatch indexes a batch of files concurrently.
-func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep, files []*ent.File) int {
+func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep, indexer searcher.SearchIndexer, files []*ent.File) (int, bool) {
 	user := inventory.UserFromContext(ctx)
 	syncFolders := dep.SettingProvider().FTSSyncFolders(ctx)
 
@@ -284,7 +316,7 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 
 		select {
 		case <-ctx.Done():
-			return failed
+			return failed, false
 		case sem <- struct{}{}:
 		}
 
@@ -332,12 +364,17 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 	wg.Wait()
 
 	if len(docs) == 0 {
-		return failed
+		return failed, false
 	}
 
-	if err := dep.SearchIndexer(ctx).BulkUpsertFiles(ctx, docs); err != nil {
+	if err := indexer.BulkUpsertFiles(ctx, docs); err != nil {
+		if searchindexer.IsRetryableUnavailableError(err) {
+			m.l.Warning("Full text rebuild paused while search indexer recovers: %s", err)
+			return failed, true
+		}
+
 		m.l.Warning("Failed to bulk upsert rebuild batch starting at file %d: %s", files[0].ID, err)
-		return failed + len(docs)
+		return failed + len(docs), false
 	}
 
 	for _, doc := range docs {
@@ -353,7 +390,7 @@ func (m *RebuildIndexTask) processBatch(ctx context.Context, dep dependency.Dep,
 		}
 	}
 
-	return failed
+	return failed, false
 }
 
 func (m *RebuildIndexTask) Progress(ctx context.Context) queue.Progresses {

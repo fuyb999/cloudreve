@@ -95,6 +95,17 @@ var fullTextSourceExtractionPending = func(ctx context.Context, dep dependency.D
 	return sourceFullTextExtractionPending(ctx, dep, originalFileID)
 }
 
+func pauseFullTextIndexingForRetryableError(l logging.Logger, err error) bool {
+	if !searchindexer.IsRetryableUnavailableError(err) {
+		return false
+	}
+	if l != nil {
+		l.Warning("Full text indexing paused while search indexer recovers: %s", err)
+	}
+
+	return true
+}
+
 const (
 	fullTextMaxFilesPerTask = 64
 
@@ -108,6 +119,9 @@ const (
 
 func (m *manager) SearchFullText(ctx context.Context, query string, offset int, base *fs.URI) (*FullTextSearchResults, error) {
 	indexer := m.dep.SearchIndexer(ctx)
+	if searchindexer.IsNoopIndexer(indexer) {
+		return nil, searchindexer.UnavailableError(indexer)
+	}
 	searchReq := &searcher.SearchRequest{
 		Query:   query,
 		Offset:  offset,
@@ -645,6 +659,9 @@ func (t *FullTextCopyTask) Do(ctx context.Context) (task.Status, error) {
 	state.WaitReason = ""
 
 	status, err := fullTextPerformIndexing(ctx, fm, state.FileID)
+	if status == task.StatusSuspending && err == nil {
+		t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+	}
 	if err == nil {
 		if cloned {
 			l.Debug("Successfully rebuilt full text index for copied file %d using cloned sidecar.", state.FileID)
@@ -882,6 +899,9 @@ func (t *FullTextChangeOwnerTask) Do(ctx context.Context) (task.Status, error) {
 	}
 
 	status, err := fullTextPerformIndexing(ctx, fm, state.FileID)
+	if status == task.StatusSuspending && err == nil {
+		t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+	}
 	if err == nil {
 		l.Debug("Successfully rebuilt full text index for owner-updated file %d.", state.FileID)
 	}
@@ -945,6 +965,10 @@ func (t *FullTextDeleteTask) Do(ctx context.Context) (task.Status, error) {
 			if err != nil {
 				return status, err
 			}
+			if status == task.StatusSuspending {
+				t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+				return status, nil
+			}
 		}
 
 		l.Debug("Successfully reconciled full text index for %d file(s) from legacy delete task.", len(state.FileIDs))
@@ -953,6 +977,11 @@ func (t *FullTextDeleteTask) Do(ctx context.Context) (task.Status, error) {
 
 	indexer := dep.SearchIndexer(ctx)
 	if err := indexer.DeleteByFileIDs(ctx, state.FileIDs...); err != nil {
+		if pauseFullTextIndexingForRetryableError(l, err) {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return task.StatusSuspending, nil
+		}
+
 		return task.StatusError, fmt.Errorf("failed to delete index for %d file(s): %w", len(state.FileIDs), err)
 	}
 
@@ -1042,8 +1071,14 @@ func (t *FullTextIndexTask) Do(ctx context.Context) (task.Status, error) {
 func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *manager, state *FullTextIndexTaskState, item FullTextIndexTaskItem) (task.Status, error) {
 	if item.IsDeleteOnly() {
 		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if status == task.StatusSuspending && err == nil {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+		}
 		if err != nil {
 			return status, err
+		}
+		if status == task.StatusSuspending {
+			return status, nil
 		}
 
 		state.CompleteActive()
@@ -1052,8 +1087,14 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 
 	if !item.HasPrimaryEntity() {
 		status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if status == task.StatusSuspending && err == nil {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+		}
 		if err != nil {
 			return status, err
+		}
+		if status == task.StatusSuspending {
+			return status, nil
 		}
 
 		state.CompleteActive()
@@ -1102,8 +1143,14 @@ func (t *FullTextIndexTask) dispatchOrIndexLocally(ctx context.Context, fm *mana
 	}
 
 	status, err := fullTextPerformIndexing(ctx, fm, item.FileID)
+	if status == task.StatusSuspending && err == nil {
+		t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+	}
 	if err != nil {
 		return status, err
+	}
+	if status == task.StatusSuspending {
+		return status, nil
 	}
 
 	state.CompleteActive()
@@ -1156,8 +1203,14 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 		}
 
 		status, err := finalizeSlaveIndexedFile(ctx, fm, item.FileID, result)
+		if status == task.StatusSuspending && err == nil {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+		}
 		if err != nil {
 			return status, err
+		}
+		if status == task.StatusSuspending {
+			return status, nil
 		}
 
 		fm.l.Info(
@@ -1189,6 +1242,10 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 
 		fm.l.Warning("Slave full text extraction failed for file %d, falling back to local indexing: %s%s", item.FileID, summary.Error, slaveTaskDiagnostic(summary))
 		status, localErr := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if status == task.StatusSuspending && localErr == nil {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return status, nil
+		}
 		if localErr != nil {
 			return status, fmt.Errorf("slave content processing task failed: %s%s; local fallback failed: %w", summary.Error, slaveTaskDiagnostic(summary), localErr)
 		}
@@ -1208,6 +1265,10 @@ func (t *FullTextIndexTask) awaitSlaveExtraction(ctx context.Context, fm *manage
 
 		fm.l.Warning("Slave full text extraction canceled for file %d, falling back to local indexing%s", item.FileID, slaveTaskDiagnostic(summary))
 		status, localErr := fullTextPerformIndexing(ctx, fm, item.FileID)
+		if status == task.StatusSuspending && localErr == nil {
+			t.ResumeAfter(searchindexer.RetryableUnavailableDelay)
+			return status, nil
+		}
 		if localErr != nil {
 			return status, fmt.Errorf("slave content processing task canceled%s; local fallback failed: %w", slaveTaskDiagnostic(summary), localErr)
 		}
@@ -1249,13 +1310,21 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	l := dep.Logger()
 	searchIdx := dep.SearchIndexer(ctx)
 	if searchindexer.IsNoopIndexer(searchIdx) {
-		return task.StatusError, fmt.Errorf("search indexer is unavailable")
+		if searchindexer.IsRetryableNoopIndexer(searchIdx) {
+			l.Warning("Full text indexing paused while search indexer recovers: %s", searchindexer.UnavailableError(searchIdx))
+			return task.StatusSuspending, nil
+		}
+		return task.StatusError, searchindexer.UnavailableError(searchIdx)
 	}
 
 	fileModel, err := fm.loadFTSFileModel(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+				if pauseFullTextIndexingForRetryableError(l, err) {
+					return task.StatusSuspending, nil
+				}
+
 				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 
@@ -1267,6 +1336,10 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 
 	if fileModel.Type == int(types.FileTypeFolder) && !fm.settings.FTSSyncFolders(ctx) {
 		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			if pauseFullTextIndexingForRetryableError(l, err) {
+				return task.StatusSuspending, nil
+			}
+
 			return task.StatusError, fmt.Errorf("failed to delete index for folder %d: %w", fileID, err)
 		}
 
@@ -1289,6 +1362,10 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 
 	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
 		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			if pauseFullTextIndexingForRetryableError(l, err) {
+				return task.StatusSuspending, nil
+			}
+
 			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
 		}
 
@@ -1300,6 +1377,10 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+				if pauseFullTextIndexingForRetryableError(l, err) {
+					return task.StatusSuspending, nil
+				}
+
 				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 
@@ -1314,6 +1395,10 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	}
 	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
 		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			if pauseFullTextIndexingForRetryableError(l, err) {
+				return task.StatusSuspending, nil
+			}
+
 			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
 		}
 
@@ -1322,6 +1407,10 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 	}
 
 	if err := searchIdx.UpsertFile(ctx, doc); err != nil {
+		if pauseFullTextIndexingForRetryableError(l, err) {
+			return task.StatusSuspending, nil
+		}
+
 		clearFullTextIndexMetadataBestEffort(ctx, fm, uri)
 		return task.StatusError, fmt.Errorf("failed to index file %d: %w", fileID, err)
 	}
@@ -1335,11 +1424,17 @@ func performIndexing(ctx context.Context, fm *manager, fileID int) (task.Status,
 				if refreshErr := refreshFullTextIndexAfterStaleMetadata(ctx, fm, searchIdx, fileID); refreshErr == nil {
 					l.Debug("Refreshed full text index for file %d after metadata uri became stale.", fileID)
 					return task.StatusCompleted, nil
+				} else if pauseFullTextIndexingForRetryableError(l, refreshErr) {
+					return task.StatusSuspending, nil
 				} else if !shouldIgnoreFTSSyncError(refreshErr) {
 					return task.StatusError, fmt.Errorf("failed to refresh full text index after metadata uri became stale: %w", refreshErr)
 				}
 
 				if err := deleteStaleFullTextIndex(ctx, searchIdx, fileID); err != nil {
+					if pauseFullTextIndexingForRetryableError(l, err) {
+						return task.StatusSuspending, nil
+					}
+
 					l.Warning("Failed to delete stale index for file %d after metadata target disappeared: %s", fileID, err)
 				}
 
@@ -1441,13 +1536,21 @@ func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, resu
 	dep := dependency.FromContext(ctx)
 	searchIdx := dep.SearchIndexer(ctx)
 	if searchindexer.IsNoopIndexer(searchIdx) {
-		return task.StatusError, fmt.Errorf("search indexer is unavailable")
+		if searchindexer.IsRetryableNoopIndexer(searchIdx) {
+			dep.Logger().Warning("Full text indexing paused while search indexer recovers: %s", searchindexer.UnavailableError(searchIdx))
+			return task.StatusSuspending, nil
+		}
+		return task.StatusError, searchindexer.UnavailableError(searchIdx)
 	}
 
 	uri, err := fm.resolveFTSFileURI(ctx, fileID)
 	if err != nil {
 		if shouldIgnoreFTSSyncError(err) {
 			if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+				if pauseFullTextIndexingForRetryableError(dep.Logger(), err) {
+					return task.StatusSuspending, nil
+				}
+
 				return task.StatusError, fmt.Errorf("failed to delete stale index for file %d: %w", fileID, err)
 			}
 			return task.StatusCompleted, nil
@@ -1457,6 +1560,10 @@ func finalizeSlaveIndexedFile(ctx context.Context, fm *manager, fileID int, resu
 
 	if uri != nil && uri.FileSystem() == constants.FileSystemTrash {
 		if err := searchIdx.DeleteByFileIDs(ctx, fileID); err != nil {
+			if pauseFullTextIndexingForRetryableError(dep.Logger(), err) {
+				return task.StatusSuspending, nil
+			}
+
 			return task.StatusError, fmt.Errorf("failed to delete index for trashed file %d: %w", fileID, err)
 		}
 		return task.StatusCompleted, nil
